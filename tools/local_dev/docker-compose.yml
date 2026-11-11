@@ -1,0 +1,32 @@
+services:
+  mock-rag:
+    build: .
+    command: ["python", "mock_rag.py", "--host", "0.0.0.0", "--port", "9390"]
+    ports:
+      - "9390:9390"
+    volumes:
+      - ./demo_docs:/app/demo_docs:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9390/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  bff:
+    build: .
+    command: ["python", "demo_bff.py", "--host", "0.0.0.0", "--port", "8020"]
+    environment:
+      RAG_URL: http://mock-rag:9390
+      MAX_CONCURRENT: "20"
+    ports:
+      - "8020:8020"
+    depends_on:
+      mock-rag:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8020/api/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
