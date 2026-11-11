@@ -1,6 +1,10 @@
 # ================= 密钥 / 本地配置（绝对不能提交） =================
 app/config.json
 app/config.json.bak*
+tools/cloudflared/*.json
+tools/cloudflared/credentials.json
+_label.json
+eval/*.json
 *.key
 *.pem
 *.crt
