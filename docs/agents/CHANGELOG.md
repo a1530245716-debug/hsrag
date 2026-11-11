@@ -6,6 +6,8 @@
 
 ---
 
+### 17:19（11-11） | Claude Code | AGENTS.md、docs/ai-fde/README.md | 记录 GitHub DNS/IP 绕过方法，并添加上脱敏作品集仓库链接 | github.com 解析到的 IP 443 超时、api.github.com 可达；用 http.curloptResolve 临时绕过，避免后续 agent 重复排查
+
 ### 17:08（11-11） | Claude Code | AGENTS.md、CLAUDE.md | 将 WSL2+Docker Engine、端口分工、本地开发、上服务器、公开作品集约定写入共享规则 | 让 RAG-Agent 和后续会话共享同一套开发/发布规则，避免 Docker Desktop 许可问题和误推客户资料
 
 ### 16:24（11-11） | Claude Code | docs/ai-fde/poc/install-docker-wsl.md、wslconfig.example、tools/local_dev/README.md | 增加 Windows 本机 WSL2+Docker Engine 安装步骤和资源限制模板 | 当前机器未装 WSL 且 shell 非管理员，Docker 需人工提权安装；优先 Docker Engine 规避 Docker Desktop 许可问题

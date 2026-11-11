@@ -167,6 +167,15 @@ Start-Process $py -ArgumentList "app\server.py" -WorkingDirectory . -WindowStyle
 - 不要直接把私有仓库改 public；用全新仓库/孤立分支，避免历史残留。
 - 详细做法：`docs/ai-fde/08-FDE学习与简历路线.md`。
 
+### GitHub 连接（本机实测）
+
+- 本机 DNS 可能把 `github.com` 解析到 443 不通的地址（实测 `20.205.243.166` 超时）；`api.github.com` 可达。
+- 临时绕过（不改 hosts、不提权）：
+  `git -c http.curloptResolve=github.com:443:140.82.116.3 ...`
+- 推送示例：
+  `git -c http.curloptResolve=github.com:443:140.82.116.3 -c credential.helper=manager push origin main`
+- IP 会变；先 `curl --resolve github.com:443:140.82.116.3 https://github.com` 验证。不要把 IP 写进全局 git 配置。
+
 ### 文档与记录
 
 - 企业级 RAG / FDE 资料在 `docs/ai-fde/`；新结论、踩坑、压测数据先写那里，再登记 CHANGELOG。
