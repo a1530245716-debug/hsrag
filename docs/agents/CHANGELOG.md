@@ -6,6 +6,8 @@
 
 ---
 
+### 16:19（11-11） | Claude Code | tools/local_dev/**、.gitignore | 新增本地假 RAG + 异步 BFF 演示（不依赖 Docker） | 服务器未就绪前先在本机验证适配层、SSE、引用和限流；公开作品集仓库因 GitHub 连接超时暂未推送
+
 ### 16:08（11-11） | Claude Code | docs/ai-fde/**、tools/ragflow_poc/** | 新增 FDE 全流程交付资料、RAGFlow PoC 验收/部署模板和环境自检脚本 | 为 100 并发改造、平台化选型和 FDE 成长沉淀可复用资产；压测基线显示单进程 100 并发 p95 315s，需外部检索引擎
 
 ### 15:39（11-11） | RAG-Agent | 没有改代码，只重新通读了现状（供后续接手）
