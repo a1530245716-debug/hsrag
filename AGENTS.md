@@ -7,6 +7,8 @@
 - **Claude Code**（Claude 会话侧）：索引构建、向量库、数据管道
 - **人**：最终决策，两边都听他的
 
+> 本机开发、Docker/WSL2、端口和公开作品集约定见第七节；动容器/发布相关文件前先读。
+
 ## 一、文件归属
 
 | 路径 | 归属 | 说明 |
@@ -120,3 +122,52 @@ Start-Process $py -ArgumentList "app\server.py" -WorkingDirectory . -WindowStyle
 ```
 
 注意：冷启动要加载两个库的 BM25（约 1 分钟），首次查询会慢，别误判成卡死。
+
+## 七、本机开发与容器约定（2026-11-11）
+
+### 本机 Docker 用 WSL2 + Docker Engine
+
+- 优先 **WSL2 + Docker Engine**，不用 Docker Desktop（企业许可风险）。
+- 安装需要管理员权限；当前会话非管理员时，不要尝试静默提权，让用户自己在“以管理员身份运行”的 PowerShell 执行。
+- 安装步骤和资源模板：`docs/ai-fde/poc/install-docker-wsl.md`、`docs/ai-fde/poc/wslconfig.example`。
+- 默认 `.wslconfig`：`memory=16GB`、`processors=8`、`swap=4GB`。跑 RAGFlow 前调到 20GB，并先停 8000 生产服务；本地演示栈不用停。
+
+### 端口分工（不要混用）
+
+| 端口 | 用途 |
+|---|---|
+| 8000 | 生产服务 `app/server.py` |
+| 8010 | 压测实例 `tools/loadtest` |
+| 8020 | 本地演示 BFF `tools/local_dev` |
+| 9099 | 假 LLM |
+| 9390 | 假 RAG |
+
+测试一律用 8010/8020，不要拿 8000 做测试。
+
+### 本地开发
+
+- 快速迭代：`python tools/local_dev/run_local.py --keep`（宿主机模式）。
+- 容器验证：`cd tools/local_dev && docker compose up --build`（WSL2 里跑）。
+- 演示数据只放 `tools/local_dev/demo_docs`，用合成文档；不要放客户资料。
+- 压测：`tools/loadtest/run_loadtest.py`；50+ 并发必须加 `--yes`，先确认没有演示/评测。
+
+### 上服务器
+
+- Linux + Docker Engine + Compose v2；同一套 compose 换 `.env`、`RAG_URL`、数据卷。
+- 不写死 Windows 路径；数据用 named volume 或宿主机目录。
+- Nginx：SSE 不缓冲、`proxy_read_timeout >= 300s`、`client_max_body_size >= 100m`。
+- 上线前跑 `python tools/ragflow_poc/check_env.py` 和 `docs/ai-fde/poc/acceptance.md`。
+
+### 公开作品集
+
+- 私有仓库 `hsrag`：真实项目和数据，保留。
+- 公开仓库 `hsrag_public`：只放脱敏内容（合成 demo、架构、指标、代码片段）。
+- 禁止出现：客户名、公司名、内网域名/IP、账号、密钥、真实手册/截图。
+- 公开前必须扫描：`某基金|某资管|某公司|examplecorp|demoproduct|192\.168|10\.[0-9]+\.[0-9]+|E:\\`。
+- 不要直接把私有仓库改 public；用全新仓库/孤立分支，避免历史残留。
+- 详细做法：`docs/ai-fde/08-FDE学习与简历路线.md`。
+
+### 文档与记录
+
+- 企业级 RAG / FDE 资料在 `docs/ai-fde/`；新结论、踩坑、压测数据先写那里，再登记 CHANGELOG。
+- 压测基线和改造前后对比必须落盘，作为回归依据。
