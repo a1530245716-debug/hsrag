@@ -6,6 +6,44 @@
 
 ---
 
+### 16:08（11-11） | Claude Code | docs/ai-fde/**、tools/ragflow_poc/** | 新增 FDE 全流程交付资料、RAGFlow PoC 验收/部署模板和环境自检脚本 | 为 100 并发改造、平台化选型和 FDE 成长沉淀可复用资产；压测基线显示单进程 100 并发 p95 315s，需外部检索引擎
+
+### 15:39（11-11） | RAG-Agent | 没有改代码，只重新通读了现状（供后续接手）
+
+人让"熟悉一下项目，我跟 claudecode 改了不少"。这一条只记读到的结论，避免下次又从零开始。
+
+**跑着的东西**（本机实测）
+
+- `app/server.py` PID 18104，监听 0.0.0.0:8000，`/api/health` 200，
+  `/api/warmup` 4/4 预热完成，`/api/defense/stat` 记录 326 条、手册库 `20261108_174939_69c8b5` 在。
+- Cloudflare 隧道在线（watchdog 14:15 拉起、14:17 在线）。
+- 4 个知识库：业务手册 1834 块 / etf2.0 272 / 星桥演示 19 / 某基金公司 56426。
+- 账号 3 个：管理员、某基金公司(1000)、演示账号 demo。
+
+**没跑的**
+
+- `tools/loadtest/` 压测是**在 8010 端口的测试实例**上跑的（mock 模型，不写 qa_log、不调视觉），
+  结论只代表"线程池/队列"的瓶颈，不代表真实网关。基线数值见该目录 `results-baseline.json`。
+
+**核对后确认没问题的**
+
+- 本题的新需求（练习/答辩两模式、题数、选知识库、知识库多选只读共享）在后端和前端都在位：
+  `defense_api.MODES/ALLOWED_N/new_session`、`server.py` 的 `/api/kb/{id}/share` 与
+  `_KB_READONLY_PATHS`、`defense.html` 的模式卡/题数/kbSel/锁定提示、`index.html` 的分配弹窗。
+- 答辩模块 5 个文件 `py_compile` 通过，`server.py` AST 通过。
+- 评分折算公式复核：3 题时 raw 5/58/50 → 1.7/19.3/16.7，总分 37.7/100，与 10:34 条目记录一致。
+
+**发现的不一致（只登记，未改）**
+
+1. **CHANGELOG 11:12 条与代码不一致**：该条写"3 题报告满分 30（实测 8/30）"，
+   但同一文件 10:34 条和现行代码 `defense_coach.PER_QUESTION=100` 都是**百分制**，
+   `full` 固定 100。11:12 那条应是 10:34 改之前的旧记录。
+2. **`AGENTS.md` / `CLAUDE.md` 的最后更新是 10-30**，落后于实际：
+   - 文件归属表没有 `app/defense*.py`、`app/static/defense.html`、`app/users.py`、`tools/`；
+   - "绝对不要碰"一节没提 11-04 之后新增的 `app/data/_imgcap`、`app/data/defense`；
+   - 当前状态快照还写着"某资管公司待重建"，而 `registry.json` 里已经没有这个库了。
+   建议下一次动这两个文件的人顺手更新。
+
 ### 10:15（11-11） | Claude Code | 阶段小结（无代码改动）
 
 - **服务状态**：隐藏进程运行 `python -u app/server.py`，`/api/health` 200，预热 4/4；
