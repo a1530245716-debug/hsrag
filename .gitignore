@@ -38,6 +38,10 @@ tools/ngrok/ngrok.exe
 .dsh-office-*/
 _pip_test/
 
+# ================= 压测输出 =================
+tools/loadtest/*.log
+tools/loadtest/results-*.json
+
 # ================= Python 缓存 =================
 __pycache__/
 *.py[cod]
