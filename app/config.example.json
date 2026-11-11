@@ -1,0 +1,76 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8000
+  },
+  "data_dir": "app/data",
+  "auth": {
+    "enabled": true,
+    "password": "",
+    "allow_fs_browse": false,
+    "token_ttl": 604800
+  },
+  "llm": {
+    "enabled": true,
+    "protocol": "anthropic",
+    "base_url": "http://llm-gateway.example.internal:8080",
+    "api_key": "",
+    "model": "your-model-name",
+    "anthropic_version": "2023-06-01",
+    "temperature": 0.3,
+    "max_tokens": 3500,
+    "timeout": 180,
+    "connect_timeout": 10,
+    "read_timeout": 30,
+    "total_timeout": 90
+  },
+  "health": {
+    "public_url": "",
+    "min_free_gb": 5,
+    "backup_max_age_hours": 48,
+    "webhook": ""
+  },
+  "fallback": {
+    "enabled": true,
+    "min_hits": 1,
+    "web_search": {
+      "enabled": false,
+      "provider": "duckduckgo",
+      "api_key": "",
+      "max_results": 5
+    }
+  },
+  "retrieval": {
+    "top_k": 8,
+    "hybrid_top_k": 15,
+    "enable_vector": true,
+    "enable_rerank": true,
+    "enable_planning": true,
+    "embedding": {
+      "provider": "cpu",
+      "model": "bge-small-zh-onnx",
+      "batch_size": 32
+    },
+    "rerank_top_k": 8,
+    "normalize": [
+      ["\\bo[\\s\\-_]*trade\\b", "demo"],
+      ["\\bo[\\s\\-_]*order\\b", "oorder"],
+      ["\\bh[\\s\\-_]*i[\\s\\-_]*x\\b", "hix"]
+    ],
+    "authority": [
+      [
+        ["手册", "说明书", "部署", "运维", "实施", "操作指南", "应用手册", "系统概述", "用户操作"],
+        1.8
+      ]
+    ],
+    "suppress": [
+      [
+        ["测试报告", "性能测试", "验收", "回执", "统计表", "周报", "月报", "日报", "例会", "计划", "清单", "台账", "排期", "签到", "进度", "会议", "日志查询"],
+        0.4
+      ]
+    ]
+  },
+  "figures": {
+    "enabled": false
+  }
+}

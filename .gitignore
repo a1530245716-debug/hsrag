@@ -1,0 +1,48 @@
+# ================= 密钥 / 本地配置（绝对不能提交） =================
+app/config.json
+app/config.json.bak*
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx
+.env
+.env.*
+
+# ================= 运行时数据 / 用户 / 问答日志 =================
+# 知识库分块、向量、用户表、问答日志、备份都属于部署状态，不进版本库
+app/data/
+/data/
+health.log
+server.out.log
+server.err.log
+*.log
+
+# ================= 大文件 / 模型 / 生成物 =================
+models/
+index/
+backups/
+demo/
+eval/results/
+*.tmp
+*~
+~$*
+.DS_Store
+Thumbs.db
+
+# ================= 隧道工具与临时文件 =================
+tools/cloudflared/cloudflared.exe
+tools/cloudflared/*.log
+tools/cloudflared/READY.txt
+tools/ngrok/ngrok.exe
+.dsh-office-*/
+_pip_test/
+
+# ================= Python 缓存 =================
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# ================= 本地工具配置 =================
+.claude/

@@ -1,0 +1,22 @@
+﻿# Cloudflare Tunnel 配置 —— RAG 智能问答系统
+#
+# 启动:  cloudflared --config config.yml tunnel run
+# 停止:  结束 cloudflared 进程
+# 状态:  cloudflared --config config.yml tunnel info rag
+
+tunnel: 23dda430-e232-42b0-b3ae-4761512c1726
+credentials-file: tools/cloudflared/credentials.json
+
+# 不让它自己升级（升级后配置可能变）
+no-autoupdate: true
+
+# QUIC(UDP) 在这条线路上拨号超时, 强制走 TCP
+protocol: http2
+
+ingress:
+  # 正式域名 → 本机服务
+  - hostname: rag.example.com
+    service: http://127.0.0.1:8000
+  # 其它所有请求 → 404
+  - service: http_status:404
+

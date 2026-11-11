@@ -1,0 +1,3157 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>项目智能问答助手</title>
+<style>
+  :root { --bg:#f5f6f8; --panel:#fff; --line:#e3e6ea; --accent:#2563eb;
+          --text:#1f2430; --muted:#6b7280; --user:#2563eb; --user-tx:#fff; }
+  * { box-sizing:border-box; }
+  html,body { height:100%; margin:0; }
+  body { font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif; background:var(--bg);
+         color:var(--text); display:flex; }
+  /* 侧栏 */
+  #sidebar { width:300px; min-width:300px; background:var(--panel); border-right:1px solid var(--line);
+             display:flex; flex-direction:column; }
+  #sidebar header { padding:16px 16px 12px; border-bottom:1px solid var(--line); }
+  #sidebar h1 { font-size:16px; margin:0 0 4px; }
+  #sidebar .sub { font-size:12px; color:var(--muted); }
+  #kbList { flex:1; overflow-y:auto; padding:8px; }
+  .kb { padding:10px 12px; border:1px solid var(--line); border-radius:8px; margin-bottom:8px;
+        cursor:pointer; background:var(--panel); transition:.15s; }
+  .kb:hover { border-color:var(--accent); }
+  .kb.active { border-color:var(--accent); background:#eff6ff; }
+  .kb .row { display:flex; justify-content:space-between; align-items:center; }
+  .kb .name { font-weight:600; font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  /* 项目路径往往很长，只显示一行、超出省略，鼠标悬停看完整路径(title) */
+  .kb .meta { font-size:12px; color:var(--muted); margin-top:4px;
+              white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .kb .del { color:#dc2626; cursor:pointer; font-size:12px; background:none; border:none; padding:2px 4px; }
+  .kb .rm { color:#2563eb; cursor:pointer; font-size:12px; background:none; border:none; padding:2px 4px; }
+  .kb .kbmgr { display:inline-flex; gap:2px; }
+  .kb .dim { opacity:.35; pointer-events:none; }
+  #kbAdd { padding:12px; border-top:1px solid var(--line); }
+  #kbAdd details { font-size:13px; }
+  #kbAdd summary { cursor:pointer; color:var(--accent); font-weight:600; }
+  .field { margin-top:8px; }
+  .field label { display:block; font-size:12px; color:var(--muted); margin-bottom:4px; }
+  input[type=text] { width:100%; padding:7px 10px; border:1px solid var(--line); border-radius:6px; font-size:13px; }
+  /* 按钮文字一律不折行：折成两行既不美观也点不准 */
+  .btn { display:inline-block; padding:7px 12px; border-radius:6px; border:1px solid var(--line);
+         background:var(--panel); font-size:13px; cursor:pointer; transition:.15s;
+         white-space:nowrap; }
+  .btn.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .btn:hover { filter:brightness(.96); }
+  .goto { margin-top:6px; font-size:12px; color:var(--muted); }
+  .goto a { color:var(--accent); cursor:pointer; }
+  /* 主区 */
+  #main { flex:1; display:flex; flex-direction:column; min-width:0; }
+  #topbar { padding:12px 20px; border-bottom:1px solid var(--line); background:var(--panel);
+            display:flex; align-items:center; justify-content:space-between; }
+  #topbar .t { font-size:15px; font-weight:600; }
+  #topbar .t2 { font-size:12px; color:var(--muted); margin-left:10px;
+                min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #topbar .actions { display:flex; gap:8px; align-items:center; }
+  #warmBanner { display:none; align-items:center; gap:10px; padding:7px 14px;
+                background:#eff6ff; border-bottom:1px solid #bfdbfe; color:#1e40af;
+                font-size:12.5px; line-height:1.6; }
+  #warmBanner .wbText { flex:1; min-width:0; }
+  #warmBanner .wbTrack { width:160px; height:6px; border-radius:3px; background:#dbeafe;
+                         overflow:hidden; flex:none; }
+  #warmBanner .wbTrack i { display:block; height:100%; width:0; background:#2563eb;
+                           transition:width .3s; }
+  @media (max-width:820px){
+    #warmBanner { flex-wrap:wrap; gap:5px; padding:6px 10px; }
+    #warmBanner .wbTrack { width:100%; }
+  }
+  #llmBadge { font-size:12px; padding:3px 10px; border-radius:20px; background:#d1fae5; color:#047857;
+              border:1px solid #a7f3d0; white-space:nowrap; }
+  #llmBadge.off { background:#fee2e2; color:#b91c1c; border-color:#fecaca; }
+  #chat { flex:1; overflow-y:auto; padding:20px; display:flex; flex-direction:column; gap:14px; }
+  .msg { max-width:78%; padding:11px 14px; border-radius:12px; line-height:1.65; font-size:14px;
+         white-space:pre-wrap; word-break:break-word; }
+  .msg.user { align-self:flex-end; background:var(--user); color:var(--user-tx); }
+  /* 助手回答是渲染后的 HTML（列表/表格/代码块），必须关掉 pre-wrap，
+     否则 HTML 里的换行会被再显示一次，表格和列表挤成一团 */
+  .msg.assistant { align-self:flex-start; background:var(--panel); border:1px solid var(--line);
+                   white-space:normal; }
+  .msg.assistant h1,.msg.assistant h2 { font-size:15px; margin:10px 0 5px; }
+  .msg.assistant h3 { font-size:14px; margin:9px 0 4px; }
+  .msg.assistant h4,.msg.assistant h5,.msg.assistant h6 { font-size:13.5px; margin:8px 0 3px; color:#374151; }
+  .msg.assistant ul,.msg.assistant ol { margin:6px 0; padding-left:22px; }
+  .msg.assistant li { margin:2px 0; }
+  .msg.assistant code { background:#eef2f7; padding:1px 5px; border-radius:4px; font-size:13px; }
+  .msg.assistant pre { background:#0f172a; color:#e2e8f0; padding:10px 12px; border-radius:6px;
+                       overflow-x:auto; font-size:12.5px; line-height:1.5; margin:8px 0; }
+  .msg.assistant pre code { background:none; color:inherit; padding:0; font-size:inherit; }
+  .msg.assistant blockquote { margin:8px 0; padding:6px 12px; border-left:3px solid var(--accent);
+                              background:#f8fafc; color:#374151; border-radius:0 4px 4px 0; }
+  /* 表格外套滚动层：宽表在窄屏上横向滑动，不撑破气泡 */
+  .msg.assistant .tbl { overflow-x:auto; -webkit-overflow-scrolling:touch;
+                        margin:8px 0; border-radius:6px; }
+  .msg.assistant .tbl table { margin:0; }
+  .msg.assistant table { border-collapse:collapse; margin:8px 0; font-size:12.5px;
+                         display:block; overflow-x:auto; max-width:100%; }
+  .msg.assistant th,.msg.assistant td { border:1px solid var(--line); padding:5px 9px;
+                                        text-align:left; vertical-align:top; }
+  .msg.assistant th { background:#f1f5f9; font-weight:600; white-space:nowrap; }
+  .msg.assistant hr { border:0; border-top:1px solid var(--line); margin:10px 0; }
+  .msg.assistant a { color:var(--accent); }
+  /* 引用角标：模型在句末标 [1,3] / （片段1、片段3），渲染成右上角小标 */
+  .msg.assistant sup.cite { font-size:11px; line-height:0; vertical-align:super;
+    color:var(--accent); font-weight:600; margin:0 1px; letter-spacing:-.2px;
+    cursor:default; user-select:none; }
+  .refs { align-self:flex-start; max-width:80%; }
+  /* 点缩略图打开的页内大图 */
+  #lb { display:none; position:fixed; inset:0; background:rgba(15,23,42,.92); z-index:999;
+        align-items:center; justify-content:center; cursor:zoom-out; }
+  #lb.on { display:flex; }
+  #lb img { max-width:96vw; max-height:90vh; border:0; border-radius:4px; background:#fff; cursor:zoom-out; }
+  #lbx { position:fixed; top:10px; right:20px; color:#fff; font-size:30px; line-height:1;
+         cursor:pointer; opacity:.85; user-select:none; }
+  #lbx:hover { opacity:1; }
+  .refs .ref-no { display:inline-block; min-width:16px; height:16px; line-height:16px;
+                  text-align:center; font-size:11px; font-weight:600; color:#fff;
+                  background:var(--accent); border-radius:8px; margin-right:2px; }
+  .refs details { font-size:12px; color:var(--muted); background:#fafafa; border:1px solid var(--line);
+                  border-radius:8px; padding:6px 10px; margin-top:4px; }
+  .refs .r { padding:2px 0; }
+  .refs .score { color:var(--muted); }
+  /* 引用片段里的文档插图 */
+  .refs .ref-imgs { margin:6px 0 2px; display:flex; flex-wrap:wrap; gap:6px; }
+  .refs .ref-imgs img { height:70px; max-width:140px; object-fit:cover; border:1px solid var(--line);
+                        border-radius:5px; background:#fff; cursor:zoom-in;
+                        transition:transform .12s ease, box-shadow .12s ease; }
+  .refs .ref-imgs img:hover { transform:scale(1.08); box-shadow:0 0 0 2px var(--accent); }
+  .ref-link { color:var(--accent); text-decoration:none; word-break:break-all; }
+  .ref-link:hover { text-decoration:underline; }
+  #inputbar { padding:14px 20px; border-top:1px solid var(--line); background:var(--panel); display:flex; gap:10px; }
+  #inputbar input { flex:1; padding:10px 14px; border:1px solid var(--line); border-radius:8px; font-size:14px; }
+  #inputbar button { padding:10px 20px; }
+  .empty { color:var(--muted); text-align:center; margin-top:60px; font-size:14px; }
+  .modal { position:fixed; inset:0; background:rgba(0,0,0,.35); display:none; align-items:center; justify-content:center; z-index:10; }
+  .modal.show { display:flex; }
+  .modal .card { background:#fff; border-radius:12px; padding:20px; width:560px; max-width:92vw; max-height:80vh;
+                 display:flex; flex-direction:column; }
+  .modal h3 { margin:0 0 12px; font-size:16px; }
+  /* 看大图：黑底铺满、图自身缩放到可见，右上角关闭。不用新开窗口，
+     免得用户开一堆标签页回来找不到原来的对话。 */
+  #figViewer { position:fixed; inset:0; background:rgba(0,0,0,.88); display:none;
+               align-items:center; justify-content:center; z-index:60; }
+  #figViewer.show { display:flex; }
+  #figViewer img { max-width:94vw; max-height:88vh; object-fit:contain;
+                   border-radius:6px; box-shadow:0 8px 40px rgba(0,0,0,.6); background:#111; }
+  #figViewer .fig-title { position:absolute; top:14px; left:18px; right:70px; color:#e5e7eb;
+                          font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #figViewer .fig-close { position:absolute; top:10px; right:14px; width:38px; height:38px;
+                          border-radius:50%; border:none; background:rgba(255,255,255,.16); color:#fff;
+                          font-size:20px; line-height:1; cursor:pointer; }
+  #figViewer .fig-close:hover { background:rgba(255,255,255,.3); }
+  #figViewer .fig-open { position:absolute; bottom:16px; left:50%; transform:translateX(-50%);
+                         color:#cbd5e1; font-size:12.5px; text-decoration:none; opacity:.75; }
+  #figViewer .fig-open:hover { opacity:1; text-decoration:underline; }
+  #picker { flex:1; overflow-y:auto; border:1px solid var(--line); border-radius:8px; padding:8px; min-height:200px; }
+  #picker .row { padding:7px 10px; cursor:pointer; border-radius:6px; font-size:13px; }
+  #picker .row:hover { background:#eff6ff; }
+  #picker .row.isSel { background:#dbeafe; }
+  #picker .dir { color:var(--accent); }
+  #chosen { margin-top:10px; font-size:13px; color:var(--text); }
+  .modal .foot { margin-top:14px; display:flex; justify-content:flex-end; gap:8px; }
+  #selPath { font-weight:600; color:var(--text); }
+  /* 设置/文档弹窗 */
+  .modal .card.wide { width: 720px; }
+  .modal label.f { display:block; font-size:12px; color:var(--muted); margin:10px 0 4px; }
+  .modal input[type=text],.modal input[type=password],.modal select { width:100%; padding:7px 10px; border:1px solid var(--line); border-radius:6px; font-size:13px; }
+  .formrow { display:grid; grid-template-columns:1fr 1fr; gap:0 14px; }
+  /* 问答统计 */
+  .qacards { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin:8px 0 4px; }
+  .qacard { border:1px solid var(--line); border-radius:8px; padding:12px 14px; }
+  .qacard .qv { font-size:22px; font-weight:700; line-height:1.25; }
+  .qacard .ql { font-size:12.5px; color:var(--muted); margin-top:4px; line-height:1.4; }
+  .qacard.warn .qv { color:#b45309; }
+  .qacard.bad .qv { color:#b91c1c; }
+  .qagrid { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:14px; }
+  .qahead { font-size:13.5px; font-weight:600; color:var(--text); margin-bottom:8px; }
+  .qalist { max-height:150px; overflow-y:auto; border:1px solid var(--line); border-radius:7px; font-size:13.5px;
+            scrollbar-width:thin; scrollbar-color:transparent transparent; }
+  .qalist:hover { scrollbar-color:#cbd5e1 transparent; }
+  .qalist::-webkit-scrollbar { width:8px; height:8px; }
+  .qalist::-webkit-scrollbar-track { background:transparent; }
+  .qalist::-webkit-scrollbar-thumb { background:transparent; border-radius:4px; border:2px solid #fff; }
+  .qalist:hover::-webkit-scrollbar-thumb { background:#cbd5e1; }
+  .qalist.tall { max-height:200px; }
+  .qalist.taller { max-height:min(52vh,460px); font-size:14px; }
+  .qalist .qi { padding:9px 12px; border-bottom:1px solid var(--line); display:flex; gap:10px; align-items:baseline; line-height:1.5; }
+  .qalist .qi:last-child { border-bottom:none; }
+  .qalist .qi:hover { background:rgba(0,0,0,.02); }
+  .qalist .qc { color:var(--muted); flex:none; min-width:30px; text-align:right; font-variant-numeric:tabular-nums; }
+  .qalist .qt { flex:1; min-width:0; word-break:break-word; }
+  .qalist .qd { color:var(--muted); font-size:12.5px; flex:none; white-space:nowrap; }
+  .qalist .empty2 { padding:14px; color:var(--muted); }
+  /* 总览标签页 */
+  .qtabs { display:flex; gap:6px; border-bottom:1px solid var(--line); margin:0 0 14px; }
+  .qtab { border:none; background:none; padding:8px 14px; font-size:13.5px; color:var(--muted);
+          cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; }
+  .qtab:hover { color:var(--text); }
+  .qtab.on { color:var(--accent); border-bottom-color:var(--accent); font-weight:600; }
+  .ovline { font-size:13px; color:var(--muted); padding:10px 2px 0; line-height:1.7; word-break:break-word; }
+  /* 超时提示 */
+  .tmobox { background:#fffbeb; border:1px solid #fcd34d; border-radius:8px;
+            padding:12px 14px; white-space:pre-wrap; line-height:1.65; }
+  .waiting .wtxt { color:var(--muted); }
+  /* 答案反馈 */
+  .fbbox { display:flex; align-items:center; gap:8px; margin-top:10px; padding-top:10px;
+           border-top:1px dashed var(--line); font-size:12.5px; color:var(--muted); }
+  .fbbox .fb { background:#f8fafc; border:1px solid var(--line); border-radius:6px;
+               padding:3px 10px; cursor:pointer; font-size:12.5px; }
+  .fbbox .fb:hover { background:#eff6ff; border-color:#bfdbfe; }
+  .fbbox .fb:disabled { opacity:.5; cursor:default; }
+  .fbdone { color:var(--accent); }
+  /* 当前用户 / 用户管理 */
+  .me-name { font-size:12px; color:var(--muted); margin-right:2px; white-space:nowrap; }
+  .urow { display:flex; align-items:center; gap:10px; padding:9px 12px; border-bottom:1px solid var(--line); font-size:13px; }
+  .urow:last-child { border-bottom:none; }
+  .urow .un { font-weight:600; min-width:110px; }
+  .urow .ur { font-size:11px; padding:1px 7px; border-radius:10px; background:#eef2ff; color:#4338ca; }
+  .urow .ur.admin { background:#fef3c7; color:#92400e; }
+  .urow .uk { font-family:Consolas,monospace; color:var(--muted); font-size:12px; flex:1; }
+  .urow .ua { display:flex; gap:6px; }
+  .urow .ua button { font-size:11.5px; padding:3px 9px; }
+  .keybox { font-family:Consolas,monospace; background:#f3f4f6; padding:2px 7px; border-radius:5px; user-select:all; }
+  /* 顶栏「更多」下拉菜单 */
+  .menu-wrap { position:relative; display:inline-block; }
+  .menu { position:absolute; right:0; top:calc(100% + 6px); min-width:158px; background:#fff;
+          border:1px solid var(--line); border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,.13);
+          padding:4px; display:none; z-index:30; }
+  .menu.show { display:block; }
+  .menu div { padding:8px 12px; border-radius:6px; font-size:13px; cursor:pointer; white-space:nowrap; color:var(--text); }
+  .menu div:hover { background:#eff6ff; }
+  .menu .sep { height:1px; background:var(--line); margin:4px 2px; padding:0; cursor:default; }
+  .menu .sep:hover { background:var(--line); }
+  /* 写内容(笔记)弹窗 */
+  .modal textarea { width:100%; padding:9px 10px; border:1px solid var(--line); border-radius:6px;
+                    font-size:13px; line-height:1.7; font-family:inherit; resize:vertical; }
+  /* 答案里的配图：跟在对应段落后，缩略图集 */
+  .figbox { margin:10px 0 4px; }
+  .figlabel { font-size:12px; color:var(--muted); margin-bottom:6px; }
+  .figstrip { display:flex; flex-wrap:wrap; gap:8px; }
+  .figstrip .fig { width:132px; height:88px; border-radius:8px; overflow:hidden; cursor:zoom-in;
+                   border:1px solid var(--line); background:#f6f7f9; }
+  .figstrip .fig img { width:100%; height:100%; object-fit:contain; display:block; }
+  .figstrip .fig:hover { box-shadow:0 0 0 2px var(--accent); }
+
+  /* 提问贴图：输入框上方一条缩略图，可横向滚动，点击放大 */
+  .ask-imgs { display:flex; flex-wrap:wrap; gap:8px; padding:8px 14px 0; align-items:center; }
+  .ask-imgs .ai { position:relative; width:78px; height:58px; border-radius:8px; overflow:hidden;
+                  border:1px solid var(--line); cursor:zoom-in; flex:0 0 auto; background:#222; }
+  /* contain 而不是 cover：截图被裁掉一半就认不出是哪张了，宁可留点黑边 */
+  .ask-imgs .ai img { width:100%; height:100%; object-fit:contain; display:block; }
+  .ask-imgs .ai span { position:absolute; top:1px; right:2px; width:16px; height:16px; line-height:16px;
+                       text-align:center; border-radius:50%; background:rgba(0,0,0,.55); color:#fff;
+                       font-size:11px; cursor:pointer; }
+  .ask-imgs .ai span:hover { background:rgba(220,38,38,.95); }
+  .ask-imgs .cnt { font-size:12px; color:var(--muted); }
+
+  .note-imgs { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0; }
+  .note-imgs .ni { position:relative; width:84px; height:84px; border-radius:8px; overflow:hidden; border:1px solid var(--line); }
+  .note-imgs .ni img { width:100%; height:100%; object-fit:cover; display:block; }
+  .note-imgs .ni span { position:absolute; top:2px; right:3px; width:17px; height:17px; line-height:17px; text-align:center;
+                        border-radius:50%; background:rgba(0,0,0,.55); color:#fff; font-size:11px; cursor:pointer; }
+  .note-imgs .ni span:hover { background:rgba(220,38,38,.9); }
+  .hint { font-size:11px; color:var(--muted); margin-top:6px; line-height:1.5; }
+  .tabs { display:flex; gap:4px; border-bottom:1px solid var(--line); margin-bottom:12px; }
+  .tab { padding:8px 16px; border:1px solid transparent; border-bottom:none; border-radius:8px 8px 0 0; cursor:pointer; font-size:13px; color:var(--muted); background:transparent; }
+  .tab.on { background:#eef4ff; color:var(--accent); font-weight:600; border-color:var(--line); }
+  .tabpane { display:none; font-size:13px; line-height:1.8; color:var(--text); max-height:62vh; overflow-y:auto; }
+  .tabpane.on { display:block; }
+  .tabpane h4 { margin:14px 0 6px; font-size:14px; color:var(--accent); }
+  .tabpane h4:first-child { margin-top:0; }
+  .tabpane ul,.tabpane ol { margin:4px 0 8px; padding-left:20px; }
+  .tabpane li { margin:2px 0; }
+  .tabpane code { background:#eef2f7; padding:0 5px; border-radius:4px; }
+  .tabpane .box { background:#fafbfc; border:1px solid var(--line); border-radius:8px; padding:10px 14px; margin:8px 0; }
+  /* 拖拽上传 */
+  #droplay { position:fixed; inset:0; display:none; align-items:center; justify-content:center; z-index:99;
+             background:rgba(37,99,235,.12); pointer-events:none; }
+  #droplay.show { display:flex; }
+  #droplay .zone { background:#fff; border:3px dashed var(--accent); border-radius:16px; padding:40px 60px;
+                   text-align:center; box-shadow:0 10px 40px rgba(0,0,0,.15); }
+  #droplay .zone b { font-size:20px; color:var(--accent); }
+  #droplay .zone p { margin:8px 0 0; color:var(--muted); font-size:14px; }
+  .dz { border:2px dashed #c7d2fe; border-radius:10px; padding:14px; text-align:center; color:var(--accent);
+        font-size:13px; cursor:pointer; margin-top:10px; background:#f7f9ff; }
+  .dz:hover { border-color:var(--accent); background:#eef3ff; }
+  .dropstatus { position:fixed; left:50%; bottom:30px; transform:translateX(-50%); background:#1f2430; color:#fff;
+                padding:10px 18px; border-radius:20px; font-size:13px; z-index:120; display:none; box-shadow:0 4px 20px rgba(0,0,0,.3); }
+  .dropstatus.show { display:block; }
+  /* 等待/生成动画 */
+  .waiting { color:var(--muted); display:inline-flex; align-items:center; gap:8px; font-size:13px; }
+  .spin { width:14px; height:14px; border:2px solid #cbd5e1; border-top-color:var(--accent);
+          border-radius:50%; display:inline-block; animation:rot .8s linear infinite; }
+  @keyframes rot { to { transform:rotate(360deg); } }
+  .caret { display:inline-block; width:2px; height:1em; background:var(--accent);
+           margin-left:2px; vertical-align:-2px; animation:blink 1s step-end infinite; }
+  @keyframes blink { 50% { opacity:0; } }
+  /* 上传/任务进度条(悬浮底部, 不遮挡界面) */
+  #taskbar { position:fixed; left:50%; bottom:26px; transform:translateX(-50%); z-index:130;
+             background:#1f2430; color:#fff; border-radius:12px; padding:10px 16px;
+             font-size:13px; display:none; flex-direction:column; gap:6px;
+             box-shadow:0 6px 24px rgba(0,0,0,.28); min-width:280px; max-width:70vw; }
+  #taskbar.show { display:flex; }
+  #taskbar .trow { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+  #taskbar .tpct { color:#93c5fd; font-weight:600; white-space:nowrap; }
+  #taskbar .track { height:6px; border-radius:3px; background:#374151; overflow:hidden; }
+  #taskbar .fill { height:100%; width:0%; background:linear-gradient(90deg,#3b82f6,#60a5fa);
+                   border-radius:3px; transition:width .25s ease; }
+  #taskbar .fill.indet { width:35%; animation:indet 1.2s ease-in-out infinite; }
+  @keyframes indet { 0%{margin-left:0;} 100%{margin-left:65%;} }
+  /* 回答来源徽标 */
+  .srcbar { display:flex; align-items:center; gap:8px; margin-bottom:10px; flex-wrap:wrap; }
+  .src-badge { display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:600;
+               padding:3px 10px; border-radius:20px; border:1px solid; }
+  .src-badge.kb   { background:#eff6ff; color:#1d4ed8; border-color:#bfdbfe; }
+  .src-badge.web  { background:#f0fdf4; color:#15803d; border-color:#bbf7d0; }
+  .src-badge.llm  { background:#faf5ff; color:#7e22ce; border-color:#e9d5ff; }
+  .pq-list { margin-top:8px; display:flex; align-items:flex-start; gap:6px; flex-wrap:wrap; }
+  .pq-label { font-size:12px; color:#6b7280; }
+  .pq-chip { display:inline-block; font-size:12px; padding:2px 9px; border-radius:12px;
+             background:#eef2ff; color:#4338ca; border:1px solid #c7d2fe; }
+  .web-refs { margin:8px 0 4px; padding:8px 10px; background:#f0fdf4; border:1px solid #bbf7d0;
+              border-radius:8px; font-size:12px; }
+  .web-refs .wr { padding:3px 0; }
+  .web-refs a { color:#15803d; text-decoration:none; }
+  .web-refs a:hover { text-decoration:underline; }
+  /* 登录遮罩 */
+  #loginMask { position:fixed; inset:0; z-index:200; background:linear-gradient(135deg,#1e3a8a,#2563eb);
+               display:flex; align-items:center; justify-content:center; }
+  #loginMask.hidden { display:none; }
+  #loginCard { background:#fff; border-radius:14px; padding:34px 38px; width:380px; max-width:90vw; text-align:center;
+               box-shadow:0 20px 60px rgba(0,0,0,.3); }
+  #loginCard h1 { font-size:19px; margin:0 0 6px; }
+  #loginCard .sub { font-size:12px; color:var(--muted); margin-bottom:22px; }
+  #loginCard input { width:100%; padding:11px 14px; border:1px solid var(--line); border-radius:8px; font-size:14px;
+                     box-sizing:border-box; }
+  #loginCard .btn.primary { width:100%; margin-top:14px; padding:11px; font-size:14px; }
+  #loginCard .err { color:#dc2626; font-size:12px; min-height:18px; margin-top:10px; }
+  #loginCard .tip { font-size:11px; color:var(--muted); margin-top:14px; line-height:1.6; }
+
+
+  /* ---------------- 移动端适配 ---------------- */
+  /* 汉堡按钮(桌面隐藏) */
+  #menuBtn { display:none; background:none; border:none; font-size:20px; cursor:pointer;
+             padding:2px 8px; color:var(--text); }
+  #sideMask { display:none; position:fixed; inset:0; background:rgba(0,0,0,.35); z-index:49; }
+
+  @media (max-width: 820px) {
+    #sidebar { position:fixed; left:0; top:0; bottom:0; width:84%; max-width:320px; min-width:0;
+               z-index:50; transform:translateX(-102%); transition:transform .22s ease;
+               box-shadow:4px 0 18px rgba(0,0,0,.18); }
+    #sidebar.open { transform:translateX(0); }
+    #sideMask.show { display:block; }
+    #menuBtn { display:inline-block; }
+    #main { width:100%; min-width:0; }
+
+    /* 顶栏：标题占一行，操作按钮占另一行。
+       之前这段写的是 .topbar / main / .topbar h2，而实际 id 是 #topbar，
+       整段选择器全部没生效 —— 手机上就是一行硬挤，看着很挤很丑。 */
+    #topbar { padding:8px 10px; flex-wrap:wrap; gap:6px; align-items:flex-start; }
+    #topbar > div:first-child { flex:1 1 100%; min-width:0; }
+    #topbar .t { font-size:15px; }
+    #topbar .t2 { display:block; margin:2px 0 0; font-size:11.5px; white-space:nowrap;
+                  overflow:hidden; text-overflow:ellipsis; }
+    #topbar .actions { width:100%; flex-wrap:wrap; gap:6px; }
+    #topbar .actions .btn { font-size:12px; padding:6px 10px; }
+    #meName { display:none; }                 /* 手机上一行放不下，收益也小 */
+    #llmBadge { font-size:11px; padding:2px 8px; }
+    /* ☰ 提到标题行左侧，跟常见 App 一致 */
+    #topbar { position:relative; }
+    #menuBtn { position:absolute; left:6px; top:6px; z-index:2; }
+    #topbar > div:first-child { padding-left:34px; }
+    /* 下拉菜单贴右边缘，别被屏幕切掉 */
+    .menu-wrap .menu { right:0; left:auto; max-width:92vw; }
+
+    /* 对话区：留白收紧、气泡放宽，别在窄屏里再砍掉两成宽度 */
+    #chat { padding:10px 10px 4px; gap:10px; }
+    .msg { max-width:94%; font-size:14px; padding:10px 12px; }
+    .msg.user { max-width:90%; }
+    .refs { max-width:100%; }
+    .refs details { padding:6px 8px; }
+    /* 引用里的长路径改成单行省略，悬停/点开看全文（原来 break-all 会换三四行） */
+    .ref-link { display:inline-block; max-width:calc(100% - 48px); vertical-align:bottom;
+                white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    /* 相关度分数属于调试信息，手机上不占地方 */
+    .refs .score { display:none; }
+    .refs .ref-imgs img { height:60px; max-width:110px; }
+    .msg.assistant pre { font-size:12px; overflow-x:auto; }
+    /* 表格在小屏上收紧内边距和字号，别让每格都折成两行 */
+    .msg.assistant .tbl table { font-size:11.5px; }
+    .msg.assistant .tbl th, .msg.assistant .tbl td { padding:4px 6px; }
+
+    /* 输入栏：输入框独占一行，按钮统一到第二行，别挤成一团 */
+    #inputbar { padding:8px 10px calc(8px + env(safe-area-inset-bottom)); gap:6px; flex-wrap:wrap; }
+    #inputbar input { flex:1 1 100%; font-size:15px; padding:10px 12px; }
+    #inputbar button { flex:1 1 auto; padding:9px 12px; font-size:13px; min-height:38px; }
+    #inputbar #sendBtn { flex:0 0 30%; font-weight:600; }
+
+    .modal .card { width:96vw !important; max-height:92vh; padding:14px; }
+    .modal .card.wide { width:96vw !important; }
+    .modal .tabs { flex-wrap:wrap; }
+    .qacards { grid-template-columns:1fr 1fr; }
+    .qagrid { grid-template-columns:1fr; }
+    .pq-list { flex-wrap:wrap; }
+  }
+  @media (max-width: 480px) {
+    .msg { max-width:96%; }
+    .qacards { grid-template-columns:1fr; }
+    #topbar .actions .btn { padding:6px 8px; font-size:11.5px; }
+    #inputbar button { font-size:12.5px; padding:8px 10px; }
+    .refs .ref-imgs img { height:54px; max-width:96px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- 登录遮罩 -->
+<div id="loginMask">
+  <div id="loginCard">
+    <h1>🔐 项目智能问答助手</h1>
+    <div class="sub">用账号密码登录，每个账号看自己的知识库</div>
+    <div id="loginForm">
+      <input id="loginUser" type="text" placeholder="账号" autocomplete="username">
+      <input id="loginPwd" type="password" placeholder="密码" autocomplete="current-password">
+      <button class="btn primary" onclick="doLogin()" id="loginBtn">登录</button>
+      <div class="tip">没有账号？<a href="javascript:showRegister(true)">注册新账号</a></div>
+    </div>
+    <div id="registerForm" style="display:none">
+      <input id="regEmail" type="email" placeholder="公司邮箱（就是你的账号）" autocomplete="username">
+      <div class="tip" id="regDomainHint" style="margin:2px 0 8px"></div>
+      <div id="regCodeRow" style="display:none;gap:8px;align-items:center">
+        <input id="regCode" type="text" placeholder="邮箱验证码" autocomplete="one-time-code"
+               style="flex:1;min-width:0">
+        <button class="btn" id="sendCodeBtn" onclick="sendCode()" style="white-space:nowrap">获取验证码</button>
+      </div>
+      <input id="regPwd" type="password" placeholder="设置密码（至少 6 位）" autocomplete="new-password">
+      <button class="btn primary" onclick="doRegister()" id="regBtn">注册并登录</button>
+      <div class="tip">
+        注册后可以上传文档、建立自己的知识库。<br>
+        <a href="javascript:showRegister(false)">返回登录</a>
+      </div>
+    </div>
+    <div class="err" id="loginErr"></div>
+  </div>
+</div>
+
+<div id="sideMask" onclick="toggleSidebar(false)"></div>
+<aside id="sidebar">
+  <header>
+    <h1>项目智能问答助手</h1>
+    <div class="sub">按项目建知识库 · 快速上手 · 辅助项目实施</div>
+  </header>
+  <div id="kbList"></div>
+  <div id="kbAdd">
+    <details>
+      <summary>+ 新建知识库</summary>
+      <div class="field"><label>名称(可留空)</label><input id="nb_name" type="text" placeholder="可留空,默认取文件夹名"></div>
+      <div class="field"><label>源文件夹路径</label><input id="nb_folder" type="text" placeholder="E:\\路径\\到\\文档"></div>
+      <div class="btn goto" id="fsBrowseBtn"><a onclick="openPicker()">📁 目录浏览…</a></div>
+      <div class="dz" onclick="openCreatePicker()">或直接<a>选择文件 / 文件夹</a>，把文档拖进来建库</div>
+      <div class="field"><button class="btn primary" style="width:100%" onclick="createKb()">创建并建索引</button></div>
+      <div style="font-size:11px;color:var(--muted);margin-top:6px">不填路径也行：把文档/文件夹直接拖到右侧区域，松手即自动建库。</div>
+    </details>
+  </div>
+</aside>
+
+<main id="main">
+  <div id="topbar">
+    <div>
+      <span class="t" id="curName">未选择知识库</span>
+      <span class="t2" id="curMeta"></span>
+    </div>
+    <div class="actions">
+      <button id="menuBtn" onclick="toggleSidebar()" title="知识库列表">☰</button>
+      <span id="meName" class="me-name"></span>
+      <span id="llmBadge" class="off">大模型: 未配置</span>
+      <span id="keyBadge" onclick="openMyKey()" style="font-size:12.5px;white-space:nowrap"></span>
+      <button class="btn" onclick="openNote()" title="直接写一段文字（可粘贴图片）存进知识库">✍️ 写内容</button>
+      <button class="btn" onclick="openAddFiles()">添加文件</button>
+      <a class="btn" id="defenseLink" href="/defense" onclick="return openDefense(event)" title="上传答辩 PPT，AI 扮演评委提问，答完看报告">🎓 答辩演练</a>
+      <div class="menu-wrap">
+        <button class="btn" onclick="toggleMoreMenu(event)" title="更多操作">⚙ 更多</button>
+        <div class="menu" id="moreMenu">
+          <div onclick="reindex();closeMoreMenu()">🔄 重建索引</div>
+          <div id="userMgmtItem" style="display:none" onclick="openUsers();closeMoreMenu()">👥 用户管理</div>
+          <div id="qaStatsItem" style="display:none" onclick="openQaStats();closeMoreMenu()">📊 问答统计</div>
+          <div onclick="openDoc();closeMoreMenu()">📖 使用文档</div>
+          <div onclick="openMyKey();closeMoreMenu()">🔑 我的大模型 Key</div>
+          <div id="llmCfgItem" style="display:none" onclick="openLlmCfg();closeMoreMenu()">🤖 大模型设置（全局）</div>
+<div id="demoModeItem" onclick="toggleDemoMode();closeMoreMenu()">🧪 演示模式（不走缓存）</div>
+<div onclick="clearAnswerCache()">🧹 清空答案缓存</div>
+          <div class="sep"></div>
+          <div onclick="doLogout();closeMoreMenu()">🚪 退出登录</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div id="warmBanner">
+    <span class="wbText" id="wbText">正在后台加载知识库索引…</span>
+    <span class="wbTrack"><i id="wbFill"></i></span>
+  </div>
+  <div id="chat">
+    <div class="empty">← 在左侧选择或新建一个知识库,然后开始提问</div>
+  </div>
+  <div id="askImgs" class="ask-imgs" style="display:none"></div>
+  <div id="inputbar">
+    <button class="btn" id="imgBtn" onclick="pickAskImages()" title="添加图片（也可以直接 Ctrl+V 粘贴截图）">🖼</button>
+    <input type="file" id="askImgFile" accept="image/*" multiple style="display:none" onchange="onAskImgPick(this)">
+    <input id="q" type="text" placeholder="输入问题，回车发送（可 Ctrl+V 贴图）" disabled>
+    <button class="btn" id="ctxBtn" onclick="toggleCtx()" title="默认关闭：每次提问独立理解。开启后会把最近几轮对话带进去，方便追问">💬 上下文：关</button>
+    <button class="btn" id="lenBtn" onclick="cycleLen()" title="控制回答详略：简答适合现场演示快速看结论，详细适合做资料">📏 标准</button>
+<button class="btn" id="newChatBtn" style="display:none" onclick="resetChat()" title="清空上下文，开始新话题">🆕 新会话</button>
+    <button class="btn primary" id="sendBtn" onclick="ask()">发送</button>
+  </div>
+</main>
+
+<!-- 目录选择弹窗 -->
+<div class="modal" id="pickerModal">
+  <div class="card">
+    <h3>选择源文件夹</h3>
+    <div id="picker"></div>
+    <div id="chosen">已选: <span id="selPath">—</span></div>
+    <div class="foot">
+      <button class="btn" onclick="closePicker()">取消</button>
+      <button class="btn primary" onclick="confirmPick()">选择此文件夹</button>
+    </div>
+  </div>
+</div>
+
+<!-- 问答统计弹窗(仅管理员) -->
+<div class="modal" id="qaModal">
+  <div class="card" style="width:min(1080px,96vw)">
+    <h3>📊 运行总览 <span style="font-size:12px;font-weight:400;color:var(--muted)">今日 / 最近 7 天</span></h3>
+    <div class="qtabs">
+      <button class="qtab on" data-tab="ov" onclick="switchQaTab('ov')">🖥 系统与知识库</button>
+      <button class="qtab" data-tab="stat" onclick="switchQaTab('stat')">📈 问答统计</button>
+      <button class="qtab" data-tab="log" onclick="switchQaTab('log')">🧾 明细</button>
+    </div>
+
+    <div class="qpane" id="pane-ov">
+      <div id="ovStatus" class="qacards"></div>
+      <div id="ovLine" class="ovline"></div>
+      <div class="qahead" style="margin-top:16px">📚 知识库</div>
+      <div id="ovKbs" class="qalist tall"></div>
+    </div>
+
+    <div class="qpane" id="pane-stat" style="display:none">
+      <div id="qaCards" class="qacards"></div>
+      <div class="qagrid">
+        <div class="qacol">
+          <div class="qahead">🔥 高频问题（可考虑做成 FAQ / 加缓存）</div>
+          <div id="qaTop" class="qalist tall"></div>
+        </div>
+        <div class="qacol">
+          <div class="qahead">🕳 知识库没答上来的（该补内容）</div>
+          <div id="qaMiss" class="qalist tall"></div>
+        </div>
+      </div>
+      <div class="qahead" style="margin-top:16px">👎 最近差评</div>
+      <div id="qaBad" class="qalist"></div>
+    </div>
+
+    <div class="qpane" id="pane-log" style="display:none">
+      <div class="qahead">🧾 最近问答明细 <span style="font-weight:400;color:var(--muted);font-size:12.5px">最近 7 天，最多 40 条</span></div>
+      <div id="qaRecent" class="qalist taller" style="max-height:max(260px, calc(72vh - 190px))"></div>
+    </div>
+
+    <div class="foot">
+      <button class="btn" onclick="loadQaStats()">刷新</button>
+      <button class="btn" onclick="closeQaStats()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- 用户管理弹窗(仅管理员) -->
+<div class="modal" id="usersModal">
+  <div class="card" style="width:min(860px,96vw)">
+    <h3>👥 用户管理</h3>
+    <div style="font-size:12px;color:var(--muted);margin:-6px 0 12px">
+      每个用户用自己的账号密码登录，只能看到自己的知识库。新建后把账号密码给对方。
+      <span id="regCodeBox" style="display:block;margin-top:6px;color:var(--accent)">
+        注册邀请码：<b id="regCodeText">…</b>
+        <button class="btn" style="margin-left:8px;padding:2px 8px;font-size:12px" onclick="resetRegCode()">换一个</button>
+      </span>
+      <button class="btn" style="margin-top:10px;padding:4px 12px;font-size:12.5px"
+              onclick="openShare()">📤 分配知识库权限</button>
+    </div>
+    <div id="userList" style="max-height:44vh;overflow-y:auto;border:1px solid var(--line);border-radius:8px"></div>
+    <div style="display:flex;gap:8px;align-items:flex-end;margin-top:12px;flex-wrap:wrap">
+      <div style="flex:1;min-width:120px">
+        <label class="f" style="display:block;font-size:12px;color:var(--muted);margin:0 0 4px">账号</label>
+        <input id="nuUser" type="text" placeholder="登录用，如 1001" style="width:100%">
+      </div>
+      <div style="flex:1;min-width:120px">
+        <label class="f" style="display:block;font-size:12px;color:var(--muted);margin:0 0 4px">姓名</label>
+        <input id="nuName" type="text" placeholder="例如：张三" style="width:100%">
+      </div>
+      <div style="min-width:100px">
+        <label class="f" style="display:block;font-size:12px;color:var(--muted);margin:0 0 4px">角色</label>
+        <select id="nuRole" style="width:100%">
+          <option value="user">普通用户</option>
+          <option value="admin">管理员</option>
+        </select>
+      </div>
+      <div style="flex:1;min-width:130px">
+        <label class="f" style="display:block;font-size:12px;color:var(--muted);margin:0 0 4px">密码（留空自动生成）</label>
+        <input id="nuPwd" type="text" placeholder="留空自动生成" style="width:100%">
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;font-size:12px;padding-bottom:6px">
+        <label style="display:flex;gap:3px;align-items:center"><input id="nuPermKb" type="checkbox">知识库</label>
+        <label style="display:flex;gap:3px;align-items:center"><input id="nuPermDef" type="checkbox">模拟答辩</label>
+      </div>
+      <button class="btn primary" onclick="createUser()">＋ 添加用户</button>
+    </div>
+    <div id="userMsg" style="font-size:12.5px;margin-top:10px;color:var(--accent);min-height:18px"></div>
+    <div class="foot">
+      <button class="btn" onclick="closeUsers()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- 登录后的入口选择（权限控制） -->
+<div class="modal" id="homeModal">
+  <div class="card" style="width:min(720px,94vw)">
+    <h3>请选择要进入的入口</h3>
+    <div style="font-size:12.5px;color:var(--muted);margin:-4px 0 12px">
+      入口需要管理员开通；未开通的会置灰。
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+      <div id="homeKb" onclick="pickHome('kb')"
+           style="border:1px solid var(--line);border-radius:10px;padding:18px;text-align:center;cursor:pointer">
+        <div style="font-size:30px">📚</div>
+        <div style="font-weight:600;margin:6px 0">知识库</div>
+        <div style="font-size:12.5px;color:var(--muted)">按项目提问、看引用</div>
+        <div id="homeKbLock" style="font-size:12px;color:#b45309;margin-top:6px"></div>
+      </div>
+      <div id="homeDef" onclick="pickHome('defense')"
+           style="border:1px solid var(--line);border-radius:10px;padding:18px;text-align:center;cursor:pointer">
+        <div style="font-size:30px">🎓</div>
+        <div style="font-weight:600;margin:6px 0">模拟答辩</div>
+        <div style="font-size:12.5px;color:var(--muted)">AI 扮演评委，练答辩</div>
+        <div id="homeDefLock" style="font-size:12px;color:#b45309;margin-top:6px"></div>
+      </div>
+    </div>
+    <div id="homeMsg" style="font-size:12px;color:var(--muted);margin-top:12px;min-height:18px"></div>
+    <div class="foot">
+      <button class="btn" onclick="doLogout()">退出登录</button>
+    </div>
+  </div>
+</div>
+
+<!-- 分配知识库权限（管理员） -->
+<div class="modal" id="shareModal">
+  <div class="card" style="width:min(720px,95vw)">
+    <h3>📤 分配知识库权限</h3>
+    <div style="font-size:12px;color:var(--muted);margin:-6px 0 14px;line-height:1.8">
+      把某个知识库<b>只读</b>分给多个人：他们能提问、能看引用，但<b>不能改、不能删</b>。
+      自己的库始终归自己，不受影响。
+    </div>
+
+    <label class="f" style="display:block;font-size:12px;color:var(--muted);margin:0 0 5px">选择知识库</label>
+    <select id="shareKb" onchange="loadShareUsers()" style="width:100%"></select>
+
+    <label class="f" style="display:block;font-size:12px;color:var(--muted);margin:14px 0 5px">
+      分给哪些人（可多选）
+      <span style="float:right;font-weight:400">
+        <a onclick="shareSelAll(true)" style="cursor:pointer;color:var(--accent)">全选</a> ·
+        <a onclick="shareSelAll(false)" style="cursor:pointer;color:var(--accent)">清空</a>
+      </span>
+    </label>
+    <div id="shareUsers"
+         style="max-height:38vh;overflow-y:auto;border:1px solid var(--line);
+                border-radius:8px;padding:6px"></div>
+
+    <div id="shareMsg" style="font-size:12.5px;margin-top:10px;color:var(--accent);min-height:18px"></div>
+    <div class="foot">
+      <button class="btn" onclick="closeShare()">取消</button>
+      <button class="btn primary" onclick="saveShare()">保存分配</button>
+    </div>
+  </div>
+</div>
+
+<!-- 写内容(手写笔记)弹窗 -->
+<div class="modal" id="noteModal">
+  <div class="card" style="width:min(820px,95vw)">
+    <h3>✍️ 写一段内容进知识库</h3>
+    <div style="font-size:12px;color:#9ca3af;margin:-6px 0 12px">
+      直接写字即可，不用自己造文件。截图按 <b>Ctrl+V</b> 粘贴到正文框会自动作为图片保存。
+    </div>
+    <div id="notePicker" style="display:none;margin-bottom:10px">
+      <label class="f" style="display:block;font-size:12px;color:var(--muted);margin:0 0 4px">继续编辑已有笔记</label>
+      <select id="noteSel" onchange="loadNote(this.value)"></select>
+    </div>
+    <label class="f" style="display:block;font-size:12px;color:var(--muted);margin:10px 0 4px">标题</label>
+    <input id="noteTitle" type="text" class="full" placeholder="例如：demo 部署包清单（2026-10 整理）">
+    <label class="f" style="display:block;font-size:12px;color:var(--muted);margin:10px 0 4px">正文</label>
+    <textarea id="noteBody" rows="12" placeholder="在这里直接写内容…&#10;&#10;支持粘贴截图（Ctrl+V），也可以点下面「插入图片」"></textarea>
+    <div id="noteImgs" class="note-imgs" style="display:none"></div>
+    <div class="foot" style="justify-content:space-between">
+      <span style="display:flex;gap:8px">
+        <button class="btn" onclick="pickNoteImg()">＋ 插入图片</button>
+        <button class="btn" onclick="resetNoteForm()" title="清空，开始写新的一篇">＋ 新建</button>
+      </span>
+      <span style="display:flex;gap:8px">
+        <button class="btn" onclick="closeNote()">取消</button>
+        <button class="btn primary" onclick="saveNote(this)">保存到知识库</button>
+      </span>
+    </div>
+    <input type="file" id="noteImgInput" accept="image/*" multiple style="display:none">
+  </div>
+</div>
+
+<!-- 拖拽上传遮罩与状态 -->
+<div id="droplay"><div class="zone"><b>松开鼠标，上传这些文件</b><p id="droplayHint">已选中知识库 = 批量加入；未选中 = 自动新建知识库</p></div></div>
+<div class="dropstatus" id="dropstatus"></div>
+
+<!-- 任务进度条(上传/索引) -->
+<div id="taskbar">
+  <div class="trow">
+    <span id="taskText">上传中…</span>
+    <span style="display:flex;align-items:center;gap:10px">
+      <span class="tpct" id="taskPct">0%</span>
+      <button id="taskCancel" class="btn" style="padding:2px 10px;font-size:12px;color:#fca5a5;border-color:#7f1d1d">✕ 取消</button>
+    </span>
+  </div>
+  <div class="track"><div class="fill" id="taskFill"></div></div>
+</div>
+
+<!-- 我的大模型 Key（每个用户自己的，不是全局设置） -->
+<div class="modal" id="myKeyModal">
+  <div class="card">
+    <h3>🔑 我的大模型 Key</h3>
+    <div id="myKeyStatus" style="margin:10px 0;padding:10px 12px;border-radius:8px;font-size:13.5px;line-height:1.7"></div>
+    <label class="f">填入你在 demoproduct 平台申请的 Key</label>
+    <input id="myKeyInput" type="password" placeholder="粘贴 demoproduct 平台申请到的 Key" autocomplete="off">
+    <div class="hint" id="myKeyHint" style="line-height:1.8">
+      <b style="color:#b45309">只支持公司 demoproduct 大模型平台签发的 Key。</b><br>
+      申请入口：
+      <a href="http://demoproduct.examplecorp.com/ai_market/API" target="_blank" rel="noopener">http://demoproduct.examplecorp.com/ai_market/API</a>，
+      具体注册流程见公司内部文档。<br>
+      OpenAI、DeepSeek 官网、通义等<b>外部厂商的 Key 填进来无效</b>——本系统只会用它访问
+      <code id="keyGatewayUrl">公司网关</code>，不走外网。<br>
+      填了之后仅你自己使用，不影响其他人。
+    </div>
+    <div class="foot">
+      <button class="btn" onclick="closeModal('myKeyModal')">取消</button>
+      <button class="btn" id="myKeyTestBtn" onclick="testMyKey()">先测试</button>
+      <button class="btn primary" id="myKeySaveBtn" onclick="saveMyKey()">测试并保存</button>
+    </div>
+    <div class="foot" style="margin-top:6px">
+      <button class="btn" id="myKeyClearBtn" style="color:#b91c1c" onclick="clearMyKey()">改回使用公共 Key</button>
+    </div>
+  </div>
+</div>
+
+<!-- 大模型设置弹窗 -->
+<div class="modal" id="llmModal">
+  <div class="card">
+    <h3>大模型设置（全局，仅管理员）</h3>
+    <div class="formrow">
+      <div><label class="f">协议</label>
+        <select id="cfg_protocol"><option value="anthropic">Anthropic 协议</option><option value="openai">OpenAI 协议</option></select></div>
+      <div><label class="f">模型名</label><input id="cfg_model" type="text" placeholder="如 deepseek-v4-flash0731"></div>
+    </div>
+    <label class="f">接口地址 base_url</label>
+    <input id="cfg_base" type="text" placeholder="http://demoproduct-uis.examplecorp.com:8080">
+    <label class="f">API Key / Token</label>
+    <input id="cfg_key" type="password" placeholder="已配置则留空不变;想替换则填新 key">
+    <div class="hint">保存后立即生效,无需重启服务。留空 = 保持原 key 不变。</div>
+    <div class="foot">
+      <button class="btn" onclick="closeModal('llmModal')">取消</button>
+      <button class="btn primary" onclick="saveLlmCfg()">保存并生效</button>
+    </div>
+  </div>
+</div>
+
+<!-- 使用文档弹窗 -->
+<div class="modal" id="docModal">
+  <div class="card wide">
+    <h3>使用文档</h3>
+    <div class="tabs">
+      <button class="tab on" data-tab="tab-manual" onclick="switchTab('tab-manual')">用户手册</button>
+      <button class="tab" data-tab="tab-bg" onclick="switchTab('tab-bg')">项目背景与说明</button>
+    </div>
+    <div class="tabpane on" id="tab-manual">
+      <h4>一、这是什么</h4>
+      <p>「项目智能问答助手」是一个<b>文档问答系统</b>。每个项目的资料（需求、方案、接口、部署手册、周报、遗留问题等）各自建成一个知识库，你用中文直接提问，它从这些文档里找依据、组织答案，并<b>告诉你答案出自哪份文档的哪一段</b>。</p>
+      <p>它不是你熟悉的普通聊天机器人：<b>它只根据项目文档回答</b>，不靠记忆瞎编。所以答案对错，你随时能点开引用核对原文。</p>
+
+      <h4>二、登录</h4>
+      <ol>
+        <li>浏览器打开 <code>https://rag.example.com</code>（手机浏览器同样可用）。</li>
+        <li>在输入框里填管理员给你的 <b>访问 key</b>，点「进入」。<b>没有用户名，key 就是身份。</b></li>
+        <li>不同 key 能看到的知识库不同。看不到某个项目，就是你的 key 没有被授权，找管理员开。</li>
+      </ol>
+
+      <h4>三、先选知识库</h4>
+      <ol>
+        <li>左侧列出你能访问的知识库，<b>单击选中</b>（蓝色高亮的就是当前库）。</li>
+        <li>一个知识库 = 一个项目的资料。选错了库，它当然答不上来。</li>
+        <li>切换库不影响历史记录，随时可换。</li>
+      </ol>
+
+      <h4>四、怎么提问（决定答案质量的关键）</h4>
+      <p>底部输入框输入问题，<b>回车发送</b>。答案会逐字流式出现，生成过程中可以随时点 <b>⏹ 停止</b>。</p>
+<p>回答下面有两个按钮：<b>↻ 换个回答</b> 和 👍/👎。同一个问题每次检索到的片段、生成的措辞都会有点差别，
+<b>觉得这次答偏了、答浅了就点「换个回答」原地再抽一次</b>——不会多出一条重复提问，也不用重新打字。
+出错了（超时、生成失败、回答被截断）同一个按钮会变成 <b>↻ 重试</b>。</p>
+      <p><b>两个最典型的问法，照这个路子问就行：</b></p>
+      <div class="box">
+        <b>① 问具体流程 —— 「这件事怎么做」</b><br>
+        <code>demo升级的流程是什么样的</code><br>
+        这类问题最好答：部署手册、操作步骤、变更记录会被直接命中，答案按步骤给出来。
+        每一步后面跟着右上角小标（如 <b>1</b>、<b>3,4</b>），对应下方引用的第几条，点开就能核对原文。
+      </div>
+      <div class="box">
+        <b>② 摸底一个陌生项目 —— 「我刚接手，这项目是什么、到哪一步了」</b><br>
+        <code>我是一个刚接手项目的小白，这个项目目前是什么进展，这个项目的内容是什么。</code><br>
+        把自己的处境（刚接手、不了解）直接写进问题里是有用的。系统会把这句话拆成几条子查询
+        —— 项目内容、系统架构、当前进展、周报月报 —— 分别检索后再合成一份带时间线的介绍。
+        刚接手一个项目，先问这一句，比一个模块一个模块地摸要快得多。
+      </div>
+      <p>几个让答案更准的习惯：</p>
+      <ul>
+        <li><b>问具体，别问宽泛。</b>「OTRADE 部署要开哪些端口」比「怎么部署」更容易得到准确答案。</li>
+        <li><b>带上文档里的说法。</b>系统支持同义检索（问「佣金」也能命中「货币中介费」），但用项目里的原名命中率最高。</li>
+        <li><b>几个小问题别堆在一起。</b>「接口地址、超时时间、重试次数分别是多少」这种细项堆着问容易只答一半，
+            分开问更稳。<b>但「总体摸底」是例外</b>——上面第②种问法虽然长，系统会自己拆开查。</li>
+        <li><b>答不上来就换问法。</b>同一个意思换个说法再问一次，往往就出来了。</li>
+        <li><b>问"发生过什么"时带上时间点。</b>「10 月的周报里说进度到哪了」比「项目进度」准得多；
+            文档有新老版本时，系统会优先采信较新的那份。</li>
+        <li>等太久时页面会显示秒数，超过 45 秒会提示「网关较慢，最多等 3 分钟」，这时候可以等，也可以点停止换个问法。</li>
+      </ul>
+
+      <h4>五、看引用（这是核实答案的唯一办法）</h4>
+      <p>每个回答下方都有 <b>📎 引用 N 个片段（点击文件名可打开原文件）</b>，点开就能看到系统实际用了哪几段文字。
+      每条引用前面有个<b>蓝色序号</b>，和正文里右上角的小标一一对应：正文写 <b>3,4</b>，就是引用区的第 3、4 条。</p>
+      <ul>
+        <li><b>点文件名</b> → 新窗口打开那份原文档，并<b>直接定位到被引用的那一段</b>，方便你逐字核对。
+            现在预览按原文档的排版渲染：标题层级、表格、<b>文档里的插图都保留</b>，和你在 Word 里看到的顺序一致。</li>
+        <li><b>引用下方的缩略图</b>是这段涉及的文档截图，点一下在当前页面放大，按 <b>Esc</b>、点空白处或右上角 ✕ 关闭，不会跳到别的页面。</li>
+        <li>预览页里的图片同样可以点开放大。参数表、菜单路径这类"只在截图里"的信息，别只看文字，图也扫一眼。</li>
+        <li><b>养成习惯</b>：重要结论一定点开引用看一眼。答得对不对，文档说了算，不是模型说了算。</li>
+      </ul>
+
+      <h4>六、接着追问（上下文默认是关的）</h4>
+      <p>输入框右边有个 <b>💬 上下文：关</b> 按钮。<b>默认关闭</b>：每次提问都独立理解，不受前面的对话影响。
+      这是故意的——交付场景里大部分是独立提问，旧对话带着只会让答案跑偏。</p>
+      <ul>
+        <li><b>要追问时先点一下</b>，变成 <b>💬 上下文：开</b>。这时先问「这个接口怎么调」，再问「那它的超时怎么配」，
+            系统会结合上文理解「它」指的是谁。</li>
+        <li>开启后底部会显示 <b>🆕 清空上文（已记 N 轮）</b>，最多记最近 3 轮。换话题时点它清空，避免串题。</li>
+        <li>关掉开关会顺手清空已记的对话，并给一句提示，不会悄悄丢掉。</li>
+        <li>如果你问得太省略，它可能先把你的问题<b>补全成完整问句</b>再检索，并把补全结果显示出来，让你知道它"听懂"了什么。</li>
+        <li>开关状态记在本机浏览器里，下次打开还是上次的选择。</li>
+      </ul>
+
+      <h4>七、告诉它答得好不好</h4>
+      <p>每个回答底部有 <b>👍 有用 / 👎 没用</b>。</p>
+      <ul>
+        <li>点一下就会记录。管理员能在「📊 问答统计」里看到哪些问题总被差评、哪些问题系统压根答不上来。</li>
+        <li>这不是客套功能：<b>大家点的差评，就是知识库该补的内容</b>。觉得没用就点，别客气。</li>
+      </ul>
+
+      <h4>八、往知识库里补内容</h4>
+      <p>资料不全的时候，答案自然不准。补料有三种方式：</p>
+      <ol>
+        <li><b>拖文件</b>：把文件或整个文件夹直接拖到页面中间，松手即可加入当前知识库并自动建索引。</li>
+        <li><b>点「添加文件」</b>：右上角按钮，选文件后批量加入。</li>
+        <li><b>✍️ 写内容</b>：适合记录口头经验、临时结论、群里聊出来的要点。点开就是一个空白编辑器，<b>直接写字</b>，也可以 <b>Ctrl+V 粘贴截图</b>（会自动存成图片一起入库），写完点「保存到知识库」。<br>还可以用它<b>继续编辑已有笔记</b>，不必每次新建。</li>
+      </ol>
+      <p>文件越多，首次建索引越久（大项目几分钟到十几分钟），页面会显示进度，等它跑完再提问。</p>
+
+      <h4>九、在手机上用</h4>
+      <ul>
+        <li>地址相同，手机浏览器直接打开。</li>
+        <li>左上角的 <b>☰</b> 打开知识库列表，选好会自动收起，把屏幕让给对话。</li>
+        <li>粘贴截图、看引用、点反馈都支持。</li>
+      </ul>
+
+      <h4>十、常见问题</h4>
+      <div class="box">
+        <b>问</b>：它说「没有找到相关内容」？<br>
+        两种可能：知识库里确实没有这方面资料；或者你的问法和文档里的用词差太远。先换个说法再问一次，还不行就说明该补文档了。
+      </div>
+      <div class="box">
+        <b>问</b>：提示「大模型调用失败」，下面还列了一堆片段？<br>
+        说明<b>检索是好的</b>，只是负责生成的模型服务暂时不可用（内网网关波动或维护）。稍后点「↻ 重试」即可；这期间你仍然可以看列出来的片段自己找答案。
+      </div>
+      <div class="box">
+        <b>问</b>：第一次提问特别慢？<br>
+        服务刚启动时要把知识库索引进内存，第一次会慢一点，之后就快了。大项目首次可能等一两分钟，页面有提示。
+      </div>
+      <div class="box">
+        <b>问</b>：答案看起来不对？<br>
+        先点开引用看它到底依据了哪几段。常见原因是：引用的段落本身不完整、几个文档说法不一致、或者你的问题跨了好几个文档。这种情况换更具体的问法，或者把相关文档补全。
+      </div>
+      <div class="box">
+        <b>问</b>：我追问「那它的超时呢」，它却当成一个新问题答了？<br>
+        因为<b>上下文默认是关的</b>。点一下输入框右边的 <b>💬 上下文：关</b>，变成「开」再问，它就会结合上一句理解。
+      </div>
+      <div class="box">
+        <b>问</b>：答案写到一半出现「正在接着写…」？<br>
+        正常现象。单次输出有长度上限，撞到上限时系统会自动接着把它写完，你什么都不用做。
+        只有连续续写两轮还不够（问题范围太大）才会提示你拆开问。
+      </div>
+      <div class="box">
+        <b>问</b>：答案里那些右上角小数字是什么？<br>
+        引用角标，指下方引用区的第几条。看到不放心的地方，按数字去找对应那一条核对原文即可。
+      </div>
+      <div class="box">
+        <b>问</b>：两个人同时问会互相卡吗？<br>
+        不会。系统做了并发控制，多人同时用会排队处理，页面会显示当前阶段。
+      </div>
+      <div class="box">
+        <b>问</b>：我看到的库比别人少？<br>
+        key 决定了能看到哪些知识库。需要访问某个项目，找管理员给你的 key 加权限。
+      </div>
+    </div>
+    <div class="tabpane" id="tab-bg">
+      <h4>建立目的与背景</h4>
+      <p>项目的核心定位：<b>按项目建专属知识库</b>，帮助实施人员及相关人员快速上手项目，并在项目后续实施与日常工作中随时问答检索。</p>
+      <p>实际工作中，每个项目的资料往往量大且分散——需求文档、设计方案、接口文档、部署手册、周报月报、环境配置、遗留问题清单等散落各处。实施人员要快速熟悉一个新项目，或在成长过程中随时查找某个知识点，靠翻海量文档很耗时。</p>
+      <p>这个工具把<b>每个项目各自的文档</b>统一建成独立的知识库（一个文件夹 = 一个项目知识库），通过检索 + 大模型智能问答，把"翻文档找答案"变成"直接提问得答案"，并给出引用来源。天然支持按项目切换、随时补充完善。</p>
+      <h4>解决的痛点</h4>
+      <ul>
+        <li><b>快速上手</b>：新进实施人员面对海量项目文档，无需逐篇翻阅即可快速检索学习、掌握项目全貌，显著缩短上手周期。</li>
+        <li><b>项目实施辅助</b>：实施过程中遇到问题，直接提问即可定位相关依据，减少反复翻文档、找人问。</li>
+        <li><b>按项目隔离</b>：每个项目独立知识库，互不干扰，聚焦当前项目，避免无关信息干扰，响应更快。</li>
+        <li><b>交接提效</b>：人员变动或接手他人项目时，可依托已沉淀的项目知识独立掌握全貌与历史遗留问题，降低对个人的依赖。</li>
+        <li><b>信息集中</b>：日报、周报、环境配置、临时性文档等零散高价值资料统一入库，避免丢失与盲区。</li>
+        <li><b>本地轻量、合规安全</b>：本地私有部署，数据不出内网环境，适合金融企业项目环境。</li>
+      </ul>
+      <h4>用到的技术栈</h4>
+      <ul>
+        <li><b>后端</b>：Python + FastAPI + Uvicorn</li>
+        <li><b>检索</b>：中文分词（jieba）+ BM25 关键词检索 + <b>本地语义向量（bge-small-zh, ONNX）</b> + <b>Rerank 精排（bge-reranker-base int8）</b>；
+            关键词与语义两路并行召回后融合，再按权威性/版本新旧/文件名命中加权，块级索引 + 内存缓存 + 启动预热</li>
+        <li><b>文档解析</b>：python-docx / python-pptx / openpyxl / xlrd / pymupdf(PDF) + 直接读 Office 内部结构定位图片；
+            支持 Word、Excel、PPT、PDF、文本、CSV、JSON 等</li>
+        <li><b>文档内图片</b>：按需从原文档解压（docx 的 word/media、pptx 的 ppt/media 等），转换后缓存；
+            矢量格式 EMF/WMF 自动转 PNG，所以引用区和预览页里的图都能直接看</li>
+        <li><b>预览渲染</b>：不靠外部 Office，直接按文档结构生成网页——标题层级、表格、图片位置都与原文档一致</li>
+        <li><b>大模型</b>：支持 Anthropic / OpenAI 协议的本地或云模型，走公司内网部署的大模型（如需外部可经 UIS 代理 key 接入）；
+            流式输出，单次输出撞上限会自动接着写，写完为止</li>
+        <li><b>安全</b>：访问口令鉴权、外网目录浏览禁用、登录有效期、知识库按 key 隔离</li>
+        <li><b>前端</b>：原生 HTML / CSS / JavaScript 单页，轻量无框架（阶段状态提示、停止/重试、流式输出、引用角标、图片放大）</li>
+        <li><b>部署</b>：本地私有部署，数据全部落在本机 <code>app/data/</code>（每库独立索引 + 语义向量），不出内网</li>
+      </ul>
+      <h4>知识库怎么来</h4>
+      <p>两种建法，进同一个管道：</p>
+      <ul>
+        <li><b>指向本地文件夹</b>：一个文件夹 = 一个项目知识库，适合资料已经很规整的项目。</li>
+        <li><b>直接拖文件上传</b>：先建一个空库，再把文件/文件夹拖进去，适合随手收集的零散资料。</li>
+        <li>建好后<b>增量索引</b>：只处理新增和有改动的文件，没变的文件直接复用旧结果，所以补料之后重建很快。</li>
+        <li>索引完成后自动补语义向量，页面会显示进度，跑完再提问效果最好。</li>
+      </ul>
+      <h4>架构简览</h4>
+      <div class="box">
+        文件夹 / 上传目录 → 解析抽文本（同时记录每张图在文档里的位置）→ 分块 →
+        建立每库独立索引（chunks.jsonl）+ 语义向量库（vectors.npy）<br>
+        提问 → 问题拆解（必要时补一条架构类子查询）→ BM25 + 向量并行混合召回 → 融合去重 → 重排精排 →
+        组装提示词 → 大模型流式生成 → 界面展示 + 引用来源 + 图片缩略图
+      </div>
+    </div>
+    <div class="foot"><button class="btn primary" onclick="closeModal('docModal')">关闭</button></div>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+let kbs = [], cur = null, pickPath = "", pickStack = [];
+let AUTH = {enabled:false, authenticated:true};
+
+function esc(s){ return (s||"").replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+// ---- 每个标签页独立的登录态 ----
+// cookie 是同域名共享的，同一浏览器开两个标签页登录不同账号会互相顶掉。
+// 所以把 token 另外存到 sessionStorage（每个标签页独立），并让每个请求用 X-RAG-Token 带上。
+// 服务端 `_token_of` 已改成请求头优先，于是两个标签页可以各用各的身份。
+const TK_KEY = 'rag.token';
+
+function tkGet(){
+  try{ return sessionStorage.getItem(TK_KEY) || ''; }catch(e){ return ''; }
+}
+function tkSet(v){
+  try{ if (v) sessionStorage.setItem(TK_KEY, v); else sessionStorage.removeItem(TK_KEY); }catch(e){}
+}
+function tkClear(){
+  try{ sessionStorage.removeItem(TK_KEY); }catch(e){}
+}
+// 把当前标签页的 token 合进请求头。没有就用 cookie（老会话兼容）
+function withAuth(opt){
+  const o = Object.assign({}, opt || {});
+  const tk = tkGet();
+  if (tk){
+    o.headers = Object.assign({}, o.headers || {}, {'X-RAG-Token': tk});
+  }
+  return o;
+}
+
+// ---- 打开「答辩演练」时把登录态带过去 ----
+// sessionStorage 是每个标签页独立的（这样多账号互不干扰），代价是新开的页面拿不到 token，
+// 会被踢回登录。这里用 postMessage 把当前标签页的 token 递给新页面，
+// 新页面收到后存进自己的 sessionStorage —— 既不用重新登录，也不破坏标签页隔离。
+const DEFENSE_ORIGIN_KEY = 'rag.defense.origin';
+function openDefense(ev){
+  if (ev) ev.preventDefault();
+  const tk = tkGet();
+  // 记下"这个标签页是从哪里来的"，演练页回推 token 时校验用
+  try{
+    if (tk) sessionStorage.setItem(DEFENSE_ORIGIN_KEY, '1');
+  }catch(e){}
+  const w = window.open('/defense', '_blank');
+  if (!w) return false;   // 被拦截就交给浏览器默认行为（同标签页跳转）
+  // 等新页面发来"我要 token"的请求，再把 token 发过去。
+  // 只发给同源窗口，消息里带上 origin 校验，避免发给来路不明的页面。
+  const onMsg = (e) => {
+    if (e.origin !== location.origin) return;
+    if (!e.data || e.data.type !== 'defense-want-token') return;
+    try{ w.postMessage({ type:'defense-token', token: tkGet() }, location.origin); }catch(err){}
+  };
+  window.addEventListener('message', onMsg);
+  // 新页面加载完就不会再问，30 秒后自动摘掉监听
+  setTimeout(() => window.removeEventListener('message', onMsg), 30000);
+  return false;
+}
+// 统一的 fetch：自动带 token + 401 统一处理
+async function afetch(url, opt){
+  const r = await fetch(url, withAuth(opt));
+  if (r.status === 401 && AUTH.enabled && !String(url).includes('/api/login')){
+    showLogin('登录已过期，请重新登录');
+    throw new Error('未登录');
+  }
+  return r;
+}
+
+async function api(url, opt){
+  const r = await fetch(url, withAuth(opt));
+  if (r.status === 401){
+    const d = await r.json().catch(()=>({}));
+    if (AUTH.enabled){ showLogin(d.msg || '请先登录'); throw new Error('未登录'); }
+    return d;
+  }
+  return r.json();
+}
+
+// ---- 登录 ----
+function showLogin(msg){
+  AUTH.authenticated = false;
+  $('#loginMask').classList.remove('hidden');
+  $('#loginErr').textContent = msg || '';
+  $('#loginPwd').focus();
+}
+function showRegister(on){
+  $('#loginForm').style.display = on ? 'none' : 'block';
+  $('#registerForm').style.display = on ? 'block' : 'none';
+  $('#loginErr').textContent = '';
+  if (on){ $('#regEmail').focus(); syncRegisterMode(); } else { $('#loginUser').focus(); }
+}
+
+// 打开注册页就先问一次服务端要不要邮箱验证码，别等用户点了"获取验证码"才发现根本不需要。
+// 没配 SMTP 时这一整行直接藏掉，只留"邮箱 + 密码"两个框。
+let _regMode = '';        // '' | 'whitelist' | 'email'
+let _regDomains = ['examplecorp.com'];
+async function syncRegisterMode(){
+  if (_regMode) return;   // 问过一次就不再问
+  try{
+    const r = await fetch('/api/register/config');
+    const d = await r.json();
+    _regMode = d.mode || 'whitelist';
+    _regDomains = d.domains || ['examplecorp.com'];
+  }catch(e){ _regMode = 'whitelist'; }
+  applyRegisterMode();
+}
+function applyRegisterMode(){
+  const codeRow = $('#regCodeRow');
+  if (_regMode === 'email'){
+    if (codeRow) codeRow.style.display = 'flex';
+  } else {
+    if (codeRow) codeRow.style.display = 'none';
+    $('#regCode').value = '';
+  }
+  // 域名提示：告诉用户能用哪个邮箱注册，省得他拿 QQ 邮箱来试
+  const hint = $('#regDomainHint');
+  if (hint){
+    const ds = (_regDomains || []).map(d => '@' + d).join('、');
+    hint.textContent = ds ? ('用 ' + ds + ' 邮箱注册，邮箱就是账号') : '';
+  }
+}
+
+// 发注册验证码：服务端没配 SMTP 时会回 mode=whitelist，此时隐藏验证码行
+async function sendCode(){
+  const email = $('#regEmail').value.trim();
+  const errEl = $('#loginErr');
+  if (!email){ errEl.textContent = '先填邮箱'; return; }
+  const btn = $('#sendCodeBtn'); btn.disabled = true;
+  try{
+    const r = await fetch('/api/register/send_code', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({email})});
+    const d = await r.json();
+    if (!d.ok){ errEl.textContent = d.msg || '发送失败'; btn.disabled = false; return; }
+    errEl.textContent = d.msg || '';
+    if (d.mode === 'whitelist'){
+      // 没开邮件校验：把验证码输入框收起来，避免误导
+      $('#regCode').value = '';
+      $('#regCode').parentElement.style.display = 'none';
+      btn.style.display = 'none';
+      return;
+    }
+    let left = 60;
+    btn.textContent = left + 's';
+    const t = setInterval(() => {
+      left -= 1;
+      if (left <= 0){ clearInterval(t); btn.disabled = false; btn.textContent = '重新获取'; }
+      else btn.textContent = left + 's';
+    }, 1000);
+  } catch(e){ errEl.textContent = '网络错误: ' + e.message; btn.disabled = false; }
+}
+async function doLogin(){
+  const user = $('#loginUser').value.trim();
+  const pwd = $('#loginPwd').value;
+  const errEl = $('#loginErr');
+  const btn = $('#loginBtn'); btn.disabled = true;
+  try{
+    const r = await fetch('/api/login', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({username:user, password:pwd})});
+    const d = await r.json();
+    if (r.status === 401 || !d.ok){
+      errEl.textContent = d.msg || '账号或密码不对';
+      // 安全: 登录失败必须清掉浏览器里的旧身份。
+      // 否则上一个账号(可能是管理员)的 token 还在, 页面会继续以旧身份显示别人的知识库。
+      await hardLogoutLocal();
+      return;
+    }
+    // 本标签页独享的 token（多账号同浏览器靠这个隔离）
+    tkSet(d.token || '');
+    AUTH.authenticated = true;
+    AUTH.user = d.user || null;
+    try { sessionStorage.removeItem('rag.homePicked'); } catch(e){}
+    $('#loginMask').classList.add('hidden');
+    $('#loginPwd').value=''; errEl.textContent='';
+    renderMe();
+    await boot();
+  } catch(e){ errEl.textContent = '网络错误: ' + e.message; }
+  finally{ btn.disabled = false; }
+}
+async function doRegister(){
+  const email = $('#regEmail').value.trim();
+  const password = $('#regPwd').value;
+  const code = $('#regCode').value.trim();
+  const errEl = $('#loginErr');
+  if (!email || !password){ errEl.textContent = '邮箱和密码都要填'; return; }
+  if (password.length < 6){ errEl.textContent = '密码至少 6 位'; return; }
+  const btn = $('#regBtn'); btn.disabled = true;
+  try{
+    const r = await fetch('/api/register', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({email, password, code, name: email})});
+    const d = await r.json();
+    if (!d.ok){ errEl.textContent = d.msg || '注册失败'; return; }
+    AUTH.authenticated = true;
+    AUTH.user = d.user || null;
+    if (d.token) tkSet(d.token);      // 和登录一样存 token，否则刷新就掉线
+    try { sessionStorage.removeItem('rag.homePicked'); } catch(e){}
+    $('#loginMask').classList.add('hidden');
+    $('#regPwd').value=''; $('#regCode').value=''; errEl.textContent='';
+    renderMe();
+    await boot();
+    // 新用户第一次进来是空的，告诉他下一步干嘛，别让他对着空白页发呆
+    showFirstRunTip();
+  } catch(e){ errEl.textContent = '网络错误: ' + e.message; }
+  finally{ btn.disabled = false; }
+}
+$('#loginPwd').addEventListener('keydown', e => { if (e.key==='Enter') doLogin(); });
+$('#regCode').addEventListener('keydown', e => { if (e.key==='Enter') doRegister(); });
+
+async function initAuth(){
+  try{
+    // 带上本标签页的 token 探测身份：没有就用 cookie（老会话/首次打开）
+    const d = await (await fetch('/api/auth/status', withAuth({cache:'no-store'}))).json();
+    AUTH = {enabled: !!d.enabled, authenticated: !!d.authenticated,
+            allow_fs_browse: !!d.allow_fs_browse, user: d.user || null};
+    if (AUTH.allow_fs_browse === false && $('#fsBrowseBtn')) $('#fsBrowseBtn').style.display = 'none';
+    if (AUTH.enabled && !AUTH.authenticated){ showLogin(); return false; }
+    // 已经有有效登录态时，不能停在登录遮罩上（只有 doLogin 会移除它）。
+    $('#loginMask').classList.add('hidden');
+    renderMe();
+    return true;
+  }catch(e){ showLogin('无法连接服务'); return false; }
+}
+
+// 新用户第一次进来是空白的，指一下下一步。
+// 只在"刚注册完"时出现一次，不打扰老用户。
+function showFirstRunTip(){
+  const bar = document.createElement('div');
+  bar.style.cssText = 'margin:12px 0;padding:12px 14px;background:#eff6ff;border:1px solid #bfdbfe;' +
+                      'border-radius:8px;color:#1e40af;font-size:13.5px;line-height:1.7;position:relative';
+  bar.innerHTML = '<b>欢迎使用，三步就能开始：</b><br>' +
+    '① 点上方「+ 新建知识库」，给资料起个名字<br>' +
+    '② 把 Word / PDF / PPT 拖进去，等索引跑完（几十页大约 1–2 分钟）<br>' +
+    '③ 在下面直接提问，回答会引用你上传的资料<br>' +
+    '<span style="color:#64748b;font-size:12.5px">提示：资料越全，回答越准。同一份文档重复上传不会重复占空间。</span>';
+  const close = document.createElement('span');
+  close.textContent = '✕';
+  close.style.cssText = 'position:absolute;right:10px;top:8px;cursor:pointer;color:#64748b;font-size:14px';
+  close.onclick = () => bar.remove();
+  bar.appendChild(close);
+  const host = $('#chat') || $('#main') || document.body;
+  host.insertBefore(bar, host.firstChild);
+  setTimeout(() => { try{ bar.remove(); }catch(e){} }, 180000);   // 3 分钟后自动收起
+}
+
+// 显示当前用户 / 管理员入口
+function renderMe(){
+  const u = AUTH.user || {};
+  const isAdmin = u.role === 'admin';
+  $('#meName').textContent = u.name ? ('👤 ' + u.name + (isAdmin ? '（管理员）' : '')) : '';
+  const vu = $('#userMgmtItem');
+  if (vu) vu.style.display = isAdmin ? 'block' : 'none';
+  const qs = $('#qaStatsItem');
+  if (qs) qs.style.display = isAdmin ? 'block' : 'none';
+  // 全局大模型设置会改到所有人，只给管理员看
+  const lc = $('#llmCfgItem');
+  if (lc) lc.style.display = isAdmin ? 'block' : 'none';
+  // 管理员: 知识库列表里显示归属
+  window.__isAdmin = isAdmin;
+}
+
+// 列表指纹：用来判断"有没有真的变"，没变就不重绘，避免后台刷新时列表闪烁、
+// 把鼠标悬停/正在点的按钮状态弄丢。
+function kbsFingerprint(list){
+  return (list || []).map(k =>
+    [k.id, k.name, k.status, k.chunk_count, k.file_count, k.owner, k.owner_name, k.mine].join('~')
+  ).join('|');
+}
+
+let _kbsFp = '';
+async function loadKbs(){
+  // no-store: 确保每次都拿到服务端最新归属, 不被浏览器缓存挡住
+  const d = await api('/api/kb', {cache: 'no-store'});
+  kbs = d.kbs || [];
+  const fp = kbsFingerprint(kbs);
+  if (fp !== _kbsFp){          // 有变化才重绘
+    _kbsFp = fp;
+    renderKbs();
+  }
+  if (cur){
+    const k = kbs.find(x => x.id === cur.id);
+    if (k) select(k);
+    else {                      // 当前打开的库已经不归自己了（被管理员转走）
+      cur = null;
+      $('#curName').textContent = '未选择知识库';
+      $('#curMeta').textContent = '';
+      $('#q').disabled = true;
+      addMsg('assistant', '⚠️ 你正在看的知识库已被管理员转给其他用户，已自动关闭。');
+    }
+  }
+  return fp;
+}
+
+// ---- 知识库列表自动同步 ----
+// 管理员把库转给别人后，对方不用刷新就能看到（或看到自己的库消失）。
+// 三个约束避免把服务打满：只在页面可见时轮询、间隔 ≥8s、列表没变化不重绘。
+// 每个打开的标签页都会轮询 /api/kb。公网走 Cloudflare 隧道，延迟高、带宽有限，
+// 8 秒一次在多人在线时会明显拖慢登录和页面加载；30 秒足够发现索引/分享变化。
+const KB_POLL_MS = 30000;
+let kbPollTimer = null;
+
+function startKbPoll(){
+  stopKbPoll();
+  kbPollTimer = setInterval(async () => {
+    if (document.hidden) return;                 // 后台标签页不刷
+    if (!AUTH.authenticated) return;             // 没登录不刷
+    // 正在上传/建索引、或正开着归属弹窗时不打扰（uploadBusy 在下方才声明，用 typeof 防 TDZ）
+    if ((typeof uploadBusy !== 'undefined' && uploadBusy) ||
+        document.querySelector('#shareModal.show')) return;
+    try{ await loadKbs(); }catch(e){ /* 网络抖动忽略，下个周期再试 */ }
+  }, KB_POLL_MS);
+}
+function stopKbPoll(){
+  if (kbPollTimer){ clearInterval(kbPollTimer); kbPollTimer = null; }
+}
+
+// 切回标签页时立刻核对一次，不用等下一个轮询周期
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  if (AUTH.authenticated){
+    loadKbs().catch(()=>{});
+    startKbPoll();
+  }
+});
+
+function renderKbs(){
+  const el = $('#kbList');
+  el.innerHTML = '';
+  if (!kbs.length){ el.innerHTML = '<div class="empty" style="margin-top:30px">暂无知识库</div>'; return; }
+  kbs.forEach(k => {
+    const div = document.createElement('div');
+    div.className = 'kb' + (cur && cur.id === k.id ? ' active' : '');
+    const indexing = k.status === 'indexing';
+    div.innerHTML = `
+      <div class="row">
+        <span class="name ${indexing?'dim':''}">${esc(k.name)}</span>
+        <span class="kbmgr">
+          ${window.__isAdmin ? `<button class="rm" title="分配知识库权限（多选只读）" onclick="event.stopPropagation();openShare('${k.id}')">📤</button>` : ''}
+          <button class="rm" title="重命名" onclick="event.stopPropagation();promptRename('${k.id}')">✎</button>
+          <button class="del" title="删除" onclick="event.stopPropagation();delKb('${k.id}')">✕</button>
+        </span>
+      </div>
+      <div class="meta" title="${esc(k.folder || '（未绑定目录，纯上传型）')}">${k.folder ? '' : '纯上传型 · '}文件 ${k.file_count||0} / 块 ${k.chunk_count||0}${indexing?' · 索引中…':''}${
+        (window.__isAdmin && k.owner_name && !k.mine) ? ` · <span style="color:#b45309">👤 ${esc(k.owner_name)}</span>` : ''}</div>`;
+    div.onclick = () => select(k);
+    el.appendChild(div);
+  });
+}
+
+// 重命名知识库
+async function promptRename(id){
+  const kb = kbs.find(x => x.id === id);
+  if (!kb) return;
+  const newName = prompt('重命名知识库：', kb.name || '');
+  if (newName == null) return;                       // 用户取消
+  const nm = newName.trim();
+  if (!nm){ alert('名称不能为空'); return; }
+  if (nm.length > 60){ alert('名称过长(最多 60 字)'); return; }
+  const d = await api('/api/kb/' + id + '/rename', { method:'POST',
+    headers:{'Content-Type':'application/json'}, body: JSON.stringify({name: nm}) });
+  if (!d.ok){ alert(d.msg || '重命名失败'); return; }
+  if (cur && cur.id === id) cur = d.kb;              // 同步当前选中项
+  await loadKbs();
+  if (cur && cur.id === id) select(cur);
+}
+
+function select(k){
+  const changed = !cur || cur.id !== k.id;
+  if (changed) clearAskImgs();   // 切库时清掉待发图
+  cur = k;
+  $('#curName').textContent = k.name;
+  const metaTxt = `${k.folder ? '' : '纯上传型 · '}文件 ${k.file_count||0} · 块 ${k.chunk_count||0}`;
+  $('#curMeta').textContent = metaTxt;
+  $('#curMeta').title = k.folder ? ('源目录：' + k.folder) : '纯上传型知识库';
+  $('#q').disabled = false;
+  // 手机上输入框窄，长提示会被截掉半句，只留关键信息
+  $('#q').placeholder = window.innerWidth <= 820
+    ? `向「${k.name}」提问`
+    : `向「${k.name}」提问，可接着追问`;
+  if (changed) resetChat(true);  // 换知识库 → 静默清空上下文, 避免串库
+  // 清除残留的"请选择知识库"空提示
+  const empty = $('#chat .empty');
+  if (empty) empty.remove();
+  renderKbs();
+  if (!k.chunk_count) addMsg('assistant', '该知识库还没有索引。点右上角"重建索引"，或先添加/补充文档后重建。');
+}
+function addMsg(role, html){
+  const box = $('#chat');
+  $('#chat .empty') && box.querySelector('.empty')?.remove();
+  const m = document.createElement('div');
+  m.className = 'msg ' + role;
+  m.innerHTML = html;
+  box.appendChild(m); box.scrollTop = box.scrollHeight;
+  return m;
+}
+
+async function createKb(){
+  const name = $('#nb_name').value.trim(), folder = $('#nb_folder').value.trim();
+  if (!folder){ alert('请填写源文件夹路径'); return; }
+  const d = await api('/api/kb', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({name, folder}) });
+  if (!d.ok){ alert(d.msg || '创建失败'); return; }
+  $('#nb_name').value=''; $('#nb_folder').value='';
+  await loadKbs(); select(d.kb);
+  await reindex();
+}
+async function delKb(id){
+  if (!confirm('删除该知识库及其索引?')) return;
+  await api('/api/kb/' + id, { method:'DELETE' });
+  if (cur && cur.id === id) cur = null;
+  await loadKbs();
+  if (!cur){ $('#curName').textContent='未选择知识库'; $('#curMeta').textContent=''; $('#q').disabled = true; }
+}
+async function reindex(){
+  if (!cur) return alert('请先选择知识库');
+  addMsg('assistant', '⏳ 已开始后台重建索引，**期间可以继续提问**（索引完成后自动生效，会提示）。');
+  await runIndexInline(cur.id);
+}
+
+// ---- 问答统计(管理员) ----
+function openQaStats(){ $('#qaModal').classList.add('show'); loadQaStats(); }
+function closeQaStats(){ $('#qaModal').classList.remove('show'); }
+
+function switchQaTab(name){
+  document.querySelectorAll('#qaModal .qtab').forEach(b => {
+    b.classList.toggle('on', b.dataset.tab === name);
+  });
+  ['ov', 'stat', 'log'].forEach(t => {
+    const p = $('#pane-' + t);
+    if (p) p.style.display = (t === name) ? 'block' : 'none';
+  });
+}
+
+function fmtDur(s){
+  s = Number(s) || 0;
+  if (s < 60) return s + ' 秒';
+  if (s < 3600) return Math.floor(s / 60) + ' 分';
+  if (s < 86400) return Math.floor(s / 3600) + ' 小时';
+  return Math.floor(s / 86400) + ' 天';
+}
+
+async function loadOverview(){
+  try{
+    const d = await api('/api/admin/overview');
+    if (!d.ok) return;
+    const s = d.system || {}, t = d.today || {}, a = d.accounts || {};
+    const ok = v => v ? '<span style="color:#15803d">正常</span>' : '<span style="color:#b91c1c">未就绪</span>';
+    $('#ovStatus').innerHTML = `
+      <div class="qacard"><div class="qv">${t.asks || 0}</div><div class="ql">今日问答 · ${t.active_users || 0} 人在用</div></div>
+      <div class="qacard ${t.avg_seconds > 40 ? 'warn' : ''}"><div class="qv">${t.avg_seconds || 0}s</div><div class="ql">今日平均耗时</div></div>
+      <div class="qacard ${t.errors > 0 ? 'warn' : ''}"><div class="qv">${t.errors || 0}</div><div class="ql">失败/超时 ${t.fallback ? '· 兜底 ' + t.fallback : ''}</div></div>
+      <div class="qacard"><div class="qv">${fmtDur(s.uptime_s)}</div><div class="ql">已运行 · 账号 ${a.total || 0} 个</div></div>`;
+    // 状态行（固定元素，不再动态插入）
+    const bits = [
+      '大模型 ' + ok(s.llm_enabled),
+      'OCR ' + ok(s.ocr),
+      '总超时 ' + (s.total_timeout || '-') + 's',
+      '模型 ' + esc(s.model || '-'),
+      '兜底先问 ' + (s.fallback_ask_first ? '开' : '关'),
+    ];
+    const line = $('#ovLine');
+    if (line) line.innerHTML = bits.join(' · ');
+
+    // 知识库总览
+    const kbs = d.kbs || [];
+    $('#ovKbs').innerHTML = kbs.length ? kbs.map(k => {
+      const state = k.indexing ? '<span class="qd" style="color:#b45309">索引中</span>'
+                  : (k.stale ? '<span class="qd" style="color:#b45309">待重载</span>'
+                  : (k.index_error ? '<span class="qd" style="color:#b91c1c">出错</span>'
+                  : '<span class="qd">就绪</span>'));
+      const vec = k.vectors ? `向量 ${Number(k.vectors).toLocaleString()}` : '无向量';
+      return `<div class="qi"><span class="qt">${esc(k.name)}</span>
+        <span class="qd">${k.chunks ? Number(k.chunks).toLocaleString() + ' 块' : '未建索引'} · ${vec} · ${esc(k.owner || '')} ${state}</span></div>`;
+    }).join('') : '<div class="empty2">还没有知识库</div>';
+  }catch(e){ /* 总览失败不影响统计 */ }
+}
+
+async function loadQaStats(){
+  $('#qaCards').innerHTML = '<div style="padding:10px;color:var(--muted);font-size:13px">加载中…</div>';
+  loadOverview();
+  try{
+    const d = await api('/api/qa/stats?days=7');
+    const st = d.stats || {};
+    if (!st.asks){
+      $('#qaCards').innerHTML = '<div style="padding:10px;color:var(--muted);font-size:13px">最近 7 天还没有问答记录</div>';
+      $('#qaTop').innerHTML = $('#qaMiss').innerHTML = $('#qaBad').innerHTML = $('#qaRecent').innerHTML =
+        '<div class="empty2">暂无</div>';
+      return;
+    }
+    const f = st.fallback || {}, fb = st.feedback || {}, lat = st.latency_ms || {};
+    $('#qaCards').innerHTML = `
+      <div class="qacard"><div class="qv">${st.asks}</div><div class="ql">问答数</div></div>
+      <div class="qacard ${f.rate > 25 ? 'warn' : ''}"><div class="qv">${f.rate || 0}%</div><div class="ql">兜底率（知识库没答上）</div></div>
+      <div class="qacard ${fb.bad_rate > 20 ? 'bad' : ''}"><div class="qv">${fb.bad_rate || 0}%</div><div class="ql">差评率（${fb.bad||0}/${fb.total||0}）</div></div>
+      <div class="qacard"><div class="qv">${st.avg_top_score || 0}</div><div class="ql">平均命中分 · P50 ${lat.p50||0}ms</div></div>`;
+
+    $('#qaTop').innerHTML = (st.top_questions || []).map(([q, c]) =>
+      `<div class="qi"><span class="qc">${c}×</span><span class="qt">${esc(q)}</span></div>`).join('')
+      || '<div class="empty2">暂无</div>';
+    $('#qaMiss').innerHTML = (st.fallback_questions || []).map(q =>
+      `<div class="qi"><span class="qt">${esc(q)}</span></div>`).join('')
+      || '<div class="empty2">🎉 没有兜底的，都从知识库答上了</div>';
+    $('#qaBad').innerHTML = (st.worst || []).map(w =>
+      `<div class="qi"><span class="qt">${esc(w.q)}</span><span class="qd">${(w.source_type==='kb'?'知识库':'兜底')}</span></div>`).join('')
+      || '<div class="empty2">暂无差评</div>';
+
+    const logs = (await api('/api/qa/logs?days=7&limit=40')).logs || [];
+    $('#qaRecent').innerHTML = logs.map(r =>
+      `<div class="qi"><span class="qt">${esc(r.q)}</span><span class="qd">${r.hits} 命中 · ${r.ms}ms${
+        r.vote === 1 ? ' · 👍' : (r.vote === -1 ? ' · 👎' : '')}${r.fallback ? ' · 兜底' : ''}</span></div>`).join('')
+      || '<div class="empty2">暂无</div>';
+  }catch(e){
+    $('#qaCards').innerHTML = '<div style="padding:10px;color:#b91c1c;font-size:13px">加载失败: ' + esc(e.message) + '</div>';
+  }
+}
+
+// ---- 用户管理(管理员) ----
+function openUsers(){ $('#usersModal').classList.add('show'); loadUsers(); loadRegCode(); }
+function closeUsers(){ $('#usersModal').classList.remove('show'); }
+
+async function loadUsers(){
+  const box = $('#userList');
+  box.innerHTML = '<div style="padding:14px;color:var(--muted);font-size:13px">加载中…</div>';
+  try{
+    const d = await api('/api/users');
+    if (!d.ok){ box.innerHTML = '<div style="padding:14px;color:#b91c1c;font-size:13px">' + esc(d.msg||'加载失败') + '</div>'; return; }
+    const meId = (AUTH.user || {}).id;
+    box.innerHTML = d.users.map(u => `
+      <div class="urow">
+        <span class="un">${esc(u.name)}${u.username ? ' <span style="color:var(--muted);font-weight:400">@' + esc(u.username) + '</span>' : ''}${u.id === meId ? ' <span style="color:var(--muted);font-weight:400">(我)</span>' : ''}</span>
+        <span class="ur ${u.role === 'admin' ? 'admin' : ''}">${u.role === 'admin' ? '管理员' : '普通用户'}</span>
+        <span class="uk">${u.kb_count || 0} 个知识库${u.note ? ' · ' + esc(u.note) : ''}</span>
+        <span class="uperms" style="display:flex;gap:8px;font-size:12px;align-items:center;white-space:nowrap">
+          <label style="display:flex;gap:3px;align-items:center" title="可以进入知识库提问">
+            <input type="checkbox" data-perm="kb" ${(u.perms || {}).kb ? 'checked' : ''} ${u.role === 'admin' ? 'disabled' : ''} onchange="togglePerm('${u.id}', this)">知识库
+          </label>
+          <label style="display:flex;gap:3px;align-items:center" title="可以进入模拟答辩">
+            <input type="checkbox" data-perm="defense" ${(u.perms || {}).defense ? 'checked' : ''} ${u.role === 'admin' ? 'disabled' : ''} onchange="togglePerm('${u.id}', this)">模拟答辩
+          </label>
+        </span>
+        <span class="ua">
+          <button class="btn" onclick="resetPwd('${u.id}','${esc(u.name)}')">重置密码</button>
+          <button class="btn" onclick="delUser('${u.id}','${esc(u.name)}')" ${u.id === meId ? 'disabled title="不能删除自己"' : ''}>删除</button>
+        </span>
+      </div>`).join('') || '<div style="padding:14px;color:var(--muted);font-size:13px">还没有用户</div>';
+  }catch(e){
+    box.innerHTML = '<div style="padding:14px;color:#b91c1c;font-size:13px">加载失败: ' + esc(e.message) + '</div>';
+  }
+}
+
+async function togglePerm(uid, cb){
+  const row = cb.closest('.urow');
+  const kb = row.querySelector('input[data-perm="kb"]').checked;
+  const defense = row.querySelector('input[data-perm="defense"]').checked;
+  const d = await api('/api/users/' + uid, {
+    method:'PATCH', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ perms: { kb, defense } })
+  });
+  if (!d.ok){ alert(d.msg || '权限更新失败'); await loadUsers(); return; }
+  $('#userMsg').textContent = '✅ 权限已更新：知识库' + (kb ? '开' : '关') +
+    '，模拟答辩' + (defense ? '开' : '关');
+  await loadUsers();
+}
+
+async function createUser(){
+  const name = $('#nuName').value.trim();
+  const role = $('#nuRole').value;
+  const username = $('#nuUser').value.trim();
+  const password = $('#nuPwd').value.trim();
+  if (!username){ alert('请填写账号'); return; }
+  const perms = { kb: $('#nuPermKb').checked, defense: $('#nuPermDef').checked };
+  const d = await api('/api/users', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({name, role, username, password, perms})});
+  if (!d.ok){ alert(d.msg || '创建失败'); return; }
+  $('#nuUser').value = ''; $('#nuName').value = ''; $('#nuPwd').value = '';
+  $('#nuPermKb').checked = false; $('#nuPermDef').checked = false;
+  $('#userMsg').innerHTML = '✅ 已创建 <b>' + esc(d.user.name) + '</b>，账号：<span class="keybox">' +
+    esc(d.user.username) + '</span> 密码：<span class="keybox">' + esc(d.user.key) +
+    '</span>（点一下全选，复制给对方）';
+  await loadUsers();
+}
+
+async function resetPwd(uid, name){
+  if (!confirm('确定给「' + name + '」重置一个随机密码？旧密码会立刻失效。')) return;
+  const d = await api('/api/users/' + uid, {method:'PATCH', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({new_key:true})});
+  if (!d.ok){ alert(d.msg || '重置失败'); return; }
+  $('#userMsg').innerHTML = '✅ 「' + esc(name) + '」的新密码：<span class="keybox">' + esc(d.password) + '</span>';
+  await loadUsers();
+}
+
+async function loadRegCode(){
+  try{
+    const d = await api('/api/register/code');
+    if (d.ok && $('#regCodeText')) $('#regCodeText').textContent = d.code;
+  }catch(e){}
+}
+async function resetRegCode(){
+  if (!confirm('换一个新的注册邀请码？旧的立刻失效。')) return;
+  const d = await api('/api/register/code', {method:'POST'});
+  if (d.ok){ $('#regCodeText').textContent = d.code; alert('新的邀请码：' + d.code); }
+}
+
+async function delUser(uid, name){
+  if (!confirm('确定删除用户「' + name + '」？\n他的知识库不会被删除，但会变成"无主"（管理员仍可见）。')) return;
+  const d = await api('/api/users/' + uid, {method:'DELETE'});
+  if (!d.ok){ alert(d.msg || '删除失败'); return; }
+  $('#userMsg').textContent = '✅ 已删除「' + name + '」';
+  await loadUsers();
+}
+
+// ---- 分配知识库权限(管理员) ----
+// 只读分享：对方能提问、能看引用，但不能改名/删除/上传。
+// 权限以服务端为准（写接口会 403），这里只负责勾选界面。
+let shareKbId = '';
+let shareChecked = new Set();
+
+function openShare(kbId){
+  $('#shareModal').classList.add('show');
+  $('#shareUsers').innerHTML = '';
+  $('#shareMsg').textContent = '';
+  const sel = $('#shareKb');
+  sel.innerHTML = '<option value="">加载中…</option>';
+  (async () => {
+    try{
+      const d = await api('/api/kb');
+      const list = (d.kbs || []).filter(k => k.name);
+      if (!list.length){
+        sel.innerHTML = '<option value="">暂无知识库</option>';
+        $('#shareUsers').innerHTML = '<div style="padding:12px;color:var(--muted);font-size:13px">还没有知识库</div>';
+        return;
+      }
+      sel.innerHTML = list.map(k => {
+        const owner = k.owner_name ? '（' + k.owner_name + '）' : '';
+        const sc = k.shared_count ? ' · 已分享 ' + k.shared_count + ' 人' : '';
+        return `<option value="${k.id}">${esc(k.name)}${esc(owner)}${sc}</option>`;
+      }).join('');
+      const prefer = (kbId && list.some(k => k.id === kbId)) ? kbId
+                   : (cur && list.some(k => k.id === cur.id)) ? cur.id
+                   : list[0].id;
+      sel.value = prefer;
+      await loadShareUsers();
+    }catch(e){
+      $('#shareUsers').innerHTML = '<div style="padding:12px;color:#b91c1c;font-size:13px">加载失败: ' + esc(e.message) + '</div>';
+    }
+  })();
+}
+
+function closeShare(){ $('#shareModal').classList.remove('show'); }
+
+async function loadShareUsers(){
+  const kid = $('#shareKb').value || '';
+  shareKbId = kid;
+  const box = $('#shareUsers');
+  if (!kid){ box.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:13px">请先选择知识库</div>'; return; }
+  box.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:13px">加载中…</div>';
+  try{
+    const [kd, ud] = await Promise.all([
+      api('/api/kb/' + encodeURIComponent(kid) + '/share'),
+      api('/api/users'),
+    ]);
+    if (!kd.ok){ box.innerHTML = '<div style="padding:12px;color:#b91c1c;font-size:13px">' + esc(kd.msg || '读取失败') + '</div>'; return; }
+    const kb = (kbs || []).find(k => k.id === kid) || {};
+    const owner = kb.owner || '';
+    shareChecked = new Set(kd.shared_with || []);
+    const users = (ud.users || []).filter(u => u.role !== 'admin' && u.id !== owner);
+    if (!users.length){
+      box.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:13px">没有可分配的用户（管理员本身可见全部知识库）</div>';
+      return;
+    }
+    box.innerHTML = users.map(u => `
+      <label style="display:flex;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);cursor:pointer">
+        <input type="checkbox" data-uid="${u.id}" ${shareChecked.has(u.id) ? 'checked' : ''}>
+        <span style="flex:1">${esc(u.name)}${u.username ? ' <span style="color:var(--muted);font-weight:400">@' + esc(u.username) + '</span>' : ''}</span>
+        <span style="color:var(--muted);font-size:12px">${u.kb_count || 0} 个自有库</span>
+      </label>`).join('');
+    box.querySelectorAll('input[type=checkbox]').forEach(cb => {
+      cb.onchange = () => {
+        if (cb.checked) shareChecked.add(cb.dataset.uid);
+        else shareChecked.delete(cb.dataset.uid);
+        syncShareCount();
+      };
+    });
+    syncShareCount(true);
+  }catch(e){
+    box.innerHTML = '<div style="padding:12px;color:#b91c1c;font-size:13px">加载失败: ' + esc(e.message) + '</div>';
+  }
+}
+
+function syncShareCount(saved){
+  const n = shareChecked.size;
+  if (!n){ $('#shareMsg').textContent = '当前未分享给任何人'; return; }
+  $('#shareMsg').textContent = saved
+    ? '当前已分享给 ' + n + ' 人'
+    : '已选 ' + n + ' 人（点「保存分配」生效）';
+}
+
+function shareSelAll(on){
+  $('#shareUsers').querySelectorAll('input[type=checkbox]').forEach(cb => {
+    cb.checked = !!on;
+    if (on) shareChecked.add(cb.dataset.uid);
+    else shareChecked.delete(cb.dataset.uid);
+  });
+  syncShareCount(false);
+}
+
+async function saveShare(){
+  const kid = $('#shareKb').value || shareKbId;
+  if (!kid){ alert('请先选择知识库'); return; }
+  const d = await api('/api/kb/' + encodeURIComponent(kid) + '/share', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ users: Array.from(shareChecked) })
+  });
+  if (!d.ok){ alert(d.msg || '保存失败'); return; }
+  const savedMsg = '✅ 已保存：' + (d.shared_names || '（无）');
+  await loadKbs();
+  await loadShareUsers();          // 刷新勾选状态和"已分享 N 人"
+  $('#shareMsg').textContent = savedMsg;
+}
+
+// 移动端: 侧栏抽屉
+function toggleSidebar(force){
+  const sb = $('#sidebar'), mask = $('#sideMask');
+  const open = (force === undefined) ? !sb.classList.contains('open') : !!force;
+  sb.classList.toggle('open', open);
+  if (mask) mask.classList.toggle('show', open);
+}
+// 选中知识库后自动收起(手机上省地方)
+document.addEventListener('click', e => {
+  if (e.target.closest && e.target.closest('#kbList .kb') && window.innerWidth <= 820) toggleSidebar(false);
+});
+
+// 顶栏「更多」菜单
+// ---------------- 演示模式：一律不走答案缓存 ----------------
+// 演示时同一个问题问第二遍会命中缓存、瞬间出现一模一样的答案，看着像提前录好的。
+// 开了这个开关，每次提问都真实重新检索 + 生成；状态存在 localStorage，刷新不丢。
+function demoMode(){ return localStorage.getItem('rag.nocache') === '1'; }
+function syncDemoItem(){
+  const el = $('#demoModeItem');
+  if (el) el.textContent = '🧪 演示模式（不走缓存）' + (demoMode() ? ' ✅' : '');
+}
+function toggleDemoMode(){
+  localStorage.setItem('rag.nocache', demoMode() ? '0' : '1');
+  syncDemoItem();
+  const box = $('#chat');
+  if (box){
+    const tip = document.createElement('div');
+    tip.className = 'msg';
+    tip.innerHTML = '<div style="color:#6b7280;font-size:13px;line-height:1.7">' +
+      (demoMode() ? '🧪 演示模式已开启：接下来每个问题都会真实检索+生成，不会命中缓存。'
+                  : '🧪 演示模式已关闭：相同问题再问会直接复用上次的答案。') + '</div>';
+    box.appendChild(tip); box.scrollTop = box.scrollHeight;
+  }
+}
+async function clearAnswerCache(){
+  closeMoreMenu();
+  try{
+    const r = await api('/api/cache/clear', {method:'POST'});
+    alert(r && r.ok ? `已清空答案缓存：${r.cleared} 条` : ('清空失败：' + ((r && r.msg) || '未知错误')));
+  }catch(e){ alert('清空失败：' + e.message); }
+}
+
+function toggleMoreMenu(e){ e.stopPropagation(); $('#moreMenu').classList.toggle('show'); }
+function closeMoreMenu(){ $('#moreMenu').classList.remove('show'); }
+document.addEventListener('click', () => closeMoreMenu());
+
+// ---- 图片大图（页内打开，不再新开标签页）----
+// 之前点缩略图是 target=_blank，用户反馈"点开就关不掉"，改成页内浮层：
+// 点空白/✕/Esc 都能关，滚轮缩放。
+function lbOpen(e, src){
+  if (e && e.preventDefault) e.preventDefault();
+  lbShow(src);
+  return false;
+}
+function lbClose(){
+  const lb = document.getElementById('lb');
+  if (lb){ lb.classList.remove('on'); const im = lb.querySelector('img'); if (im) im.removeAttribute('src'); }
+}
+function lbShow(src){
+  let lb = document.getElementById('lb');
+  if (!lb){
+    lb = document.createElement('div');
+    lb.id = 'lb';
+    lb.innerHTML = '<span id="lbx" title="关闭（Esc）">✕</span><img alt="">';
+    document.body.appendChild(lb);
+    lb.addEventListener('click', e => { if (e.target.id !== 'lbimg' && e.target.tagName !== 'IMG') lbClose(); });
+    lb.querySelector('#lbx').addEventListener('click', lbClose);
+    lb.querySelector('img').addEventListener('click', lbClose);
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') lbClose(); });
+  }
+  lb.querySelector('img').src = src;
+  lb.classList.add('on');
+}
+let askAbort = null;
+
+// 往聊天区放"附属块"（引用列表等）。
+// 一个回答里 sources 和 answer 两个事件都会带来源，重试/追问还会再来一次；
+// 原来一律 appendChild，页面上就堆出好几个"引用 N 个片段"，旧的还不消失。
+//
+// 归属用 data-owner 标记：只有**属于同一条回答**的旧块才复用/清掉，
+// 历史消息自己的引用框不会被误伤。
+let __ownerSeq = 0;
+let curOwner = '';        // 当前这条回答的标识（挂在对应 .msg 的 data-owner 上）
+let curMsgEl = null;      // 当前这条回答的气泡节点，引用框要插在它后面
+function newOwnerTag(){ curOwner = 'o' + (++__ownerSeq); return curOwner; }
+
+function upsertChatBlock(node, owner){
+  const box = $('#chat');
+  if (!box) return node;
+  const cls = node.className;
+  if (owner) node.dataset.owner = owner;
+
+  if (owner && cls){
+    // 同一条回答：有旧的就地换内容
+    const same = box.querySelectorAll('.' + cls + '[data-owner="' + owner + '"]');
+    if (same.length){
+      const keep = same[same.length - 1];
+      keep.innerHTML = node.innerHTML;
+      same.forEach((el, i) => { if (i < same.length - 1) el.remove(); });
+      box.scrollTop = box.scrollHeight;
+      return keep;
+    }
+  }
+
+  // 首次插入：紧跟在这条回答的气泡后面，而不是甩到聊天区最末尾
+  const anchor = curMsgEl && box.contains(curMsgEl) ? curMsgEl : null;
+  if (anchor){
+    // 把本条回答已有的附属块都挪到 anchor 之后，保证顺序不乱
+    anchor.after(node);
+  } else {
+    box.appendChild(node);
+  }
+  box.scrollTop = box.scrollHeight;
+  return node;
+}
+
+function renderRefs(refs, className){
+  const d = document.createElement('div'); d.className = className || 'refs';
+  const kbId = cur ? cur.id : '';
+  d.innerHTML = `<details><summary>📎 引用 ${refs.length} 个片段（点击文件名可打开原文件）</summary>` +
+    refs.map((s, ri) => {
+      // 传完整片段(优先 text_full, 最前 600 字)用于预览页定位, 保证包名/路径完整
+      const hl = encodeURIComponent(((s.text_full || s.text) || '').slice(0, 600));
+      const href = kbId ? `/api/kb/${encodeURIComponent(kbId)}/file/preview?path=${encodeURIComponent(s.path)}&hl=${hl}` : '#';
+      // 这个片段里提到的文档插图，直接给出缩略图，点开看大图
+      const imgs = (s.images || []).map(im =>
+        `<a href="${esc(im.url)}" onclick="return lbOpen(event, this.href)" title="${esc(im.name)}（点击看大图，Esc 或点空白关闭）">` +
+        // 极少数格式(emf/wmf 等)后端已过滤, 这里再加一道: 真加载失败就把这张撤掉,
+        // 不留破图占位
+        `<img class="ref-thumb" src="${esc(im.url)}" alt="${esc(im.name)}" loading="lazy" ` +
+        `onerror="this.closest('a').remove()"></a>`).join('');
+      const imgBlock = imgs ? `<div class="ref-imgs">${imgs}</div>` : '';
+      // 编号要和正文右上角的角标对得上：正文 [3] 就是这里第 3 条
+      return `<div class="r">■ <span class="ref-no">${ri + 1}</span> <a href="${href}" target="_blank" rel="noopener" class="ref-link" title="在新窗口预览原文件，并定位到该引用段落">📄 ${esc(s.path)}</a>` +
+             `<span class="score">(${s.score})</span><br><span style="color:#6b7280">${esc(s.text)}</span>` +
+             imgBlock + `</div>`;
+    }).join('') + `</details>`;
+  return upsertChatBlock(d, curOwner);
+}
+let srcDone = null;  // done 事件里的来源信息 {source_type, refs, source_label}
+
+function sourceBadgeHtml(srcType, label){
+  const meta = {
+    kb:  {cls:'kb',  icon:'📚', text: label || '知识库'},
+    web: {cls:'web', icon:'🌐', text: label || '网络搜索'},
+    llm: {cls:'llm', icon:'🧠', text: label || '大模型知识'}
+  };
+  const m = meta[srcType] || meta.kb;
+  return `<span class="src-badge ${m.cls}">${m.icon} ${esc(m.text)}</span>`;
+}
+function renderWebRefs(refs){
+  const d = document.createElement('div'); d.className = 'web-refs';
+  d.innerHTML = '<div style="font-weight:600;margin-bottom:4px">🌐 来自网络搜索的参考链接：</div>' +
+    (refs||[]).map(r =>
+      `<div class="wr">· <a href="${esc(r.url||'#')}" target="_blank" rel="noopener">${esc(r.title||r.url||'链接')}</a>` +
+      (r.snippet ? `<br><span style="color:#6b7280">${esc(r.snippet)}</span>` : '') + `</div>`).join('');
+  return upsertChatBlock(d, curOwner);
+}
+// 多轮上下文: 只在当前页面内存里(刷新即清空), 按知识库隔离
+// 默认**关闭** —— 交付场景里大部分问法是独立提问，带上旧对话只会让答案跑偏
+let chatHistory = [];
+let ctxOn = false;
+function syncCtxBtn(){
+  const b = $('#ctxBtn');
+  if (!b) return;
+  b.textContent = ctxOn ? '💬 上下文：开' : '💬 上下文：关';
+  b.classList.toggle('primary', ctxOn);
+  b.title = ctxOn ? '已开启：提问会带上最近几轮对话。点一下关闭'
+                  : '已关闭：每次提问独立理解。点一下开启（用于追问）';
+}
+// 回答详略：简答(现场演示看结论) / 标准 / 详细(做资料)
+const LEN_MODES = [
+  {v:'brief',  t:'📏 简答', tip:'只给结论，最多 5 行/150 字'},
+  {v:'normal', t:'📏 标准', tip:'正常详略（默认）'},
+  {v:'detail', t:'📏 详细', tip:'尽量讲全，分小节列清单'},
+];
+let lenMode = 'normal';
+function syncLenBtn(){
+  const b = $('#lenBtn'); if (!b) return;
+  const m = LEN_MODES.find(x => x.v === lenMode) || LEN_MODES[1];
+  b.textContent = m.t;
+  b.classList.toggle('primary', lenMode !== 'normal');
+  b.title = m.tip + '（点一下切换：简答 → 标准 → 详细）';
+}
+function cycleLen(){
+  const i = LEN_MODES.findIndex(x => x.v === lenMode);
+  lenMode = LEN_MODES[(i + 1) % LEN_MODES.length].v;
+  try{ localStorage.setItem('rag.len', lenMode); }catch(e){}
+  syncLenBtn();
+}
+try{ lenMode = localStorage.getItem('rag.len') || 'normal'; }catch(e){}
+function toggleCtx(){
+  ctxOn = !ctxOn;
+  try{ localStorage.setItem('rag.ctx', ctxOn ? '1' : '0'); }catch(e){}
+  syncCtxBtn();
+  if (!ctxOn) resetChat(true);          // 关掉就不再留着旧对话
+  const box = $('#chat');
+  if (box){
+    const tip = document.createElement('div');
+    tip.className = 'msg';
+    tip.innerHTML = `<div style="color:#6b7280;font-size:13px;line-height:1.7">` +
+      (ctxOn ? '💬 已开启上下文：接下来的提问会带上最近几轮对话，可以接着追问（比如“那它的下载地址呢”）。'
+             : '💬 已关闭上下文：每次提问都独立理解，不受前面对话影响。') + `</div>`;
+    box.appendChild(tip); box.scrollTop = box.scrollHeight;
+  }
+}
+function resetChat(silent){
+  const n = chatHistory.length;
+  chatHistory = [];
+  clearAskImgs();          // 换话题时把还没发出去的图清掉，避免误带进下一个问题
+  const b = $('#newChatBtn'); if (b) b.style.display = 'none';
+  // 点"清空上文"后必须给个反馈，否则按钮一点就消失，像是坏了
+  const box = $('#chat');
+  if (!silent && n && box){
+    const tip = document.createElement('div');
+    tip.className = 'msg';
+    tip.innerHTML = `<div style="color:#6b7280;font-size:13px;line-height:1.7">` +
+      `🆕 已清空上文记忆（${n} 轮）。接下来的提问不会再参考前面的对话。</div>`;
+    box.appendChild(tip);
+    box.scrollTop = box.scrollHeight;
+  }
+}
+function pushHistory(q, a){
+  chatHistory.push({q, a: (a || '').slice(0, 1200)});
+  if (chatHistory.length > 6) chatHistory.shift();
+  const b = $('#newChatBtn'); if (b){ b.style.display = 'inline-block';
+    b.textContent = `🆕 清空上文（已记 ${chatHistory.length} 轮）`; }
+}
+
+// retryQ：点「↻ 重试」时把原问题传进来。
+// 以前重试按钮直接调 ask()，而 ask() 读的是输入框——发出去时就清空了，
+// 于是重试永远命中 `if (!q) return`，点了没任何反应。
+// reuseNode：重答时复用同一条回答气泡，原地替换，聊天记录里不会堆一排重复提问。
+async function ask(retryQ, reuseNode, fbMode){
+  const isRetry = typeof retryQ === 'string';
+  let q = (isRetry ? retryQ : $('#q').value).trim();
+  // 有人习惯把指令写进输入框：「开启上下文，那demo对应的uat账号呢」。
+  // 这些字进检索会把真正相关的片段挤掉（实测过），所以既执行它、又把它从问题里剥掉。
+  const cmd = q.match(/^(?:请)?(?:帮我)?(开启|打开|启用|关掉|关闭|清空|重置|不用)(?:一下)?(?:上下文|上文|对话|会话)[，,。:：;；、\s]*/);
+  if (cmd){
+    const wantOn = /开启|打开|启用/.test(cmd[1]);
+    q = q.slice(cmd[0].length).trim();
+    if (/清空|重置/.test(cmd[1])){ resetChat(true); }
+    else if (wantOn !== ctxOn){
+      ctxOn = wantOn;
+      try{ localStorage.setItem('rag.ctx', ctxOn ? '1' : '0'); }catch(e){}
+      syncCtxBtn();
+      if (!ctxOn) resetChat(true);
+      addMsg('assistant', `<div style="color:#6b7280;font-size:13px;line-height:1.7">` +
+        (ctxOn ? '💬 已开启上下文：接下来可以接着追问。' : '💬 已关闭上下文：每次提问独立理解。') + `</div>`);
+    }
+    if (!q){ return; }        // 只说了指令，没有实际问题
+  }
+  // 本轮要发的图（重答时不重复带图，避免同一批图反复上传）
+  const imgs = isRetry ? [] : askImages.slice();
+  if ((!q && !imgs.length) || !cur) return;
+  const qShown = q;                    // 气泡里显示用户原话（只贴图时为空）
+  if (!q && imgs.length) q = '请看看这几张图，说明这是什么情况、该怎么处理';
+  $('#q').value = '';
+  if (imgs.length) clearAskImgs();     // 图已进本轮，输入区清空
+  const sendBtn = $('#sendBtn'); sendBtn.disabled = true;
+  let msg;
+  if (reuseNode){
+    msg = reuseNode;                       // 原地重答，不新增提问气泡
+    msg.innerHTML = '<span class="waiting"><span class="spin"></span> 重新生成中…</span>';
+  } else {
+    // 下面 addMsg 之后统一打归属标记
+    // 用户气泡：带上所贴图片的缩略图，方便回看
+    const thumbs = imgs.length
+      ? `<div class="ask-imgs" style="padding:0;margin-top:6px">${imgs.map(im =>
+          `<div class="ai" style="width:74px;height:54px"><img src="${im.data}"></div>`).join('')}</div>`
+      : '';
+    addMsg('user', (qShown ? esc(qShown) : '<span style="color:var(--muted)">（只看图）</span>') + thumbs);
+    msg = addMsg('assistant', '<span class="waiting"><span class="spin"></span> 正在准备…</span>');
+  }
+  // 归属标记：重试复用同一个 msg，就会复用同一个引用框，不会再多出一个
+  if (!msg.dataset.owner) msg.dataset.owner = newOwnerTag();
+  curOwner = msg.dataset.owner;
+  curMsgEl = msg;
+  const history = ctxOn ? chatHistory.slice(-3) : [];   // 关着就完全不带上文
+  // 停止/重试控件
+  const ctrl = document.createElement('div');
+  ctrl.style.cssText = 'margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;';
+  const stopBtn = document.createElement('button');
+  stopBtn.className = 'btn'; stopBtn.textContent = '⏹ 停止';
+  stopBtn.onclick = () => { if (askAbort && !askAbort.signal.aborted) askAbort.abort(); stopBtn.disabled = true; stopBtn.textContent = '已停止'; };
+  const retryBtn = document.createElement('button');
+  retryBtn.className = 'btn'; retryBtn.textContent = '↻ 重试';
+  retryBtn.style.display = 'none';
+  // 带上原问题重问；点一下立刻禁用，避免连点发出两遍
+  retryBtn.onclick = () => {
+    if (retryBtn.disabled) return;
+    retryBtn.disabled = true; retryBtn.textContent = '↻ 重试中…';
+    ask(q, msg);
+  };
+  ctrl.appendChild(stopBtn); ctrl.appendChild(retryBtn);
+  msg.appendChild(ctrl);
+  const ac = new AbortController(); askAbort = ac;
+  srcDone = null;
+  let webRefs = null;
+  let qaId = '';
+  let ansTimeout = false;
+  let staleHint = false;
+  let offerPayload = null;  // 知识库没命中：等用户选兜底来源，不自动跑
+  let offerIsBody = false;  // offer 的文字本身就是正文（没有任何知识库答案）
+  let figBlocks = [];       // 答案配图：按段落挂的图片块（后端按语义匹配给出）
+  // 等待计时: 让用户知道"在等、等了多久"，而不是对着转圈干等
+  const t0 = Date.now();
+  let waitingText = '正在准备…';
+  let firstTokenAt = 0;
+  const tick = setInterval(() => {
+    if (Date.now() - t0 < 1000) return;
+    const sec = Math.floor((Date.now() - t0) / 1000);
+    if (firstTokenAt) return;              // 已经开始输出, 不再刷等待提示
+    const cur2 = msg.querySelector('.waiting .wtxt');
+    if (cur2){
+      let hint = '';
+      if (sec >= 45) hint = '（网关较慢，最多等 3 分钟，可随时点停止）';
+      else if (sec >= 15) hint = '（大模型响应中，请稍候）';
+      cur2.textContent = waitingText + ` ${sec}s ` + hint;
+    }
+  }, 1000);
+  try{
+    const resp = await fetch(`/api/kb/${cur.id}/ask/stream`, withAuth({ method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({question:q, history,
+        no_cache: isRetry || demoMode(),     // 换个回答 / 演示模式：强制现算，不读缓存
+        fallback_mode: fbMode || '',         // 知识库没命中时用户选的那条兜底路
+        answer_len: lenMode,                 // 简答 / 标准 / 详细
+        images: imgs}),                      // 本轮贴的图（历史轮次不带图）
+      signal: ac.signal }));
+    if (resp.status === 401){ showLogin('登录已过期，请重新登录'); return; }
+    const reader = resp.body.getReader(); const dec = new TextDecoder();
+    let text = '', buf = '';
+    while (true){
+      const {done, value} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {stream:true});
+      const parts = buf.split('\n\n'); buf = parts.pop();
+      for (const part of parts){
+        const line = part.trim().split('\n').find(l => l.startsWith('data: '));
+        if (!line) continue;
+        let ev; try{ ev = JSON.parse(line.slice(6)); }catch(e){ continue; }
+        if (ev.type === 'status'){ waitingText = ev.text || '处理中…'; msg.innerHTML = '<span class="waiting"><span class="spin"></span> <span class="wtxt">' + esc(waitingText) + ' 0s</span></span>'; msg.appendChild(ctrl); }
+        else if (ev.type === 'rewrite'){
+          // 追问被改写成完整问题: 显示出来, 让用户知道系统"听懂了"什么
+          msg.innerHTML = '<span class="waiting"><span class="spin"></span> 已结合上文理解你的问题…</span>' +
+                          `<div class="pq-list"><span class="pq-label">🔗 理解成：</span><span class="pq-chip">${esc(ev.q)}</span></div>`;
+          msg.appendChild(ctrl);
+        }
+        else if (ev.type === 'sources'){
+          renderRefs(ev.sources);
+          if (ev.status){ msg.innerHTML = '<span class="waiting"><span class="spin"></span> ' + esc(ev.status) + '</span>'; msg.appendChild(ctrl); }
+        }
+        else if (ev.type === 'refs'){
+          webRefs = ev.refs || [];
+          renderWebRefs(webRefs);
+          if (ev.status){ msg.innerHTML = '<span class="waiting"><span class="spin"></span> ' + esc(ev.status) + '</span>'; msg.appendChild(ctrl); }
+        }
+        else if (ev.type === 'plan'){
+          const qs = (ev.queries || []).slice(1);   // 第一项是原问题, 不重复显示
+          if (qs.length){
+            const chips = qs.map(q => '<span class="pq-chip">' + esc(q) + '</span>').join('');
+            msg.innerHTML = '<span class="waiting"><span class="spin"></span> ' + esc(ev.status || '正在多路检索…') + '</span>' +
+                            '<div class="pq-list"><span class="pq-label">🧩 已拆解的子问题：</span>' + chips + '</div>';
+            msg.appendChild(ctrl);
+          } else if (ev.status){
+            msg.innerHTML = '<span class="waiting"><span class="spin"></span> ' + esc(ev.status) + '</span>'; msg.appendChild(ctrl);
+          }
+        }
+        else if (ev.type === 'delta'){ firstTokenAt = firstTokenAt || Date.now(); text += ev.text; msg.innerHTML = md(text) + '<span class="caret"></span>'; msg.appendChild(ctrl); scrollChat(); }
+        else if (ev.type === 'answer'){
+          text = ev.text || '';
+          ansTimeout = !!ev.timeout;
+          msg.innerHTML = (ansTimeout ? '<div class="tmobox">' : '') + md(text) + (ansTimeout ? '</div>' : '');
+          if (ev.sources) renderRefs(ev.sources);
+        }
+        else if (ev.type === 'qid'){ qaId = ev.id; }
+        else if (ev.type === 'offer'){
+          // 知识库没命中：不自动联网/不自动编，问用户走哪条路
+          offerPayload = ev;
+          if (!text.trim()){ text = ev.text || ''; offerIsBody = true; }
+        }
+        // 配图在 done 之后才推（后台线程算的），但一定在流关闭前到达，
+        // 所以这里只管存，统一在循环结束后跟正文一起渲染。
+        else if (ev.type === 'figures'){ figBlocks = ev.blocks || []; }
+        else if (ev.type === 'done'){
+          srcDone = { source_type: ev.source_type, refs: ev.refs || webRefs || null, source_label: ev.source_label };
+          staleHint = !!ev.stale;      // 索引还在后台重建，本次可能不含最新文档
+        }
+      }
+    }
+    // 最终渲染: 顶部来源徽标 + 正文 + (知识库引用/联网参考链接)
+    const body = text || '';
+    const badge = sourceBadgeHtml((srcDone && srcDone.source_type) || 'kb', (srcDone && srcDone.source_label) || '');
+    const newMsg = document.createElement('div');
+    msg.innerHTML = '';
+    msg.appendChild(newMsg);
+    // 答案配图：html 里带上每段图集，再交给 md 渲染会破坏结构，
+    // 所以先渲染正文，图片再用 DOM 插到对应段落后面
+    newMsg.innerHTML = `<div class="srcbar">${badge}</div><div class="ansBody">` +
+      (ansTimeout ? `<div class="tmobox">${md(body)}</div>` : md(body)) + `</div>` +
+      (qaId ? `<div class="fbbox" data-id="${qaId}">
+        <span class="fblabel">这个回答有用吗？</span>
+        <button class="fb" onclick="sendFeedback(this, 1)">👍 有用</button>
+        <button class="fb" onclick="sendFeedback(this, -1)">👎 没用</button>
+      </div>` : '');
+    if (srcDone && srcDone.source_type === 'web' && srcDone.refs && srcDone.refs.length && !webRefs){
+      renderWebRefs(srcDone.refs);
+    }
+    // 知识库没命中：把选择权交给用户，不自动联网、也不让模型自己编
+    if (offerPayload && (offerPayload.options || []).length){
+      const box = document.createElement('div');
+      box.style.cssText = 'margin-top:10px;padding:10px 12px;border:1px solid #e5e7eb;' +
+                          'border-radius:8px;background:#f9fafb';
+      let html = '';
+      if (!offerIsBody){
+        html += '<div style="font-size:13px;color:#374151;margin-bottom:8px">' + md(offerPayload.text || '') + '</div>';
+      }
+      if (offerPayload.note){
+        html += '<div style="font-size:12.5px;color:#6b7280;line-height:1.6;margin-bottom:8px">' +
+                esc(offerPayload.note) + '</div>';
+      }
+      box.innerHTML = html;
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap';
+      (offerPayload.options || []).forEach(o => {
+        const b = document.createElement('button');
+        b.className = 'btn';
+        b.textContent = o.label;
+        b.onclick = () => {
+          if (o.id === 'none'){
+            box.innerHTML = '<div style="font-size:13px;color:#374151">好的。知识库里确实没有相关内容，' +
+                            '可以换个问法，或者把资料补进知识库再问。</div>';
+            return;
+          }
+          ask(q, msg, o.id);      // 用户点了具体来源，才真去联网 / 问模型
+        };
+        row.appendChild(b);
+      });
+      box.appendChild(row);
+      newMsg.appendChild(box);
+    }
+    // 索引刚更新、还在后台加载时，明确告诉用户这条可能没包含最新文档
+    if (staleHint){
+      const tip = document.createElement('div');
+      tip.style.cssText = 'margin-top:8px;padding:6px 10px;background:#fffbeb;border:1px solid #fde68a;' +
+                          'border-radius:6px;color:#92400e;font-size:12.5px;line-height:1.6';
+      tip.textContent = '⏳ 索引刚更新，正在后台加载（约 1–2 分钟），本条回答可能还没包含最新加入的文档。稍等再问一次即可。';
+      newMsg.appendChild(tip);
+    }
+    // 答案配图：按语义把文档截图挂到对应段落后（纯展示，失败不影响回答）
+    if (figBlocks && figBlocks.length){
+      try{ attachFigures(newMsg.querySelector('.ansBody'), cur.id, figBlocks); }catch(e){}
+    }
+    msg.appendChild(ctrl);
+    stopBtn.style.display = 'none';
+    // 各种"没生成成功"的情况都要露出重试按钮：用户不该为了重问一遍而重新打字
+    const degraded = /⚠️ 回答未完|大模型超时|大模型调用失败|大模型无输出|请求失败/.test(body || '');
+    // 正常回答也露出重答按钮：觉得答偏了就原地再抽一次，不用重新打字
+    retryBtn.textContent = degraded ? '↻ 重试' : '↻ 换个回答';
+    retryBtn.title = degraded ? '重新生成一次' : '同样的提问再抽一次回答（原地替换，不新增对话）';
+    retryBtn.style.display = 'inline-block';
+    if (body.trim() && !degraded && ctxOn) pushHistory(q, body);   // 只有生成成功且开启上下文才记
+    scrollChat();
+  } catch(e){
+    clearInterval(tick);
+    if (e.name === 'AbortError'){ msg.innerHTML = '<span style="color:#6b7280">已停止生成。</span>'; }
+    else { msg.innerHTML = '请求失败: ' + esc(e.message) + '<br>可点「↻ 重试」再来一次。'; }
+    retryBtn.style.display = 'inline-block';      // 失败/中断都要能一键重试
+    // 失败时把问题放回输入框，用户想改几个字再发也行
+    if (!$('#q').value) $('#q').value = q;
+    msg.appendChild(ctrl);
+  }
+  clearInterval(tick);
+  askAbort = null;
+  sendBtn.disabled = false;
+}
+async function sendFeedback(btn, vote){
+  const box = btn.closest('.fbbox'); if (!box) return;
+  const id = box.dataset.id;
+  box.querySelectorAll('button').forEach(b => b.disabled = true);
+  try{
+    await api('/api/feedback', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({id, vote})});
+    box.innerHTML = vote > 0 ? '<span class="fbdone">✅ 感谢反馈</span>'
+                             : '<span class="fbdone">已记录，我们会改进（可留言告诉管理员哪里不对）</span>';
+  }catch(e){ box.innerHTML = '<span class="fbdone">反馈失败</span>'; }
+}
+function scrollChat(){ const box=$('#chat'); box.scrollTop = box.scrollHeight; }
+$('#q').addEventListener('keydown', e => { if (e.key==='Enter') ask(); });
+
+// markdown 渲染：标题 / 有序无序列表 / 表格 / 引用块 / 代码块 / 粗斜体 / 行内代码 / 链接 / 分隔线
+// 之前只把 "- " 换成 "• " 字符、不认三级标题和表格，模型输出的表格和 ### 会原样漏出来
+function md(t){
+  if (!t) return '';
+  // 1. 代码块先摘出来，避免里面的 # * | 被当成语法
+  const codes = [];
+  t = t.replace(/```[a-zA-Z0-9+#-]*\n?([\s\S]*?)```/g, (m, c) => {
+    codes.push(c.replace(/\n$/, ''));
+    return '\u0001' + (codes.length - 1) + '\u0001';
+  });
+  t = esc(t);
+  const L = t.split('\n');
+  const out = [];
+  let list = null;
+  const closeList = () => { if (list) { out.push('</' + list + '>'); list = null; } };
+  const cells = r => r.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(x => x.trim());
+
+  for (let i = 0; i < L.length; i++) {
+    const ln = L[i];
+
+    // 代码块占位
+    const cm = ln.trim().match(/^\u0001(\d+)\u0001$/);
+    if (cm) {
+      closeList();
+      out.push('<pre><code>' + codes[+cm[1]] + '</code></pre>');
+      continue;
+    }
+    if (!ln.trim()) { closeList(); continue; }
+
+    // 表格：本行 |...| 且下一行是 |---|---| 分隔行
+    if (/^\s*\|.*\|\s*$/.test(ln) && i + 1 < L.length && /^\s*\|[\s:|-]+\|\s*$/.test(L[i + 1])) {
+      closeList();
+      const head = cells(ln);
+      i += 2;
+      const rows = [];
+      while (i < L.length && /^\s*\|.*\|\s*$/.test(L[i])) { rows.push(cells(L[i])); i++; }
+      i--;
+      // 表格外面套一层可横向滚动的容器：手机上宽表格不会再把整页撑歪
+      out.push('<div class="tbl"><table><thead><tr>' + head.map(c => '<th>' + c + '</th>').join('') +
+        '</tr></thead><tbody>' +
+        rows.map(r => '<tr>' + r.map(c => '<td>' + c + '</td>').join('') + '</tr>').join('') +
+        '</tbody></table></div>');
+      continue;
+    }
+
+    // 标题：# → h2（h1 留给页面标题），## → h3，依此类推
+    const h = ln.match(/^(#{1,6})\s+(.*)$/);
+    if (h) {
+      closeList();
+      const n = Math.min(h[1].length + 1, 6);
+      out.push('<h' + n + '>' + h[2] + '</h' + n + '>');
+      continue;
+    }
+
+    // 分隔线
+    if (/^\s*([-*_])\s*\1\s*\1[\s\-*_]*$/.test(ln)) { closeList(); out.push('<hr>'); continue; }
+
+    // 引用块（esc 之后 > 变成 &gt;）
+    if (/^\s*&gt;\s?/.test(ln)) {
+      closeList();
+      const q = [];
+      while (i < L.length && /^\s*&gt;\s?/.test(L[i])) {
+        q.push(L[i].replace(/^\s*&gt;\s?/, ''));
+        i++;
+      }
+      i--;
+      out.push('<blockquote>' + q.join('<br>') + '</blockquote>');
+      continue;
+    }
+
+    // 无序列表（含模型爱用的实心圆点 •）
+    const ul = ln.match(/^\s*[-*+•]\s+(.*)$/);
+    if (ul) {
+      if (list !== 'ul') { closeList(); out.push('<ul>'); list = 'ul'; }
+      out.push('<li>' + ul[1] + '</li>');
+      continue;
+    }
+
+    // 有序列表
+    const ol = ln.match(/^\s*(\d+)[.)]\s+(.*)$/);
+    if (ol) {
+      if (list !== 'ol') { closeList(); out.push('<ol>'); list = 'ol'; }
+      out.push('<li>' + ol[2] + '</li>');
+      continue;
+    }
+
+    // 普通段落
+    closeList();
+    out.push(ln + '<br>');
+  }
+  closeList();
+
+  // 引用角标：模型写成（片段1、片段3、片段4）/【片段1】/[1,3] 都统一成右上角小标，
+  // 正文里那一长串“（片段1、片段3、片段4）”读起来太碍眼
+  const cite = s => {
+    const ns = (String(s).match(/\d{1,2}/g) || []).slice(0, 8);
+    return ns.length ? '<sup class="cite">' + ns.join(',') + '</sup>' : '';
+  };
+  return out.join('\n')
+    .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+    .replace(/(^|[^*>])\*([^*\n]+)\*/g, '$1<i>$2</i>')
+    .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+    .replace(/[（(]\s*片段[^）)]*[）)]/g, m => cite(m))
+    .replace(/【\s*片段[^】]*】/g, m => cite(m))
+    .replace(/\[\s*片段[^\]]*\]/g, m => cite(m))
+    .replace(/\[(\d{1,2}(?:\s*[,，、]\s*\d{1,2})*)\](?!\()/g, m => cite(m))
+    .replace(/(<br>\s*){3,}/g, '<br><br>');
+}
+
+// ---- 大模型设置 & 使用文档 ----
+function closeModal(id){ document.getElementById(id).classList.remove('show'); }
+// ---- 我的大模型 Key（每个用户自己的）----
+// 公司网关每个 key 只有约 2 路并发，大家都挤公共 key 就会互相排队。
+// 让不配的人明确看到"你在用公共 key、人多会排队"，他才会有动力去申请自己的。
+let MY_KEY = { has_own:false, saved:'', tail:'' };
+
+function paintMyKeyStatus(){
+  const el = $('#myKeyStatus');
+  if (!el) return;
+  if (MY_KEY.has_own){
+    el.style.background = '#ecfdf5';
+    el.style.border = '1px solid #a7f3d0';
+    el.style.color = '#065f46';
+    el.innerHTML = '✅ <b>当前使用：我自己的 Key</b>（…' + esc(MY_KEY.tail || '') + '）' +
+      (MY_KEY.saved ? '<br><span style="font-size:12.5px;opacity:.8">保存于 ' + esc(MY_KEY.saved) + '</span>' : '');
+  } else {
+    el.style.background = '#fffbeb';
+    el.style.border = '1px solid #fde68a';
+    el.style.color = '#92400e';
+    el.innerHTML = '⚠️ <b>当前使用：公共 Key</b><br>' +
+      '<span style="font-size:12.5px">公共 Key 的并发额度是大家共用的，人多时会排队等待。' +
+      '建议申请一个自己的 Key，填在这里，就不会被别人拖慢。</span>';
+  }
+  const cb = $('#myKeyClearBtn');
+  if (cb) cb.style.display = MY_KEY.has_own ? 'block' : 'none';
+}
+
+function openMyKey(){
+  $('#myKeyInput').value = '';
+  paintMyKeyStatus();
+  $('#myKeyModal').classList.add('show');
+  api('/api/my/llm').then(d => {
+    if (d && d.ok){
+      MY_KEY = { has_own: !!d.has_own, saved: d.saved || '', tail: d.tail || '' };
+      paintMyKeyStatus();
+      // 把真实网关地址显示出来，用户就知道该去哪儿申请 key
+      const gw = $('#keyGatewayUrl');
+      if (gw && d.gateway) gw.textContent = d.gateway;
+    }
+  }).catch(()=>{});
+}
+
+// 验证失败时补一句最常见的误用原因：填了外部厂商（OpenAI/DeepSeek 官网等）的 key
+function keyFailMsg(msg){
+  return '❌ ' + msg +
+    '\n\n常见原因：填了外部厂商（OpenAI、DeepSeek 官网、通义等）的 Key。' +
+    '\n本系统只认公司 demoproduct 大模型平台签发的 Key（申请入口见「我的 Key」弹窗）。';
+}
+
+async function testMyKey(){
+  const k = $('#myKeyInput').value.trim();
+  if (!k){ alert('先粘贴你的 Key'); return; }
+  const btn = $('#myKeyTestBtn'); const old = btn.textContent;
+  btn.disabled = true; btn.textContent = '测试中…';
+  try{
+    const d = await api('/api/my/llm/verify', { method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({ key:k }) });
+    alert(d.ok ? '✅ ' + (d.msg || 'Key 可用') : keyFailMsg(d.msg || 'Key 不可用'));
+  }catch(e){ alert('测试失败: ' + e.message); }
+  finally{ btn.disabled = false; btn.textContent = old; }
+}
+
+async function saveMyKey(){
+  const k = $('#myKeyInput').value.trim();
+  if (!k){ alert('先粘贴你的 Key'); return; }
+  const btn = $('#myKeySaveBtn'); const old = btn.textContent;
+  btn.disabled = true; btn.textContent = '验证并保存…';
+  try{
+    const d = await api('/api/my/llm', { method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({ key:k }) });
+    if (d.ok){
+      MY_KEY = { has_own: !!d.has_own, saved: d.saved || '', tail: d.tail || '' };
+      paintMyKeyStatus();
+      $('#myKeyInput').value = '';
+      refreshLlmBadge();
+      alert('✅ ' + (d.msg || '已保存'));
+    } else {
+      alert(keyFailMsg(d.msg || '保存失败') + '\n\nKey 没有保存。');
+    }
+  }catch(e){ alert('保存失败: ' + e.message); }
+  finally{ btn.disabled = false; btn.textContent = old; }
+}
+
+async function clearMyKey(){
+  if (!confirm('清除后改回使用公共 Key，人多时可能排队。确定？')) return;
+  try{
+    const d = await api('/api/my/llm', { method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({ key:'' }) });
+    if (d.ok){
+      MY_KEY = { has_own:false, saved:'', tail:'' };
+      paintMyKeyStatus();
+      refreshLlmBadge();
+      alert('已改回使用公共 Key');
+    } else alert('操作失败: ' + (d.msg || ''));
+  }catch(e){ alert('操作失败: ' + e.message); }
+}
+
+function openLlmCfg(){
+  api('/api/config/llm').then(d => {
+    if (d.ok && d.config){
+      $('#cfg_protocol').value = d.config.protocol || 'anthropic';
+      $('#cfg_base').value = d.config.base_url || '';
+      $('#cfg_model').value = d.config.model || '';
+      $('#cfg_key').value = '';
+      $('#llmModal').classList.add('show');
+    }
+  });
+}
+async function saveLlmCfg(){
+  const body = {
+    protocol: $('#cfg_protocol').value,
+    base_url: $('#cfg_base').value.trim(),
+    model: $('#cfg_model').value.trim(),
+    api_key: $('#cfg_key').value.trim()
+  };
+  const d = await api('/api/config/llm', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  if (d.ok){ refreshLlmBadge(); closeModal('llmModal'); alert('已保存并生效' + (d.configured ? '：' + d.model : '（仍缺 key）')); }
+  else alert('保存失败');
+}
+function openDoc(){ $('#docModal').classList.add('show'); }
+function switchTab(id){
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.dataset.tab === id));
+  document.querySelectorAll('.tabpane').forEach(p => p.classList.toggle('on', p.id === id));
+}
+function refreshLlmBadge(){
+  api('/api/health').then(h => {
+    const b = $('#llmBadge');
+    if (!b) return;
+    if (h.ok && h.llm_configured){
+      b.textContent = '大模型: ' + ((h.llm && h.llm.model) || '已配置');
+      b.classList.remove('off');
+    } else {
+      b.textContent = '大模型: 未配置 Key';
+      b.classList.add('off');
+    }
+  }).catch(()=>{});
+  // 顺带刷新"用的是谁的 key"，好在徽标上标出来
+  api('/api/my/llm').then(d => {
+    if (!d || !d.ok) return;
+    MY_KEY = { has_own: !!d.has_own, saved: d.saved || '', tail: d.tail || '' };
+    paintKeyBadge();
+  }).catch(()=>{});
+}
+
+// 徽标上标出"公共 Key / 我的 Key"。用公共 Key 时给个提醒色，
+// 让用户一眼看到自己在跟别人抢额度。
+function paintKeyBadge(){
+  const b = $('#keyBadge');
+  if (!b) return;
+  if (MY_KEY.has_own){
+    b.textContent = '🔑 我的 Key';
+    b.style.color = '#047857';
+    b.style.cursor = 'pointer';
+    b.title = '当前使用你自己申请的 Key，不受别人影响。点击修改';
+  } else {
+    b.textContent = '👥 公共 Key';
+    b.style.color = '#b45309';
+    b.style.cursor = 'pointer';
+    b.title = '当前使用公共 Key，人多时会排队。点击申请/填写你自己的 Key';
+  }
+}
+
+// ---- 拖拽上传 / 添加文件 ----
+let dropDepth = 0;
+const DS = s => { const e = $('#dropstatus'); if (s) e.textContent = s; e.classList.toggle('show', !!s); };
+
+// ---- 任务进度条(上传/索引, 不阻塞界面) ----
+let uploadAbort = null;         // 当前上传的 XHR(可中止)
+let uploadCanceled = false;     // 用户是否点了取消
+let pollTimer = null;           // 索引轮询计时器
+let uploadBusy = false;         // 同一时刻只允许一个上传/索引任务(防轮询/进度条互相踩)
+
+function taskShow(text, pct, indeterminate){
+  const bar = $('#taskbar');
+  $('#taskText').textContent = text;
+  $('#taskPct').textContent = (indeterminate || pct == null) ? '' : Math.round(pct) + '%';
+  const fill = $('#taskFill');
+  fill.classList.toggle('indet', !!indeterminate);
+  if (pct != null) fill.style.width = Math.min(100, Math.max(0, pct)) + '%';
+  bar.classList.add('show');
+}
+function taskHide(){
+  $('#taskbar').classList.remove('show');
+  $('#taskCancel').style.display = '';
+}
+$('#taskCancel') && $('#taskCancel').addEventListener('click', () => {
+  uploadCanceled = true;
+  // 上传中 → 中止 XHR; 索引中 → 取消轮询等待
+  if (uploadAbort) { try { uploadAbort.abort(); } catch(e){} uploadAbort = null; }
+  if (pollTimer){ clearInterval(pollTimer); pollTimer = null; }
+  uploadBusy = false;
+  taskHide();
+  addMsg('assistant', '⚠️ 已取消上传/等待。已上传的部分可在知识库「重建索引」后生效。');
+});
+
+// 带真实进度的上传: 返回 {ok, saved, skipped}; 用户取消抛 'canceled'
+function xhrUpload(url, formData){
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    uploadAbort = xhr;
+    xhr.open('POST', url);
+    xhr.upload.onprogress = e => {
+      if (e.lengthComputable && e.total > 0){
+        taskShow('正在上传…', e.loaded / e.total * 100, false);
+      }
+    };
+    xhr.onload = () => {
+      if (uploadAbort === xhr) uploadAbort = null;
+      try {
+        const d = JSON.parse(xhr.responseText || '{}');
+        if (xhr.status === 401){ showLogin('登录已过期，请重新登录'); reject(new Error('未登录')); return; }
+        if (xhr.status >= 400){ reject(new Error(d.msg || ('HTTP ' + xhr.status))); return; }
+        resolve(d);
+      } catch(err){ reject(err); }
+    };
+    xhr.onerror = () => { if (uploadAbort === xhr) uploadAbort = null; reject(new Error('网络错误,上传中断')); };
+    xhr.onabort = () => { uploadAbort = null; reject(new Error('canceled')); };
+    xhr.send(formData);
+  });
+}
+
+// 上传文件 → 后台异步建索引 → 轮询等完成(不阻塞界面)。
+// 同一时刻只允许一个上传任务: 第二个上传会提示排队, 避免进度条/轮询互相覆盖。
+async function uploadFiles(files, kid, label){
+  if (uploadBusy){
+    addMsg('assistant', '⏳ 已有上传/索引任务进行中，请等它完成或点「✕ 取消」后再传。');
+    throw new Error('busy');
+  }
+  // 前置过滤空文件(0 字节)与空列表, 避免上传无效文件
+  const valid = (files || []).filter(x => x && x.file && x.file.size > 0);
+  const emptyCount = (files || []).length - valid.length;
+  if (emptyCount > 0){
+    addMsg('assistant', '⚠️ 已跳过 ' + emptyCount + ' 个空文件(0 字节)，其余继续上传。');
+  }
+  if (!valid.length){ throw new Error('所选文件均为空或不可用'); }
+  uploadBusy = true;
+  uploadCanceled = false;
+  const fd = new FormData();
+  valid.forEach(x => fd.append('files', x.file, x.relpath));
+  taskShow('正在上传 ' + valid.length + ' 个文件到「' + label + '」…', 0, false);
+  let d;
+  try { d = await xhrUpload('/api/kb/' + kid + '/upload', fd); }
+  catch(e){
+    uploadBusy = false;
+    taskHide();
+    if (uploadCanceled || (e && e.message === 'canceled')){ throw new Error('已取消'); }
+    throw e;
+  }
+  if (!d.ok){ uploadBusy = false; taskHide(); throw new Error(d.msg || '上传失败'); }
+  if (uploadCanceled){ uploadBusy = false; taskHide(); throw new Error('已取消'); }
+  // 上传完成 → 异步触发索引(不等待, 界面可继续用)
+  taskShow('已上传 ' + d.saved + ' 个文件，正在后台建立索引…', null, true);
+  fetch('/api/kb/' + kid + '/index', withAuth({method:'POST'})).catch(()=>{});
+  // 后台轮询索引状态, 完成后提示(最多 10 分钟)
+  const deadline = Date.now() + 10 * 60 * 1000;
+  pollTimer = setInterval(async () => {
+    if (uploadCanceled || Date.now() > deadline){
+      clearInterval(pollTimer); pollTimer = null; uploadBusy = false; taskHide(); return;
+    }
+    try {
+      const r = await (await fetch('/api/kb', withAuth({cache:'no-store'}))).json();
+      if (!r || !Array.isArray(r.kbs)){                                    // 登录过期/异常: 停止空转
+        clearInterval(pollTimer); pollTimer = null; uploadBusy = false; taskHide(); return;
+      }
+      const kb = r.kbs.find(x => x.id === kid);
+      if (!kb){ clearInterval(pollTimer); pollTimer = null; uploadBusy = false; taskHide(); return; }  // 库被删除
+      if (kb.status !== 'indexing'){
+        clearInterval(pollTimer); pollTimer = null; uploadBusy = false;
+        taskHide();
+        if (kb.chunk_count > 0){
+          addMsg('assistant', '✅ 索引完成：「' + (kb.name||'') + '」共 ' + kb.chunk_count + ' 块，可开始提问。');
+        }
+        await loadKbs();
+      }
+    } catch(e){ /* 网络抖动忽略, 继续轮询 */ }
+  }, 2500);
+  return { saved: d.saved, started: true };
+}
+
+// 递归读取 DataTransfer 里文件(含文件夹 → 相对路径)
+function rdEntry(entry, prefix=""){
+  return new Promise(res => {
+    const p = prefix ? prefix + '/' + entry.name : entry.name;
+    if (entry.isFile){ entry.file(f => res([{file:f, relpath:p}])); }
+    else if (entry.isDirectory){
+      const rr = entry.createReader(), all = [];
+      (function go(){ rr.readEntries(async ents => {
+        if (ents.length){ all.push(...ents); go(); }
+        else res(Promise.all(all.map(e => rdEntry(e, p))).then(a => a.flat()));
+      }); })();
+    } else res([]);
+  });
+}
+async function collectEntries(dt){
+  const items = Array.from(dt.items || []);
+  const ents = items.map(it => { try { return it.webkitGetAsEntry && it.webkitGetAsEntry(); } catch(e){ return null; } }).filter(Boolean);
+  if (!ents.length) return Array.from(dt.files || []).map(f => ({file:f, relpath:f.name}));
+  return (await Promise.all(ents.map(e => rdEntry(e)))).flat().filter(x => x && x.file);
+}
+async function dropIntoKb(kb_, files){
+  try { await uploadFiles(files, kb_.id, kb_.name); DS('');
+    select(kb_); addMsg('assistant', '已提交 ' + files.length + ' 个文件上传，「' + kb_.name + '」正在后台建立索引…（完成会自动提示，期间界面可继续使用）');
+  } catch(e){ DS(''); taskHide();
+    if (e && e.message === '已取消') addMsg('assistant', '已取消上传。');
+    else if (e && e.message === 'busy'){ /* 排队提示已在 uploadFiles 内给出 */ }
+    else addMsg('assistant', '上传失败: ' + esc(e.message));
+  }
+  await loadKbs();
+}
+async function dropIntoNew(files){
+  try {
+    DS('正在新建知识库…');
+    // 带上用户在"新建知识库"面板输入的名称(未输入则留空由服务端取默认名)
+    const nbName = ($('#nb_name') && $('#nb_name').value || '').trim();
+    const rc = await api('/api/kb', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({name: nbName, folder:''})});
+    if (!rc.ok || !rc.kb){ throw new Error((rc && rc.msg) || '创建知识库失败'); }
+    const kb_ = rc.kb;
+    if ($('#nb_name')) $('#nb_name').value = '';
+    await uploadFiles(files, kb_.id, kb_.name);
+    select(kb_); DS('');
+    addMsg('assistant', '已用拖入的 ' + files.length + ' 个文件新建知识库「' + kb_.name + '」，正在后台建立索引…（完成会自动提示）');
+    await loadKbs();
+  } catch(e){ DS(''); taskHide();
+    if (e && e.message === '已取消') addMsg('assistant', '已取消新建。');
+    else if (e && e.message === 'busy'){ /* 排队提示已在 uploadFiles 内给出 */ }
+    else addMsg('assistant', '新建失败: ' + esc(e.message));
+  }
+}
+// 鼠标拖拽整个页面
+window.addEventListener('dragenter', e => { e.preventDefault(); dropDepth++; $('#droplay').classList.add('show'); });
+window.addEventListener('dragleave', e => { e.preventDefault(); dropDepth--; if (dropDepth <= 0){ dropDepth = 0; $('#droplay').classList.remove('show'); } });
+window.addEventListener('dragover', e => e.preventDefault());
+window.addEventListener('drop', async e => {
+  e.preventDefault(); dropDepth = 0; $('#droplay').classList.remove('show');
+  if (!e.dataTransfer) return;
+  const files = await collectEntries(e.dataTransfer);
+  if (!files.length) return;
+  if (cur) await dropIntoKb(cur, files); else await dropIntoNew(files);
+});
+// 新建库时点选文件/文件夹
+function openCreatePicker(){
+  $('#nb_folder').value = '';
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.multiple = true;
+  try { inp.webkitdirectory = true; } catch(e) {}
+  inp.onchange = async () => { const files = Array.from(inp.files || []).map(f => ({file:f, relpath:f.webkitRelativePath || f.name})); if (files.length) { await dropIntoNew(files); $('#nb_folder').value=''; } };
+  inp.click();
+}
+// 往当前库添加文件(按钮)
+// 浏览器安全限制: <input type=file> 无法预设初始目录, 只能由用户自己导航。
+// 这里先告知当前库的源目录, 方便用户直接定位。
+function openAddFiles(){
+  if (!cur){ alert('请先选择一个知识库'); return; }
+  const folder = (cur.folder || '').split('|').filter(Boolean).join('\n  ');
+  const tip = folder
+    ? '当前知识库的源目录：\n  ' + folder + '\n\n浏览器不允许网页指定文件框的初始目录，请在弹出的窗口里自行导航到上面的路径。\n\n' +
+      '（如果只是想写一段文字/贴图片，直接用「✍️ 写内容」更方便，不用找文件。）\n\n继续打开文件选择框？'
+    : '当前知识库是纯上传型（没有绑定本地源目录）。\n\n继续打开文件选择框？';
+  if (!confirm(tip)) return;
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.multiple = true;
+  try { inp.webkitdirectory = true; } catch(e) {}
+  inp.onchange = async () => { const files = Array.from(inp.files || []).map(f => ({file:f, relpath:f.webkitRelativePath || f.name})); if (files.length) await dropIntoKb(cur, files); };
+  inp.click();
+}
+
+// ---- 写内容(手写笔记, 可贴图) ----
+let noteImages = [];      // [{name, data:dataURL}]
+let noteFilename = '';    // 非空 = 编辑已有笔记
+
+function toDataURL(f){
+  return new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(f); });
+}
+
+// ---- 答案里的配图：缩略图集，点了看大图 ----
+// 后端把图按"意思"挂到答案的某个段落上（不是按文档物理位置）。
+// 展示策略：默认只出缩略图，点开才加载大图，避免一次拉几十张原图。
+function figUrl(kbId, path, name){
+  return `/api/kb/${encodeURIComponent(kbId)}/img?path=${encodeURIComponent(path)}&name=${encodeURIComponent(name)}`;
+}
+
+function figureStripHtml(kbId, imgs){
+  if (!imgs || !imgs.length) return '';
+  const items = imgs.map((im, i) => {
+    const u = figUrl(kbId, im.path, im.name);
+    const tip = esc(im.summary || im.name || '');
+    // 不把 url/title 塞进 onclick（摘要里有单引号会把属性截断），
+    // 改放 data-* ，由事件委托统一接。
+    // url 由 encodeURIComponent 拼成、只含 %XX 和 URL 保留字符，不含引号，
+    // 所以这里**不能**再走 esc()——esc 会把 & 变成 &amp; 把 URL 弄坏。
+    return `<div class="fig" title="${tip}" data-img="${u}" data-title="${tip}">
+              <img src="${u}" loading="lazy" alt="${esc(im.name || '')}">
+            </div>`;
+  }).join('');
+  const label = imgs.length > 1 ? `📷 ${imgs.length} 张` : '📷';
+  return `<div class="figbox"><div class="figlabel">${label}</div><div class="figstrip">${items}</div></div>`;
+}
+
+// 把图集插到答案对应段落之后。
+// 后端给的 para_index 是"拆段后的序号"，和 DOM 里的块不一定一一对应，
+// 所以用「段落首句文字」去 DOM 里找最像的那个块，找不到就退回按比例放。
+function attachFigures(ansBodyEl, kbId, blocks){
+  if (!ansBodyEl || !blocks || !blocks.length) return;
+  const kids = Array.from(ansBodyEl.children);
+  if (!kids.length) return;
+  const norm = s => (s || '').replace(/\s+/g, '').replace(/[#*`>\-|]/g, '').slice(0, 24);
+  const used = new Set();
+
+  for (const blk of blocks){
+    const key = norm(blk.para);
+    if (!key) continue;
+    // 找文字前缀最匹配的那块
+    let target = null, best = 0;
+    kids.forEach((el, i) => {
+      if (used.has(i)) return;
+      const t = norm(el.textContent);
+      if (!t) return;
+      // 前缀重合度
+      let k = 0;
+      while (k < key.length && k < t.length && key[k] === t[k]) k++;
+      if (k > best){ best = k; target = i; }
+    });
+    // 重合太少说明没对上，按段落序号兜底
+    const idx = (best >= 8 && target !== null) ? target : Math.min(blk.para_index, kids.length - 1);
+    if (used.has(idx)) continue;
+    used.add(idx);
+    const html = figureStripHtml(kbId, blk.images);
+    if (!html) continue;
+    const host = document.createElement('div');
+    host.innerHTML = html;
+    const node = host.firstElementChild;
+    if (node) kids[idx].after(node);
+  }
+}
+
+// 看大图：直接在页面里铺一层，不开新标签页。
+// 之前用 window.open，用户点几张图就开一堆窗口，回来还要一个个关掉。
+function showFigViewer(url, title){
+  const v = $('#figViewer');
+  if (!v) return;
+  $('#figTitle').textContent = title || '';
+  const img = $('#figImg');
+  img.src = url;
+  const a = $('#figOpen');
+  // data: 开头的贴图没法在新窗口打开，这个链接就藏起来
+  if (/^data:/i.test(url || '')) a.style.display = 'none';
+  else { a.style.display = 'block'; a.href = url; }
+  v.classList.add('show');
+}
+
+function closeFig(){
+  const v = $('#figViewer');
+  if (!v) return;
+  v.classList.remove('show');
+  $('#figImg').src = '';        // 释放，别让大图一直占着内存
+}
+
+function openFig(url, title){
+  showFigViewer(url, title);
+}
+
+// 配图点击：用事件委托，图是流式过程中动态插进来的，逐个绑监听容易漏
+document.addEventListener('click', e => {
+  const box = e.target.closest && e.target.closest('.fig[data-img]');
+  if (!box) return;
+  e.preventDefault();
+  openFig(box.dataset.img, box.dataset.title || '');
+});
+
+// ---- 提问贴图：Ctrl+V 粘贴 / 选文件，压缩后随问题一起发 ----
+let askImages = [];          // [{name, data:dataURL}]
+const ASK_IMG_MAX_W = 1400;  // 压缩目标宽度（再大模型也用不上，只是变慢）
+const ASK_IMG_BUDGET = 11 * 1024 * 1024;   // 前端自控上限，留 1MB 余量给服务端 12MB 硬限制
+
+// 缩到合适尺寸，丢掉显然无用的精度，体积能降到 1/3 左右
+function compressImage(file){
+  return new Promise(res => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      try{
+        let {width:w, height:h} = img;
+        if (w > ASK_IMG_MAX_W){ h = Math.round(h * ASK_IMG_MAX_W / w); w = ASK_IMG_MAX_W; }
+        const cv = document.createElement('canvas');
+        cv.width = w; cv.height = h;
+        cv.getContext('2d').drawImage(img, 0, 0, w, h);
+        // 截图多半是大片纯色文字，jpeg 质量 0.82 肉眼几乎无损
+        res(cv.toDataURL('image/jpeg', 0.82));
+      }catch(e){ res(url); }
+      finally{ URL.revokeObjectURL(url); }
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); res(''); };
+    img.src = url;
+  });
+}
+
+function askImgBytes(dataURL){
+  const i = (dataURL || '').indexOf(',');
+  return i < 0 ? 0 : Math.round((dataURL.length - i - 1) * 0.75);
+}
+
+function askImgTotal(){ return askImages.reduce((n, im) => n + askImgBytes(im.data), 0); }
+
+async function addAskImages(files){
+  const list = Array.from(files || []).filter(f => f && f.type && f.type.startsWith('image/'));
+  if (!list.length) return;
+  let skipped = 0;
+  for (const f of list){
+    const data = await compressImage(f);
+    if (!data) { skipped++; continue; }
+    // 超过预算就停下，别让请求体把服务端撑爆
+    if (askImgTotal() + askImgBytes(data) > ASK_IMG_BUDGET){
+      skipped++;
+      continue;
+    }
+    askImages.push({name: f.name || `粘贴图片${askImages.length+1}.jpg`, data});
+  }
+  renderAskImgs();
+  if (skipped) addMsg('assistant', `⚠️ 有 ${skipped} 张图没加上：图片总体积超过上限，已忽略。可以分几次问。`);
+}
+
+function renderAskImgs(){
+  const box = $('#askImgs');
+  if (!askImages.length){ box.style.display = 'none'; box.innerHTML = ''; return; }
+  box.style.display = 'flex';
+  box.innerHTML = askImages.map((im, i) =>
+      `<div class="ai" onclick="previewAskImg(${i})" title="点击查看大图">
+         <img src="${im.data}"><span onclick="event.stopPropagation();delAskImg(${i})" title="移除">✕</span>
+       </div>`).join('')
+    + `<span class="cnt">共 ${askImages.length} 张</span>`;
+}
+
+function delAskImg(i){ askImages.splice(i, 1); renderAskImgs(); }
+function clearAskImgs(){ askImages = []; renderAskImgs(); }
+
+function pickAskImages(){ $('#askImgFile').click(); }
+function onAskImgPick(el){ addAskImages(el.files); el.value = ''; }
+
+// 点缩略图看大图（同样走页内弹层，不开新窗口）
+function previewAskImg(i){
+  const im = askImages[i];
+  if (!im) return;
+  showFigViewer(im.data, im.name);
+}
+
+// 输入框粘贴截图：拦截默认粘贴，把图收进待发送列表；纯文本粘贴照常
+document.addEventListener('paste', e => {
+  if (e.target && e.target.id !== 'q') return;
+  const items = Array.from((e.clipboardData && e.clipboardData.items) || []);
+  const files = items.filter(it => it.type && it.type.startsWith('image/')).map(it => it.getAsFile()).filter(Boolean);
+  if (!files.length) return;
+  e.preventDefault();
+  addAskImages(files);
+});
+
+function renderNoteImgs(){
+  const box = $('#noteImgs');
+  if (!noteImages.length){ box.style.display = 'none'; box.innerHTML = ''; return; }
+  box.style.display = 'flex';
+  box.innerHTML = noteImages.map((im, i) =>
+    `<div class="ni"><img src="${im.data}"><span onclick="delNoteImg(${i})" title="移除">✕</span></div>`).join('');
+}
+
+function delNoteImg(i){ noteImages.splice(i, 1); renderNoteImgs(); }
+
+function resetNoteForm(){
+  noteImages = []; noteFilename = '';
+  $('#noteTitle').value = ''; $('#noteBody').value = '';
+  renderNoteImgs();
+  $('#noteSel').value = '';
+}
+
+async function openNote(fresh){
+  if (!cur){ alert('请先选择一个知识库'); return; }
+  if (fresh) resetNoteForm();
+  $('#noteModal').classList.add('show');
+  if (!$('#noteTitle').value && !$('#noteBody').value) resetNoteForm();
+  loadNoteList();
+  setTimeout(() => $('#noteBody').focus(), 60);
+}
+
+function closeNote(){ $('#noteModal').classList.remove('show'); }
+
+async function loadNoteList(){
+  const box = $('#notePicker'), sel = $('#noteSel');
+  try {
+    const r = await api('/api/kb/' + cur.id + '/notes');
+    const notes = (r && r.notes) || [];
+    if (!notes.length){ box.style.display = 'none'; return; }
+    box.style.display = 'block';
+    sel.innerHTML = '<option value="">— 新建一篇 —</option>' + notes.map(n =>
+      `<option value="${esc(n.filename)}"${n.filename === noteFilename ? ' selected' : ''}>` +
+      `${esc(n.title)} · ${esc(n.updated)} · ${n.chars} 字</option>`).join('');
+  } catch(e){ box.style.display = 'none'; }
+}
+
+async function loadNote(fn){
+  if (!fn){ resetNoteForm(); return; }
+  const r = await api('/api/kb/' + cur.id + '/note?filename=' + encodeURIComponent(fn));
+  if (!r || !r.ok){ alert((r && r.msg) || '读取失败'); return; }
+  noteFilename = fn; noteImages = [];
+  $('#noteTitle').value = r.title || '';
+  $('#noteBody').value = r.content || '';
+  renderNoteImgs();
+}
+
+function pickNoteImg(){ $('#noteImgInput').click(); }
+
+async function addNoteFiles(fileList){
+  for (const f of Array.from(fileList || [])){
+    if (!f.type || !f.type.startsWith('image/')) continue;
+    noteImages.push({ name: f.name || ('图片-' + (noteImages.length + 1) + '.png'), data: await toDataURL(f) });
+  }
+  renderNoteImgs();
+}
+
+async function saveNote(btn){
+  if (!cur){ alert('请先选择知识库'); return; }
+  const title = $('#noteTitle').value.trim();
+  const content = $('#noteBody').value.trim();
+  if (!title && !content && !noteImages.length){ alert('标题和正文至少写一点内容'); return; }
+  const old = btn ? btn.textContent : '';
+  if (btn){ btn.disabled = true; btn.textContent = '保存中…'; }
+  try {
+    const r = await api('/api/kb/' + cur.id + '/note', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, content, images: noteImages, filename: noteFilename })
+    });
+    if (!r || !r.ok){ alert((r && r.msg) || '保存失败'); return; }
+    noteFilename = r.filename || '';
+    addMsg('assistant', '✅ 已保存到知识库：<code>' + esc(r.path) + '</code><br>正在重建索引，完成后就能被检索到。');
+    await runIndexInline(cur.id);
+  } catch(e){ alert('保存失败: ' + e.message); }
+  finally { if (btn){ btn.disabled = false; btn.textContent = old; } }
+}
+
+// 触发索引并等待完成(轮询), 用于「写内容」等非上传场景
+async function runIndexInline(kid){
+  uploadBusy = true;
+  taskShow('正在为「' + ((cur && cur.name) || '') + '」重建索引…', null, true);
+  try { await fetch('/api/kb/' + kid + '/index', withAuth({method: 'POST'})); } catch(e){}
+  const deadline = Date.now() + 10 * 60 * 1000;
+  return new Promise(res => {
+    const t = setInterval(async () => {
+      if (Date.now() > deadline){ clearInterval(t); taskHide(); uploadBusy = false; res(); return; }
+      try {
+        const r = await (await fetch('/api/kb', withAuth({cache: 'no-store'}))).json();
+        const kb0 = ((r && r.kbs) || []).find(x => x.id === kid);
+        if (!kb0 || kb0.status !== 'indexing'){
+          clearInterval(t); taskHide(); uploadBusy = false;
+          if (kb0 && kb0.chunk_count > 0)
+            addMsg('assistant', '✅ 索引完成：「' + esc(kb0.name || '') + '」共 ' + kb0.chunk_count + ' 块，可以提问了。');
+          await loadKbs(); res();
+        }
+      } catch(e){}
+    }, 2500);
+  });
+}
+
+// 粘贴图片进正文框
+$('#noteBody').addEventListener('paste', async e => {
+  const items = Array.from((e.clipboardData && e.clipboardData.items) || []);
+  const imgs = items.filter(it => it.type && it.type.startsWith('image/'));
+  if (!imgs.length) return;
+  e.preventDefault();
+  const files = imgs.map(it => it.getAsFile()).filter(Boolean);
+  await addNoteFiles(files);
+});
+$('#noteImgInput').addEventListener('change', async e => {
+  await addNoteFiles(e.target.files);
+  e.target.value = '';
+});
+
+// ---- 目录选择 ----
+function openPicker(){
+  if (AUTH.allow_fs_browse === false){
+    alert('目录浏览已禁用，请直接在"源文件夹路径"填写完整路径（外网模式仅支持直接填路径）。');
+    return;
+  }
+  $('#pickerModal').classList.add('show');
+  pickStack = []; navDir('', '选择驱动器');
+}
+function closePicker(){ $('#pickerModal').classList.remove('show'); pickPath=''; $('#selPath').textContent='—'; }
+async function navDir(path, label){
+  const pickEl = $('#picker'); pickEl.innerHTML = '';
+  if (path === ''){
+    const d = await api('/api/fs/drives');
+    d.drives.forEach(dr => addPickRow(dr.name, dr.path, true));
+  } else {
+    const d = await api('/api/fs/list?path=' + encodeURIComponent(path));
+    if (d.parent) addPickRow('⬆ 上级', d.parent, false, true);
+    (d.dirs||[]).forEach(x => addPickRow(x.name, x.path, true));
+  }
+  pickPath = path;
+  $('#selPath').textContent = path || label || '—';
+}
+function addPickRow(name, path, isDir, up){
+  const row = document.createElement('div');
+  row.className = 'row' + (pickPath===path?' isSel':'');
+  row.innerHTML = (isDir? '<span class="dir">📁 ' : '📄 ') + esc(name);
+  row.onclick = () => { pickPath = path; $('#selPath').textContent = path; $$('#picker .row').forEach(r=>r.classList.remove('isSel')); row.classList.add('isSel'); };
+  if (isDir && !up){ row.onclick = () => { navDir(path ? path : ''); }; }
+  $('#picker').appendChild(row);
+}
+function $$(s){ return document.querySelectorAll(s); }
+function confirmPick(){
+  if (pickPath){ $('#nb_folder').value = pickPath; }
+  closePicker();
+}
+
+async function doLogout(){
+  try{ await fetch('/api/logout', withAuth({method:'POST'})); }catch(e){}
+  purgeLocalAuth();
+  try { sessionStorage.removeItem('rag.homePicked'); } catch(e){}
+  AUTH.authenticated = false;
+  showLogin('已退出登录');
+}
+
+// 清本地身份: 服务端作废 token + 浏览器侧抹掉 cookie 与界面数据。
+// 登录失败时也要调 —— 不能留着上一个账号的 token, 否则页面继续以旧身份读到别人的知识库。
+async function hardLogoutLocal(){
+  try{ await fetch('/api/logout', withAuth({method:'POST'})); }catch(e){}
+  purgeLocalAuth();
+  AUTH.authenticated = false;
+}
+
+function purgeLocalAuth(){
+  stopKbPoll();
+  AUTH.user = null;
+  window.__isAdmin = false;
+  kbs = []; cur = null; _kbsFp = '';
+  tkClear();                    // 只清本标签页的 token
+  try{ renderKbs(); }catch(e){}
+  // 注意：这里不再删 cookie。cookie 是全浏览器共享的，删掉会把其他标签页的登录也一起搞掉。
+  // 本标签页"登出"只需要清掉自己 sessionStorage 里的 token。
+  try{ renderMe(); }catch(e){}
+}
+
+function myPerms(){
+  const u = AUTH.user || {};
+  if (u.role === 'admin') return {kb: true, defense: true};
+  return u.perms || {kb: false, defense: false};
+}
+
+function syncPermsUI(){
+  const p = myPerms();
+  const dl = $('#defenseLink');
+  if (dl){
+    dl.style.opacity = p.defense ? '' : '0.45';
+    dl.style.pointerEvents = p.defense ? '' : 'none';
+    dl.title = p.defense ? '上传答辩 PPT，AI 扮演评委提问，答完看报告' : '未开通模拟答辩权限';
+  }
+  const q = $('#q'), send = $('#sendBtn');
+  if (q && !p.kb){
+    q.disabled = true;
+    q.placeholder = '未开通知识库权限，请联系管理员';
+  }
+  if (send && !p.kb) send.disabled = true;
+}
+
+function showHome(){
+  const p = myPerms();
+  const kb = $('#homeKb'), def = $('#homeDef');
+  if (kb){
+    kb.style.opacity = p.kb ? '1' : '0.45';
+    kb.style.cursor = p.kb ? 'pointer' : 'not-allowed';
+    $('#homeKbLock').textContent = p.kb ? '' : '未开通';
+  }
+  if (def){
+    def.style.opacity = p.defense ? '1' : '0.45';
+    def.style.cursor = p.defense ? 'pointer' : 'not-allowed';
+    $('#homeDefLock').textContent = p.defense ? '' : '未开通';
+  }
+  $('#homeMsg').textContent = (!p.kb && !p.defense)
+    ? '两个入口都未开通，请联系管理员为您开通。' : '';
+  $('#homeModal').classList.add('show');
+}
+
+function pickHome(kind){
+  const p = myPerms();
+  if (kind === 'kb'){
+    if (!p.kb){ alert('未开通知识库权限，请联系管理员'); return; }
+    sessionStorage.setItem('rag.homePicked', '1');
+    closeModal('homeModal');
+    setTimeout(() => { const q = $('#q'); if (q && !q.disabled) q.focus(); }, 60);
+    return;
+  }
+  if (kind === 'defense'){
+    if (!p.defense){ alert('未开通模拟答辩权限，请联系管理员'); return; }
+    // 答辩页返回时由 backToQa 根据知识库权限决定直达问答还是回入口页
+    try { sessionStorage.removeItem('rag.homePicked'); } catch(e){}
+    closeModal('homeModal');
+    location.href = '/defense';
+  }
+}
+
+let warmTimer = null, warmDone = false;
+async function watchWarmup(){
+  if (warmDone) return;
+  try{
+    const r = await fetch('/api/warmup');
+    const d = await r.json();
+    const bar = $('#warmBanner');
+    if (!bar) return;
+    if (d.ready){
+      bar.style.display = 'none';
+      warmDone = true;
+      if (warmTimer){ clearInterval(warmTimer); warmTimer = null; }
+      return;
+    }
+    bar.style.display = 'flex';
+    const pct = d.total ? Math.round(d.done * 100 / d.total) : 0;
+    const who = d.current ? '（' + d.current + '）' : '';
+    $('#wbText').textContent = `正在后台加载知识库索引 ${d.done}/${d.total}${who}，` +
+      '可以正常浏览/上传，首次提问可能稍慢';
+    $('#wbFill').style.width = pct + '%';
+  }catch(e){}
+}
+function startWarmWatch(){
+  warmDone = false;
+  watchWarmup();
+  if (!warmTimer) warmTimer = setInterval(watchWarmup, 2000);
+}
+
+async function boot(){
+  await loadKbs();
+  startKbPoll();      // 知识库列表自动同步（管理员转移归属后对方秒见）
+  startWarmWatch();   // 显示启动预热进度
+  refreshLlmBadge();
+  syncCtxBtn();
+  syncLenBtn();       // 回答详略的记忆状态
+  syncDemoItem();     // 演示模式开关的记忆状态
+  syncPermsUI();
+  if (!sessionStorage.getItem('rag.homePicked')) showHome();
+}
+
+// 上下文开关的记忆：上次开着的仍开着，默认关
+try{ ctxOn = localStorage.getItem('rag.ctx') === '1'; }catch(e){ ctxOn = false; }
+initAuth().then(ok => { if (ok) boot(); });
+// 点击弹窗遮罩关闭
+['llmModal','docModal','myKeyModal'].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('click', e => { if (e.target === el) el.classList.remove('show'); });
+});
+
+// 看大图：点背景关、Esc 关。点图片本身不关（用户可能想按住看细节）
+(function(){
+  const v = document.getElementById('figViewer');
+  if (!v) return;
+  v.addEventListener('click', e => { if (e.target === v) closeFig(); });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && v.classList.contains('show')) closeFig();
+  });
+})();
+</script>
+
+<!-- 看大图（回答里的配图 / 提问贴图预览共用）。点背景或按 Esc 也能关 -->
+<div id="figViewer">
+  <div class="fig-title" id="figTitle"></div>
+  <button class="fig-close" onclick="closeFig()" title="关闭（Esc）">×</button>
+  <img id="figImg" alt="">
+  <a class="fig-open" id="figOpen" target="_blank" rel="noopener">在新窗口打开原图</a>
+</div>
+</body>
+</html>
