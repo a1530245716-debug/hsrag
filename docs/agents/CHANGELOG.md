@@ -6,6 +6,8 @@
 
 ---
 
+### 16:24（11-11） | Claude Code | docs/ai-fde/poc/install-docker-wsl.md、wslconfig.example、tools/local_dev/README.md | 增加 Windows 本机 WSL2+Docker Engine 安装步骤和资源限制模板 | 当前机器未装 WSL 且 shell 非管理员，Docker 需人工提权安装；优先 Docker Engine 规避 Docker Desktop 许可问题
+
 ### 16:23（11-11） | Claude Code | tools/local_dev/** | 增加本地演示的 Dockerfile、Compose 和迁移说明 | 本机与服务器统一容器化验证；Docker 未安装前仍可宿主机直接跑
 
 ### 16:19（11-11） | Claude Code | tools/local_dev/**、.gitignore | 新增本地假 RAG + 异步 BFF 演示（不依赖 Docker） | 服务器未就绪前先在本机验证适配层、SSE、引用和限流；公开作品集仓库因 GitHub 连接超时暂未推送

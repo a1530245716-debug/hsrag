@@ -36,6 +36,10 @@ docker compose up --build
 
 打开 `http://127.0.0.1:8020`。`mock-rag` 和 `bff` 分别跑在 9390/8020。
 
+> Windows 本机还没装 Docker：按 `docs/ai-fde/poc/install-docker-wsl.md` 用
+> 管理员 PowerShell 安装 WSL2 + Docker Engine；资源限制模板见
+> `docs/ai-fde/poc/wslconfig.example`。
+
 适合：
 
 - 验证 Dockerfile/Compose/健康检查/网络别名（`http://mock-rag:9390`）；

@@ -1,0 +1,9 @@
+# 复制到 C:\Users\<你的用户名>\.wslconfig
+# 修改后执行 wsl --shutdown，再重新打开 Ubuntu
+
+[wsl2]
+# 本机 31GB：先给 16GB；跑 RAGFlow 前可调到 20GB，并停掉 8000 生产服务
+memory=16GB
+processors=8
+swap=4GB
+localhostForwarding=true
