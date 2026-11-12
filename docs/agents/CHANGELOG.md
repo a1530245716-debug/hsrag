@@ -6,6 +6,47 @@
 
 ---
 
+### 17:20（11-12） | RAG-Agent | 建立 git worktree 并行开发环境 | 人和 Claude Code 要我同时开发但互不影响，靠文件归属表已经不够
+
+**为什么要做**：今天定的重构方案要改 `server.py`、`llm.py`、`kb.py`，跨了归属边界。
+光靠 AGENTS.md 的约定防不住"同时改不同文件但逻辑互相依赖"。
+
+**目录布局**（`git worktree add`，共享同一份 `.git`）：
+
+| 目录 | 分支 | 端口 | 谁用 |
+|---|---|---|---|
+| `project\rag\` | `main` | 8000 | 人 |
+| `project\rag-agent\` | `agent/phase1-limit` | 8011 | RAG-Agent |
+| `project\rag-claude\` | `claude/rerank-tune` | 8012 | Claude Code |
+
+**数据共享方案**：`app\data`（975MB）、`models`（373MB）、`index`（65MB）
+用 Windows Junction 指向主目录，避免复制 1.4GB 且保证三边数据一致。
+实测 worktree 里 `indexer.load_registry()` 能读到全部 4 个知识库。
+
+**踩到的坑**：`app\config.json` 被 `.gitignore` 忽略，worktree 里没有，
+导致 `llm.load_config()` 直接 `FileNotFoundError`。已单独复制到两个 worktree；
+以后主目录改了 config 要手动同步（已写进文档）。
+
+**新增文件**：
+
+| 文件 | 内容 |
+|---|---|
+| `docs\agents\WORKTREE-并行开发.md` | 完整指南：建/删 worktree、合并、冲突处理、故障排查 |
+| `rag-agent\run_dev.ps1`、`rag-claude\run_dev.ps1` | 各自专用的启动脚本（端口隔离） |
+
+**改动的共用文件**：
+- `AGENTS.md` 第七节：新增「并行开发用 git worktree」小节；端口表补 8011/8012
+- `CLAUDE.md`：顶部加警示，明确 Claude Code 的工作目录是 `rag-claude`
+
+**验证实测**：
+
+- `rag-agent` worktree 起在 8011，`/api/health` 200，读到 4 个知识库（含鑫元 56426 块）
+- 同时 8000 生产服务 PID 10232 正常，两者互不影响
+- 验证后已停掉 8011 测试实例
+
+**交接**：合并前两边各自 `git commit`，由人在主目录 `git merge`。
+冲突处理原则：「只改自己负责的文件；两边都要改同一文件时，先合一个，另一个基于新 main 改」。
+
 ### 17:05（11-12） | RAG-Agent | 新增 `docs/ai-fde/09-并发重构方案.md`；清理 5 个死代码脚本 + 1 个空目录 | 人要求把后续重构方案落盘到工作目录，并清理废案以免干扰其它 agent
 
 **新增方案文档**
