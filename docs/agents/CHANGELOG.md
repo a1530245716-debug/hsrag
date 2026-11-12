@@ -6,6 +6,55 @@
 
 ---
 
+### 17:05（11-12） | RAG-Agent | 新增 `docs/ai-fde/09-并发重构方案.md`；清理 5 个死代码脚本 + 1 个空目录 | 人要求把后续重构方案落盘到工作目录，并清理废案以免干扰其它 agent
+
+**新增方案文档**
+
+`docs/ai-fde/09-并发重构方案.md`，约 380 行，分四个阶段：
+
+| 阶段 | 内容 | 预估 | 验收 |
+|---|---|---|---|
+| 1 止血 | 三层限流（全局 20 / 每用户 2 / 每 IP 60次分）+ 429 + `Retry-After`；`/api/health` 改 async | 1 天 | 50 并发 P95 173s → <10s |
+| 2 异步化 | `llm.py` 新增 `chat_async`/`stream_async` + 共享 `AsyncClient`；`kb_ask_stream` 改 `async def`；`hybrid_search` 走 `run_in_threadpool`；断开检测 | 2-3 天 | 50 并发首字 P50 127s → <10s |
+| 3 解耦 | 新增 `app/backend.py`：`RetrievalBackend` 接口 + `LocalBM25Backend`/`MockBackend`，feature flag 切换 | 3-5 天 | eval 6 条不变 |
+| 4 状态外置 | Redis/Postgres，多 worker 前置条件 | **暂不做** | 需服务器 |
+
+方案依据：`docs/ai-fde/07-技术笔记-并发与RAG踩坑.md`（13 条实战结论）、
+`03-目标架构与数据权限.md` 第 7 节、压测基线 `tools/loadtest/results-baseline.json`。
+
+同时补充了今天本机直连真实网关的实测（文档里之前没有）：
+
+| 并发 | p50 | 结果 |
+|---|---|---|
+| 8 | 2.0s | 全成功 |
+| 30 | 2.0s | **3 条 429**（个人限流规则触发）|
+
+结论：网关个人级限流是硬约束，代码优化绕不过，只能限流 + Key 池。
+
+**清理废案**
+
+删前都做过精确引用检查（`Select-String` 全仓搜索，排除 `app/data`、`__pycache__`、`.git`），
+6 个文件全部**零引用**：
+
+| 文件 | 大小 | 原用途 |
+|---|---|---|
+| `_concur.py` | 2.0 KB | 11-06 并发试验脚本，已被 `tools/loadtest/` 取代 |
+| `_judge_test.py` | 3.7 KB | 答辩评分调试 |
+| `_judge_vision.py` | 3.7 KB | 答辩视觉调试 |
+| `_label.py` | 2.1 KB | 标注脚本（只被自己引用 `_label.json`） |
+| `_verify_coach.py` | 6.1 KB | 答辩教练验证 |
+| `_pip_test/` | 空目录 | 11-06 pip 测试残留 |
+
+**未动的**：`health.log`、`server.out.log`、`server.err.log`（`.gitignore` 已忽略、未被跟踪，
+且服务正在写入）；`__pycache__/`；`.dsh-office-*/`（工具目录）。
+
+**INBOX 留言**：向 Claude Code 提出三件需配合的事（详见 `docs/agents/INBOX.md` 顶部）：
+`kb.hybrid_search` 倒排索引、`RERANK_CONCURRENCY` 调参、向量 `mmap_mode="r"`。
+
+**服务状态**：8000 端口 PID 10232 运行中，本次清理未触碰任何运行中文件的依赖。
+
+### 11:14（11-12） | RAG-Agent | `docs/价值观星力量-案例素材.md`（新增） | 新增价值观宣传案例素材：给同事的钉钉回复话术、按官方卡片结构写的约 1300 字案例稿（案例背景 / 案例故事四轮 / 结果 / 价值观秘籍）、60 秒短片提纲、对外口径确认清单 | 人获得工程总部「AI 应用先锋奖」，价值观星力量同事来征集「创新成长」案例故事，需要能直接改用的稿件；客户统一脱敏为「某基金公司」
+
 ### 17:19（11-11） | Claude Code | AGENTS.md、docs/ai-fde/README.md | 记录 GitHub DNS/IP 绕过方法，并添加上脱敏作品集仓库链接 | github.com 解析到的 IP 443 超时、api.github.com 可达；用 http.curloptResolve 临时绕过，避免后续 agent 重复排查
 
 ### 17:08（11-11） | Claude Code | AGENTS.md、CLAUDE.md | 将 WSL2+Docker Engine、端口分工、本地开发、上服务器、公开作品集约定写入共享规则 | 让 RAG-Agent 和后续会话共享同一套开发/发布规则，避免 Docker Desktop 许可问题和误推客户资料
