@@ -6,6 +6,57 @@
 
 ---
 
+### 16:55（11-13） | RAG-Agent | 接入 Claude Code 的索引队列 API（三处）+ 合并 claude/rerank-tune | 按 INBOX 16:25 交办事项接入并验收
+
+### 三处接入（都在 `app/server.py`，按 Claude Code 在 INBOX 16:25 的要求）
+
+1. **`kb_index` 异步分支改用 `indexer.enqueue_index(kb_id)`**
+   原来是起一个裸 `threading.Thread` 直接跑 `index_kb`：没有队列、没有持久化状态、
+   服务重启就丢进度、失败不重试。现在交给 `indexer` 的单 worker 队列。
+   `sync=True` 分支保持直接跑不变（脚本/排障要同步拿结果）。
+
+2. **新增 `GET /api/kb/{kb_id}/index/status`**
+   返回 `indexer.get_index_status(kb_id)`，前端可轮询。
+   状态取值：`idle / queued / running / done / failed / interrupted`。
+   库不存在返回 404。
+
+3. **启动时恢复 + health 加向量一致性**
+   - `preload_kbs()` 最前面调 `indexer.recover_index_statuses()`：
+     上次没跑完的 `queued/running` 标成 `interrupted`，否则前端一直转圈。
+   - `/api/health` 增加 `embeddings` 字段，来自
+     `embeddings.cached_consistency_report()`。**只返回已算过的结果**，
+     探活路径不做文件 I/O——否则健康检查又变慢接口。
+
+### 合并 `claude/rerank-tune`
+
+Claude Code 说它的分支已含最新 main、等我阶段 2 提交后再合。阶段 2 已提交（`7791cd4`），
+故现在合并：`f34ab27`（索引队列 + 完整性校验 + 峰值观测）、`1178f2f`（INBOX caption 进度）。
+
+**冲突**：只有 `docs/agents/CHANGELOG.md`（双方都往顶部加条目）。
+解决方式：**两侧条目全保留**，我的在前、它的在后，只删冲突标记行，不删任何一篇内容。
+
+### 验证
+
+| 项 | 结果 |
+|---|---|
+| 接口可用性 | `enqueue_index` / `get_index_status` / `recover_index_statuses` / `cached_consistency_report` 全部 True |
+| 编译 | `server.py` AST 通过 |
+| `/api/health` | 200，`embeddings` 字段已生效（返回 `{}`，符合「只读已算过的」设计） |
+| 索引状态路由 | 两个库返回 `status=idle`；不存在的库返回 **404** |
+| 异步入队 | POST `/api/kb/{id}/index` 返回 `status=queued`（走队列，不是裸线程） |
+| 队列执行 | 1 秒后查状态为 `done`，`attempt=1` |
+| **评测** | **6/6** —— 历史最好成绩（基线一直是 5/6） |
+
+**xy-01 和 xy-03 这轮都 PASS**。xy-01 是 11-13 补同义词后转正的；
+xy-03 是已知波动项，本轮正常发挥。6/6 值得记一笔：说明当前代码在评测集上
+没有已知退化点。
+
+### 服务状态
+
+改动在 `rag-agent` worktree（分支 `agent/phase1-limit`），**8000 生产未重启**。
+注意：8000 现在跑的仍是旧 main 代码，不含本次合并与阶段 2，要生效需要合并到 main
+并重启（重启前请确认没有在跑的评测）。
+
 ### 16:40（11-13） | RAG-Agent | 阶段 2 完成：LLM/SSE 异步化 | 同步 SSE 占线程池，并发越高越慢（50 并发首字 64.9s）
 
 **依据**：`docs/ai-fde/09-并发重构方案.md` 第四节、`07-技术笔记:14-21`
