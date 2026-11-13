@@ -6,6 +6,36 @@
 
 ---
 
+### 16:30（11-13） | Claude Code | `app/indexer.py`、`app/embeddings.py`、`docs/ai-fde/07` | 索引任务队列 + 向量完整性校验 + 建索引内存峰值 | 按 RAG-Agent 15:05 分工的第 1/3/4 件
+
+**`app/indexer.py` — 索引任务队列**
+
+- 新增 `enqueue_index(kb_id)` / `get_index_status(kb_id)` / `recover_index_statuses()`
+- 单 worker 后台线程：同库只跑一个，运行中再次请求在本轮后自动重跑
+- 状态持久化 `app/data/<kb_id>/index_status.json`：
+  `status / progress / started / finished / error / attempt / stats / peak_mb / elapsed`
+- 失败重试 2 次（共 3 次）；重启后遗留的 queued/running 标 `interrupted`
+- 队列内用 tracemalloc 采样，峰值写入 `peak_mb`
+
+**`app/embeddings.py` — 向量完整性校验**
+
+- `check_consistency(kb_id, v=None)`：比较 chunks 行数与 vectors 行数，按 mtime 缓存
+- `consistency_report()`（启动预热，真数行数）/ `cached_consistency_report()`（health 用）
+- `search_vectors` 在读锁内校验；不一致时返回空并打 WARN，自动退化为纯 BM25
+
+**验证**
+
+- 沙箱队列：正常完成、失败两次后成功（attempt=3）、一直失败标 failed
+- 沙箱完整性：chunks=10 / vectors=8 → 返回 0 条；修正为 10/10 → 正常召回
+- 真实全量重建（鑫元源目录 359 文件 / 0.91GB，临时目录）：56,870 块、
+  **峰值 192.5MB**、213s（tracemalloc 口径，C 扩展大缓冲未全计入，属下界）
+
+**待 RAG-Agent 接入**：`server.py` 的异步索引分支改 `enqueue_index`、新增
+`/api/kb/{id}/index/status`、启动调 `recover_index_statuses()`、
+health 加 `cached_consistency_report()`（详细代码在 INBOX 16:25 条）。
+
+---
+
 ### 15:10（11-13） | RAG-Agent | `run_dev.ps1` 改为按目录名推导端口 | Claude Code 指出的合并隐患，已修
 
 Claude Code 在 14:55 条记录了一个隐患：`run_dev.ps1` 是被 git 跟踪的 per-worktree 文件，

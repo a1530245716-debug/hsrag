@@ -218,6 +218,109 @@ def _rw(kb_id):
         return lock
 
 
+_CONSISTENCY = {}   # kb_id -> {"key": (chunks_mtime, vectors_mtime, meta_mtime), "report": dict}
+_CHUNK_COUNT = {}   # kb_id -> (chunks_mtime, 行数)
+
+
+def _count_chunks(kb_id, path, mtime):
+    with _META_LOCK:
+        hit = _CHUNK_COUNT.get(kb_id)
+    if hit and hit[0] == mtime:
+        return hit[1]
+    n = 0
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                n += 1
+    with _META_LOCK:
+        _CHUNK_COUNT[kb_id] = (mtime, n)
+    return n
+
+
+def check_consistency(kb_id, v=None):
+    """校验 chunks.jsonl 行数是否等于 vectors.npy 行数。
+
+    两者行序一一对应，行数不一致时向量召回会错位，所以不一致必须禁用向量、
+    降级为纯 BM25。结果按文件 mtime 缓存，不会每次查询都数 5 万行。
+    v 传入已打开的 memmap 时直接读 shape，避免重复映射。
+    """
+    import indexer
+    cp = indexer._kb_dir(kb_id) / "chunks.jsonl"
+    np_path, meta_path = vdb_path(kb_id)
+    if not cp.exists():
+        return {"kb_id": kb_id, "ok": False, "chunks": 0, "vectors": 0, "msg": "无索引"}
+    if v is None and not np_path.exists():
+        return {"kb_id": kb_id, "ok": False, "chunks": None, "vectors": 0,
+                "msg": "无向量库(纯 BM25)"}
+    try:
+        c_mtime = cp.stat().st_mtime_ns
+        v_mtime = np_path.stat().st_mtime_ns if np_path.exists() else 0
+        m_mtime = meta_path.stat().st_mtime_ns if meta_path.exists() else 0
+    except OSError as e:
+        return {"kb_id": kb_id, "ok": False, "chunks": None, "vectors": 0,
+                "msg": f"文件状态读取失败: {e}"}
+    key = (c_mtime, v_mtime, m_mtime)
+    with _META_LOCK:
+        hit = _CONSISTENCY.get(kb_id)
+    if hit and hit["key"] == key:
+        return dict(hit["report"])
+    try:
+        chunks = _count_chunks(kb_id, cp, c_mtime)
+    except Exception as e:
+        rep = {"kb_id": kb_id, "ok": False, "chunks": None, "vectors": 0,
+               "msg": f"chunks 读取失败: {e}"}
+        with _META_LOCK:
+            _CONSISTENCY[kb_id] = {"key": key, "report": rep}
+        return dict(rep)
+    if v is not None:
+        vectors = int(v.shape[0]) if v.ndim > 0 else 0
+        ok = chunks == vectors
+        rep = {"kb_id": kb_id, "ok": ok, "chunks": chunks, "vectors": vectors,
+               "msg": "一致" if ok else
+                      f"行数不一致: chunks={chunks}, vectors={vectors}；已禁用向量检索"}
+    else:
+        try:
+            vv = np.load(np_path, mmap_mode="r")
+            try:
+                vectors = int(vv.shape[0]) if vv.ndim > 0 else 0
+            finally:
+                close_vectors(vv)
+        except Exception as e:
+            rep = {"kb_id": kb_id, "ok": False, "chunks": chunks, "vectors": 0,
+                   "msg": f"向量库读取失败: {e}"}
+        else:
+            ok = chunks == vectors
+            rep = {"kb_id": kb_id, "ok": ok, "chunks": chunks, "vectors": vectors,
+                   "msg": "一致" if ok else
+                          f"行数不一致: chunks={chunks}, vectors={vectors}；已禁用向量检索"}
+    if not rep["ok"]:
+        print(f"[embeddings] 完整性告警 {kb_id}: {rep['msg']}", file=sys.stderr)
+    with _META_LOCK:
+        _CONSISTENCY[kb_id] = {"key": key, "report": rep}
+    return dict(rep)
+
+
+def consistency_report():
+    """所有已注册知识库的完整性报告（启动预热用，会真的去数行数）。"""
+    import indexer
+    try:
+        reg = indexer.load_registry()
+    except Exception:
+        reg = []
+    out = {}
+    for kb in reg:
+        kid = kb.get("id")
+        if kid:
+            out[kid] = check_consistency(kid)
+    return out
+
+
+def cached_consistency_report():
+    """只返回已算过的结果（给 /api/health 用，探活路径不做文件 I/O）。"""
+    with _META_LOCK:
+        return {kid: dict(hit["report"]) for kid, hit in _CONSISTENCY.items()}
+
+
 def load_vectors(kb_id):
     """读向量库, 返回 (只读 memmap, meta)。
 
@@ -281,6 +384,9 @@ def search_vectors(kb_id, qvec, topk=20):
         if v is None:
             return []
         try:
+            # 行数不一致时向量行序不可信，直接降级为纯 BM25，避免静默答错
+            if not check_consistency(kb_id, v).get("ok"):
+                return []
             sims = v @ qvec  # 已 L2 归一化 => 点积即余弦
         finally:
             close_vectors(v)
