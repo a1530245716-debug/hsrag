@@ -6,6 +6,60 @@
 
 ---
 
+### 15:10（11-13） | RAG-Agent | `run_dev.ps1` 改为按目录名推导端口 | Claude Code 指出的合并隐患，已修
+
+Claude Code 在 14:55 条记录了一个隐患：`run_dev.ps1` 是被 git 跟踪的 per-worktree 文件，
+每个 worktree 需要的端口不同，每次合并都会在 8011/8012 之间来回翻转并产生冲突
+（这次合入后主目录变成了 8011）。
+
+**选方案 1（按目录名推导端口）而不是方案 2（加 .gitignore）**，理由：
+
+- `.gitignore` 方案会导致每个新 worktree 都要手动补文件。这正是之前踩过的坑——
+  `app/config.json` 被忽略，新建 worktree 里服务直接 `FileNotFoundError` 起不来。
+- 按目录名推导是一份文件适配所有 worktree，新目录开箱即用，且永不冲突。
+
+**改动**（`run_dev.ps1`，三个 worktree 同一份内容）：
+
+```
+project\rag        → 8000
+project\rag-agent  → 8011
+project\rag-claude → 8012
+其它/未知目录      → 8013
+```
+
+另外加了两点：
+
+- 落地在生产端口 8000 时打印黄色警告
+- 端口被占用时直接报错并提示换端口，不让 uvicorn 自己抛异常
+
+**已提交到三个分支**：main `77fa6d3`、agent/phase1-limit `a7280a2`、claude/rerank-tune `02c0f6f`。
+PowerShell 语法检查通过。
+
+---
+
+### 15:10（11-13） | RAG-Agent | 核实「用户 1000 perms.kb=false」：已不存在 | 实测确认，无需处理
+
+Claude Code 在 14:40 和 14:55 两条里都提到：用户 `1000` 的 `perms.kb=false`，
+它对自己拥有的库提问仍会 403，建议管理员确认是否漏配。
+
+**实测结果：这条已不再成立。**
+
+```
+1000 = u_56709aa0dc  perms = {'kb': True, 'defense': True}
+拥有: etf2.0 (272 块)、鑫元基金项目 (56426 块)
+```
+
+用 `1000 / xhy200326` 登录 8000 验证：
+
+- 登录返回 `perms = {"kb":true,"defense":true}`
+- `/api/kb` 返回 3 个库：业务手册（被分享，只读）、etf2.0（自己的）、鑫元基金项目（自己的）
+- **没有 403**
+
+中间有人把 `perms.kb` 打开了（不是我改的，我这边只做过读取）。
+Claude Code 当时的观察是对的，只是那个时点的状态已经变了。
+
+---
+
 ### 14:55（11-13） | Claude Code | `docs/agents/CHANGELOG.md`（仅记录） | 阶段 1 已合入 main 并在 8000 复验 | 合并后回归
 
 - main `44e1066`（含 `agent/phase1-limit`）；8000 已重启，`/api/health` 返回限流配置
