@@ -6,6 +6,86 @@
 
 ---
 
+### 17:20（11-12） | RAG-Agent | 建立 git worktree 并行开发环境 | 人和 Claude Code 要我同时开发但互不影响，靠文件归属表已经不够
+
+**为什么要做**：今天定的重构方案要改 `server.py`、`llm.py`、`kb.py`，跨了归属边界。
+光靠 AGENTS.md 的约定防不住"同时改不同文件但逻辑互相依赖"。
+
+**目录布局**（`git worktree add`，共享同一份 `.git`）：
+
+| 目录 | 分支 | 端口 | 谁用 |
+|---|---|---|---|
+| `project\rag\` | `main` | 8000 | 人 |
+| `project\rag-agent\` | `agent/phase1-limit` | 8011 | RAG-Agent |
+| `project\rag-claude\` | `claude/rerank-tune` | 8012 | Claude Code |
+
+**数据共享方案**：`app\data`（975MB）、`models`（373MB）、`index`（65MB）
+用 Windows Junction 指向主目录，避免复制 1.4GB 且保证三边数据一致。
+实测 worktree 里 `indexer.load_registry()` 能读到全部 4 个知识库。
+
+**踩到的坑**：`app\config.json` 被 `.gitignore` 忽略，worktree 里没有，
+导致 `llm.load_config()` 直接 `FileNotFoundError`。已单独复制到两个 worktree；
+以后主目录改了 config 要手动同步（已写进文档）。
+
+**新增文件**：
+
+| 文件 | 内容 |
+|---|---|
+| `docs\agents\WORKTREE-并行开发.md` | 完整指南：建/删 worktree、合并、冲突处理、故障排查 |
+| `rag-agent\run_dev.ps1`、`rag-claude\run_dev.ps1` | 各自专用的启动脚本（端口隔离） |
+
+**改动的共用文件**：
+- `AGENTS.md` 第七节：新增「并行开发用 git worktree」小节；端口表补 8011/8012
+- `CLAUDE.md`：顶部加警示，明确 Claude Code 的工作目录是 `rag-claude`
+
+**验证实测**：
+
+- `rag-agent` worktree 起在 8011，`/api/health` 200，读到 4 个知识库（含鑫元 56426 块）
+- 同时 8000 生产服务 PID 10232 正常，两者互不影响
+- 验证后已停掉 8011 测试实例
+
+**交接**：合并前两边各自 `git commit`，由人在主目录 `git merge`。
+冲突处理原则：「只改自己负责的文件；两边都要改同一文件时，先合一个，另一个基于新 main 改」。
+---
+
+### 13:35（11-13） | Claude Code | `app/kb.py`、`app/embeddings.py`、`app/rerank.py` | BM25 倒排索引、向量 mmap（兼容重建）、重排并发调参 | 落实 `09-并发重构方案` 中分给 Claude Code 的三项，数据依据见 INBOX 13:35 条
+
+**`app/kb.py` — BM25 倒排索引（公共 API 完全不变）**
+
+- `BM25.build()` 从已有 `tf_list` 构建内存 CSR 倒排：`term -> [start,end)` 切
+  `_post_idx(int32)` / `_post_tf(float32)`，查询只遍历命中词的 posting。
+- 路径加权（文件名词重叠、逐字命中、权威/降权、版本权重）改为按 **270 个去重路径** 算一次，
+  再按 `_path_ids` 向量化；`name_hit` 不再每次重建 5.6 万条 path set。
+- 建完释放 `tf_list`（实测 5.6 万块约 330MB），倒排本身约 24MB。
+- `query/name_hits/search/hybrid_search` 签名与返回结构不变，RAG-Agent 无需改调用。
+- 运算顺序刻意与旧实现保持一致，实测 **12 条查询 top-20 逐位相同、分数 max diff = 0.0**；
+  查询耗时 75–172ms → 1.6–7.0ms（20–49 倍）。
+
+**`app/embeddings.py` — 向量 mmap**
+
+- `load_vectors` 改为 `np.load(..., mmap_mode="r")`，不再常驻 100MB+ 全量数组；
+  `search_vectors` 每查询「打开 → matmul → 关闭」，meta 按 mtime 缓存。
+- 原因：Windows 上已打开的 memmap 会让 `os.replace` 失败（实测 WinError 5）。
+  为避免 `ensure_vectors` / 手动 `build_vectors.py` 重建被阻塞，改成不长期持有映射。
+- 每 kb 一把写者优先读写锁：查询可并行，替换 `vectors.npy` 时独占；
+  `save_vectors` 的 replace 加 6×0.2s 重试，覆盖跨进程手动重建的毫秒窗口。
+- 实测：8 读线程 + 15 次并发重建，946 次查询 0 错误；替换后立即可读到新向量。
+
+**`app/rerank.py` — 并发与排队超时**
+
+- `RERANK_CONCURRENCY 2 → 1`；`RERANK_SLOT_TIMEOUT 120 → 10s`（过载快速降级为 BM25 排序）。
+- 16 vCPU 实测：默认线程+并发1 = 0.30–0.32 job/s；并发2 = 0.28 且单请求耗时翻倍；
+  `intra_op_num_threads=2` 的方案实测更差（0.19），故未采用。
+
+**未做 / 待确认**
+
+- `eval/run_eval.py` 未跑：脚本 hardcode `BASE=http://127.0.0.1:8000`（主服务），
+  且会写共享数据。需人给一个窗口，用临时副本指向 8012 再跑。
+- 「候选数 24→16」收益最大（吞吐 +50%），但改在 `hybrid_search`（RAG-Agent 查询侧），
+  已在 INBOX 建议，未擅自改。
+
+---
+
 ### 17:05（11-12） | RAG-Agent | 新增 `docs/ai-fde/09-并发重构方案.md`；清理 5 个死代码脚本 + 1 个空目录 | 人要求把后续重构方案落盘到工作目录，并清理废案以免干扰其它 agent
 
 **新增方案文档**
