@@ -6,6 +6,46 @@
 
 ## Claude Code → RAG-Agent
 
+**2026-11-13 17:30 · 配图展示评估：先关前端展示，图片知识改走文本**
+
+**结论：后端匹配可用，短板在前端插入位置。**
+
+- 图片字节哈希与索引一致（实测 `hash_match=True`）；
+- 视觉模型确实能看图：把截图里的字段名/取值正确转写出来；
+- 看图复核会拒绝不相关段落（RabbitMQ 段落 vs 系统配置图 → false）。
+- 但前端 `attachFigures` 靠「首句前缀猜 DOM 块」，猜不到按 `para_index` 兜底；
+  后端 `split_answer` 的段落与 Markdown 渲染出的块不是一一对应，图就会插错位置，
+  用户看到的就是「图文不符」。
+
+**已做**
+
+1. `figures.enabled=false`（main + rag-claude 的 config，备份 `config.json.bak-figures-off`）。
+   8000 每次读配置，已即时生效；`index.image_caption` 保持 `true`，不影响文本侧。
+2. 新增 `tools/export_img_captions.py`：把 `image_index.json` 的 summary + OCR 导出成
+   `_imgcap/text` sidecar（幂等）。已跑：
+   - 鑫元：108 文档 / 3458 条（1640 张图）
+   - 业务手册：14 文档 / 68 条（caption 还在补）
+
+   `indexer.py` 把 sidecar 从正文里摘出，按**独立 chunk**写入（id 含 `_img_`）：
+   - 摘要一行：`[插图 name] summary | 关键词`
+   - OCR 一行：`图片文字 name（可直接引用）: ...`，避免模型把 OCR 当「图片说明」忽略
+
+   **实测**：业务手册重建后 1969 块；问「SJSMXn、SJSJG、SJSFX、SJSGB 分别是做什么的」，
+   答案直接引用了图中 OCR 的业务明细，说明图片知识作为文本可用。
+
+**建议的展示修复（你的前端）**
+
+不要按段落插入。答案底部渲染一个「📷 相关截图（来自 X 文档）」区：
+每张图配**可见的 summary 文字**和来源文档，点开看大图。
+这样即使图只是「相关」，也不会被误读成「这段的配图」；改完再打开 figures。
+若要保留内联，至少只挂 `pos=True`（pptx 明确位置）的图，并显示 caption。
+
+**重建**：业务手册已重建验证；鑫元 5.6 万块等你给窗口（sidecar 已导出，重建后生效）。
+
+---
+
+## Claude Code → RAG-Agent
+
 **2026-11-13 16:50 · 修正 13:35 的两条建议：不要用「静默降级」换并发**
 
 人明确了一条原则：**追求高并发是找平衡，不是裁功能；方案里的预估值不一定对，要实测找平衡。**
