@@ -6,6 +6,93 @@
 
 ---
 
+### 16:40（11-13） | RAG-Agent | 阶段 2 完成：LLM/SSE 异步化 | 同步 SSE 占线程池，并发越高越慢（50 并发首字 64.9s）
+
+**依据**：`docs/ai-fde/09-并发重构方案.md` 第四节、`07-技术笔记:14-21`
+
+### `app/llm.py` 新增异步层（同步版一个没删）
+
+- `get_async_client()`：按事件循环缓存的共享 `httpx.AsyncClient`，
+  `Limits(max_connections=100, max_keepalive_connections=50)`。
+  用 `id(loop)` 做键——AsyncClient 绑定 loop，uvicorn 重启/测试换 loop 会报
+  "Event loop is closed"。
+- `chat_async()` / `stream_async()`：与同步版一一对应，**重试语义完全一致**
+  （`chat` 最多 3 次；`stream` 只在"一个字都没吐出来"时重试，避免重复半截回答）。
+- `aclose_async_clients()`：进程退出时清理。
+- **回滚保证**：`chat()` / `stream()` / `_stream_anthropic()` / `_stream_openai()`
+  一行未动，异步版出问题立刻能切回。
+
+### `app/server.py`
+
+- `_run_ask_stream` 里新增 `_agen_body()`（异步生成器，311 行），
+  由 `_gen_body()` 用脚本机械复制后替换 4 处调用生成，避免手抄 300 行出错：
+  - 4 处 `for token in llm.stream(...)` → `async for token in llm.stream_async(...)`
+  - `kb.hybrid_search` / `_multi_search` → `await run_in_threadpool(...)`
+  - `planner.rewrite_query` / `planner.plan_queries` → 同样走线程池
+    （里面是 `httpx.post`，同步跑会阻塞事件循环）
+- `agen()` 包裹 `_agen_body()`，每条 SSE 检查 `request.is_disconnected()`，
+  用户关页面就停，不再继续烧网关额度。
+- `StreamingResponse(gen())` → `StreamingResponse(agen())`。
+  **同步版 `gen()` 保留在上面**，回滚只需改这一行。
+- 限流名额仍在 `finally` 里释放，未受影响。
+
+### 实测（mock tokens=100 / delay=0.02 / ttft=0.3，鑫元库 18 问，临时把 per_user_max 放宽到 50 只看全局层）
+
+| 并发 | 阶段 1（同步） | 阶段 2（异步） | 提升 |
+|---|---|---|---|
+| 10 首字 p50 | 35.9s | **13.6s** | 2.6× |
+| 30 首字 p50 | 61.3s | **15.2s** | 4.0× |
+| 50 首字 p50 | 64.9s | **15.2s** | 4.3× |
+| 50 首字 p95 | 96.6s | **15.2s** | 6.4× |
+
+**最关键的信号**：30 并发和 50 并发的首字几乎相同（15.2s），而同步版是并发越高越慢
+（61.3s → 64.9s，p95 96.6s）。说明**线程池不再是瓶颈**，异步化达到了设计目的。
+
+**但没到方案里写的 <10s 目标**，原因见下。
+
+### 找到新的瓶颈：重排并发 1（需 Claude Code 决策）
+
+单独测 `kb.hybrid_search`：
+
+```
+含重排   首次 96.29s（模型冷启动）  之后稳定 4.45 / 4.60s
+不含重排 0.15s
+```
+
+6 个线程同时检索（已预热）：墙钟 12.1s，最慢请求 12.1s，而单请求只要 4.5s。
+
+原因：`rerank.py` 的 `RERANK_CONCURRENCY = 1` + `RERANK_SLOT_TIMEOUT = 10.0`。
+20 个并发请求里有 19 个在排队，每个最多等 10 秒，等不到就降级为 BM25 排序。
+**这 10 秒白等了还没用上重排**，是当前 15.2s 首字的主要构成。
+
+Claude Code 在 11-13 测的是「并发 1 吞吐 0.30-0.32 job/s，并发 2 是 0.28」——
+那是**单请求延迟最优**的结论，成立。但**并发排队场景**下结论不同：
+一个请求占着重排 4.5 秒，别人只能干等。这里的取舍需要它来定，
+`rerank.py` 是它的归属，我没有动。
+
+> 已在 INBOX 留言，附完整数据，请它决定：提高并发 / 缩短等待超时 / 
+> 高并发时直接跳过重排。
+
+### 评测：5/6（与基线一致，且 xy-01 首次通过）
+
+- **xy-01 PASS** —— 11-13 补的同义词（`O-order` / `o-order` / `O订单`）生效了，
+  之前的"稳定 FAIL"确认就是评测口径问题。
+- xy-03 FAIL（缺依赖组件关键词），已知波动项，连跑多次时好时坏，与本次改动无关。
+- 评测走的是 `/api/kb/{id}/ask` 非流式端点，本次改动只影响流式端点 `/ask/stream`。
+
+### 验证
+
+- `py_compile` 通过（llm.py / server.py / kb.py）
+- AST 检查：`_agen_body` 为 `AsyncFunctionDef`，await=4 / yield=46 / asyncfor=4
+- 单请求异步 SSE 完整输出：状态 200、首字 2.4s、124 个事件、908 字、含 done
+- 并发时限流仍生效：6 并发 → 2 放行 / 4 个 429
+- 空闲 `/api/health` 24.8ms（p95 31.1ms）
+
+### 服务状态
+
+改动只在 `rag-agent` worktree（分支 `agent/phase1-limit`），**8000 生产未重启**。
+`app/config.json` 的 `ask_limits` 已恢复默认（20 / 2 / 60），压测过程中的临时放宽已撤销。
+
 ### 14:25（11-13） | RAG-Agent | 阶段 1「止血」完成：三层限流 + 健康检查异步化 | 50 并发下用户要干等 127 秒才拿到首字，过载时应当明确拒绝而不是排队
 
 **依据**：`docs/ai-fde/09-并发重构方案.md` 阶段 1、`03-目标架构与数据权限.md:129-130`
