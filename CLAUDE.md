@@ -7,6 +7,25 @@
 
 > 本机开发 / Docker(WSL2) / 端口 / 公开作品集约定见 `AGENTS.md` 第七节。
 
+## ⚠️ 你的工作目录是 `rag-claude`，不是 `rag`
+
+从 2026-11-12 起用 git worktree 并行开发，三个目录同时存在：
+
+| 目录 | 分支 | 端口 | 谁用 |
+|---|---|---|---|
+| `project\rag\` | `main` | 8000（生产） | 人 |
+| `project\rag-agent\` | `agent/phase1-limit` | 8011 | RAG-Agent |
+| **`project\rag-claude\`** | **`claude/rerank-tune`** | **8012** | **你** |
+
+**请在 `E:\doc\恒生电子交付工程师学习\project\rag-claude` 里工作。**
+
+- 启动你的服务：`.\run_dev.ps1`（起在 8012）
+- `app\data`、`models`、`index` 是通过 Junction 共享的，看到的是主目录的同一份数据
+- **不要删 `app\data`**，会连主目录一起删
+- **不要在 worktree 里重建索引**，会影响另外两个服务
+
+详细规则见 `docs\agents\WORKTREE-并行开发.md`。
+
 ## 这个项目现在有两个 agent 在改
 
 | 谁 | 管什么 |

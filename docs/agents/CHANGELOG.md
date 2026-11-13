@@ -6,6 +6,180 @@
 
 ---
 
+### 15:10（11-13） | RAG-Agent | `run_dev.ps1` 改为按目录名推导端口 | Claude Code 指出的合并隐患，已修
+
+Claude Code 在 14:55 条记录了一个隐患：`run_dev.ps1` 是被 git 跟踪的 per-worktree 文件，
+每个 worktree 需要的端口不同，每次合并都会在 8011/8012 之间来回翻转并产生冲突
+（这次合入后主目录变成了 8011）。
+
+**选方案 1（按目录名推导端口）而不是方案 2（加 .gitignore）**，理由：
+
+- `.gitignore` 方案会导致每个新 worktree 都要手动补文件。这正是之前踩过的坑——
+  `app/config.json` 被忽略，新建 worktree 里服务直接 `FileNotFoundError` 起不来。
+- 按目录名推导是一份文件适配所有 worktree，新目录开箱即用，且永不冲突。
+
+**改动**（`run_dev.ps1`，三个 worktree 同一份内容）：
+
+```
+project\rag        → 8000
+project\rag-agent  → 8011
+project\rag-claude → 8012
+其它/未知目录      → 8013
+```
+
+另外加了两点：
+
+- 落地在生产端口 8000 时打印黄色警告
+- 端口被占用时直接报错并提示换端口，不让 uvicorn 自己抛异常
+
+**已提交到三个分支**：main `77fa6d3`、agent/phase1-limit `a7280a2`、claude/rerank-tune `02c0f6f`。
+PowerShell 语法检查通过。
+
+---
+
+### 15:10（11-13） | RAG-Agent | 核实「用户 1000 perms.kb=false」：已不存在 | 实测确认，无需处理
+
+Claude Code 在 14:40 和 14:55 两条里都提到：用户 `1000` 的 `perms.kb=false`，
+它对自己拥有的库提问仍会 403，建议管理员确认是否漏配。
+
+**实测结果：这条已不再成立。**
+
+```
+1000 = u_56709aa0dc  perms = {'kb': True, 'defense': True}
+拥有: etf2.0 (272 块)、鑫元基金项目 (56426 块)
+```
+
+用 `1000 / xhy200326` 登录 8000 验证：
+
+- 登录返回 `perms = {"kb":true,"defense":true}`
+- `/api/kb` 返回 3 个库：业务手册（被分享，只读）、etf2.0（自己的）、鑫元基金项目（自己的）
+- **没有 403**
+
+中间有人把 `perms.kb` 打开了（不是我改的，我这边只做过读取）。
+Claude Code 当时的观察是对的，只是那个时点的状态已经变了。
+
+---
+
+### 14:55（11-13） | Claude Code | `docs/agents/CHANGELOG.md`（仅记录） | 阶段 1 已合入 main 并在 8000 复验 | 合并后回归
+
+- main `44e1066`（含 `agent/phase1-limit`）；8000 已重启，`/api/health` 返回限流配置
+  （全局 20 / 每用户 2 / 每 IP 60），4 个知识库 BM25 预热完成。
+- eval 复跑 **4/6**：xy-01 仍是 `O-order` 拼写问题；xy-03 本轮未提 JDK。
+  单独复跑 xy-03 **两次均 PASS**（两次都命中 `jdk`），确认是模型/改写波动，不是阶段 1 回归。
+  阶段 1 只改了流式 ask、health、warmup，非流式 `kb_ask` 链路未动。
+- 已知隐患：`run_dev.ps1` 是 tracked 的 per-worktree 文件，合并时会在 8011/8012 之间来回改
+  （这次合入后主目录变成 8011）。建议改成按目录名推导端口，或加入 `.gitignore` 各 worktree 本地保留。
+
+---
+
+### 14:40（11-13） | Claude Code | `docs/agents/CHANGELOG.md`（仅记录） | 合并后 eval 验收 5/6，唯一 FAIL 是关键词拼写 | 记录合并后的真实验收状态
+
+- main `6615f10`（含 `claude/rerank-tune`）已在 8000 启动，4 个知识库 BM25 预热完成。
+- `eval/run_eval.py` 用管理员账号跑（评测集取自 `rag-agent/eval/xinyuan_cases.json`）：
+  **5/6 PASS**。xy-01 FAIL 仅因答案写的是 `O-order`，用例只认 `OORDER/oorder` 子串；
+  `kb.tokenize` 本来就把 `o-order` 归一为 `oorder`，**不是检索退化**。
+  其余 5 条 PASS，每条 8 条引用。
+- 用户 `1000` 的 `perms.kb=false`，用它跑一律 403；本次用管理员账号，**未改任何权限**。
+- 建议 eval 用例给 xy-01 的同义词组补 `O-order`（`eval/` 归属 RAG-Agent，未擅自改）。
+
+---
+
+### 14:25（11-13） | RAG-Agent | 阶段 1「止血」完成：三层限流 + 健康检查异步化 | 50 并发下用户要干等 127 秒才拿到首字，过载时应当明确拒绝而不是排队
+
+**依据**：`docs/ai-fde/09-并发重构方案.md` 阶段 1、`03-目标架构与数据权限.md:129-130`
+
+**`app/server.py` 改动**
+
+1. **三层限流**（`_ASK_LIMIT_CFG`）：全局同时 20 个 / 每用户 2 个 / 每 IP 每分钟 60 次（滑动窗口）；超限一律**立刻返回 429 + `Retry-After: 5`**，不排队
+2. **`_acquire_ask_slot()`**：三层依次判，任何一层不过直接抛 `RateLimited`
+3. **`kb_ask_stream` 改 `async def`**：限流需要事件循环；内部逻辑仍走线程池（阶段 2 再改）
+4. **`/api/health` 与 `/api/warmup` 改 `async def`**：不再排在线程池后面
+5. **名额泄漏自愈**：`_slot_gc()` + 后台线程每 30 秒回收，超时 180 秒强制释放
+6. **配置化**：`app/config.json` 的 `ask_limits` 段可覆盖，默认值写死在代码里
+
+**过程中踩到的三个坑（都已修）**
+
+| 坑 | 现象 | 修法 |
+|---|---|---|
+| `async with` 包住 `return StreamingResponse` | 5 并发全部放行，等于没限流 | 流是懒执行的，名额在开始前就被释放了 |
+| 同步生成器 `finally` 不保证执行 | 客户端断开后名额永久占住 | 超时兜底回收（180 秒）+ 后台线程 |
+| `asyncio.Semaphore` 泄漏无法修复 | 计数永远回不来，只能重启 | 换成整数计数器 + 锁，回收时能直接修正 |
+
+**实测结果**（mock 参数与基线一致：tokens=100 / delay=0.02 / ttft=0.3，鑫元库 18 问）
+
+| 并发 | 基线首字 P50 | 每用户限 2 | 全局限 20 |
+|---|---|---|---|
+| 10 | 24.7s | 2/10 放行，**8.0s** | 10/10，35.9s |
+| 30 | 66.0s | 2/30，**8.5s** | 20/30，61.3s |
+| 50 | 127.4s | 2/50，**8.5s** | 20/50，64.9s |
+
+- **被拒的请求立刻 429**，不再等 127 秒——这是阶段 1 的核心价值
+- 放行的请求仍然慢（35-65 秒），那是阶段 2（异步化）要解决的
+- `/api/health` 空闲 8-11ms（基线 100 并发时 1985ms）
+- 注：这批数据是在合并 Claude Code 的 BM25 倒排索引**之前**测的，合并后放行请求的耗时应该更低，待阶段 2 一起复测
+
+**评测**（`eval/run_eval.py`）：**5/6**，与 11-05 基线一致
+
+- xy-01 稳定 FAIL（缺 OORDER），历史遗留，改动前就失败
+- xy-03 波动（有时提 JDK 有时不提），模型输出不确定性，非本次改动引起
+- 连跑 3 轮：4/6 → 5/6 → 5/6，基线值 5/6
+
+**顺手修的两个会导致数据丢失的问题**
+
+1. **`.gitignore` 误伤评测集**：`eval/*.json` 把 `xinyuan_cases.json` 也忽略了，导致它从未进过 git。改成 `eval/results/`（只忽略结果，保留案例）
+2. **`_load_ask_limits()` 从未被调用**：配置项形同虚设。已在模块加载时调用
+
+**恢复的两个丢失文件**（从历史结果反推）
+
+- `eval/xinyuan_cases.json`：从 `eval/results/20261105_135909.json` 恢复 6 条案例
+- `eval/baseline.json`：从 `tools/loadtest/results-baseline.json` 恢复 18 条压测问题
+
+**`eval/run_eval.py`**：新增 `RAG_EVAL_BASE` / `RAG_EVAL_USER` / `RAG_EVAL_PASS` 环境变量，可在 worktree 上打 8011 测试，不用改代码也不用动生产。
+
+**服务状态**：改动只在 `rag-agent` worktree（分支 `agent/phase1-limit`），**8000 生产服务未重启、未受影响**。合并前请人在主目录 `git merge` 并跑回归。
+
+### 17:20（11-12） | RAG-Agent | 建立 git worktree 并行开发环境 | 人和 Claude Code 要我同时开发但互不影响，靠文件归属表已经不够
+
+**为什么要做**：今天定的重构方案要改 `server.py`、`llm.py`、`kb.py`，跨了归属边界。
+光靠 AGENTS.md 的约定防不住"同时改不同文件但逻辑互相依赖"。
+
+**目录布局**（`git worktree add`，共享同一份 `.git`）：
+
+| 目录 | 分支 | 端口 | 谁用 |
+|---|---|---|---|
+| `project\rag\` | `main` | 8000 | 人 |
+| `project\rag-agent\` | `agent/phase1-limit` | 8011 | RAG-Agent |
+| `project\rag-claude\` | `claude/rerank-tune` | 8012 | Claude Code |
+
+**数据共享方案**：`app\data`（975MB）、`models`（373MB）、`index`（65MB）
+用 Windows Junction 指向主目录，避免复制 1.4GB 且保证三边数据一致。
+实测 worktree 里 `indexer.load_registry()` 能读到全部 4 个知识库。
+
+**踩到的坑**：`app\config.json` 被 `.gitignore` 忽略，worktree 里没有，
+导致 `llm.load_config()` 直接 `FileNotFoundError`。已单独复制到两个 worktree；
+以后主目录改了 config 要手动同步（已写进文档）。
+
+**新增文件**：
+
+| 文件 | 内容 |
+|---|---|
+| `docs\agents\WORKTREE-并行开发.md` | 完整指南：建/删 worktree、合并、冲突处理、故障排查 |
+| `rag-agent\run_dev.ps1`、`rag-claude\run_dev.ps1` | 各自专用的启动脚本（端口隔离） |
+
+**改动的共用文件**：
+- `AGENTS.md` 第七节：新增「并行开发用 git worktree」小节；端口表补 8011/8012
+- `CLAUDE.md`：顶部加警示，明确 Claude Code 的工作目录是 `rag-claude`
+
+**验证实测**：
+
+- `rag-agent` worktree 起在 8011，`/api/health` 200，读到 4 个知识库（含鑫元 56426 块）
+- 同时 8000 生产服务 PID 10232 正常，两者互不影响
+- 验证后已停掉 8011 测试实例
+
+**交接**：合并前两边各自 `git commit`，由人在主目录 `git merge`。
+冲突处理原则：「只改自己负责的文件；两边都要改同一文件时，先合一个，另一个基于新 main 改」。
+---
+
 ### 13:35（11-13） | Claude Code | `app/kb.py`、`app/embeddings.py`、`app/rerank.py` | BM25 倒排索引、向量 mmap（兼容重建）、重排并发调参 | 落实 `09-并发重构方案` 中分给 Claude Code 的三项，数据依据见 INBOX 13:35 条
 
 **`app/kb.py` — BM25 倒排索引（公共 API 完全不变）**

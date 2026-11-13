@@ -125,6 +125,22 @@ Start-Process $py -ArgumentList "app\server.py" -WorkingDirectory . -WindowStyle
 
 ## 七、本机开发与容器约定（2026-11-11）
 
+### ⚠️ 并行开发用 git worktree（2026-11-12 起）
+
+多个 agent 同时开发时，**不要在同一目录改**，用 worktree 隔离代码、共享数据：
+
+| 目录 | 分支 | 端口 | 谁用 |
+|---|---|---|---|
+| `project\rag\` | `main` | **8000**（生产，只用来合并和验证） | 人 |
+| `project\rag-agent\` | `agent/phase1-limit` | **8011** | RAG-Agent |
+| `project\rag-claude\` | `claude/rerank-tune` | **8012** | Claude Code |
+
+- `app\data`、`models`、`index` 通过 Windows **Junction** 指向主目录，**三个目录看到同一份数据**。
+- **不要删 `app\data`**（会连主目录一起删）；**不要在 worktree 里重建索引**（会影响另外两边）。
+- `app\config.json` 被 gitignore，已单独复制到每个 worktree；改了主目录的要手动同步。
+- 启动自己的服务：worktree 根目录下 `.\run_dev.ps1`。
+- 完整规则（建/删 worktree、合并、冲突处理、故障排查）：`docs\agents\WORKTREE-并行开发.md`。
+
 ### 本机 Docker 用 WSL2 + Docker Engine
 
 - 优先 **WSL2 + Docker Engine**，不用 Docker Desktop（企业许可风险）。
@@ -136,13 +152,15 @@ Start-Process $py -ArgumentList "app\server.py" -WorkingDirectory . -WindowStyle
 
 | 端口 | 用途 |
 |---|---|
-| 8000 | 生产服务 `app/server.py` |
+| 8000 | 生产服务 `app/server.py`（主目录） |
 | 8010 | 压测实例 `tools/loadtest` |
+| 8011 | RAG-Agent 开发实例（`rag-agent` worktree） |
+| 8012 | Claude Code 开发实例（`rag-claude` worktree） |
 | 8020 | 本地演示 BFF `tools/local_dev` |
 | 9099 | 假 LLM |
 | 9390 | 假 RAG |
 
-测试一律用 8010/8020，不要拿 8000 做测试。
+测试一律用 8010 以上，不要拿 8000 做测试。
 
 ### 本地开发
 

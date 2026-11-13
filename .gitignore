@@ -4,7 +4,11 @@ app/config.json.bak*
 tools/cloudflared/*.json
 tools/cloudflared/credentials.json
 _label.json
-eval/*.json
+# 评测「结果」不入库（每次跑都生成，体积大），但评测「案例」必须入库——
+# 案例是回归基线，丢了就没法判断改动有没有把原来答对的问题改坏。
+# 原来写的是 eval/*.json，把 xinyuan_cases.json 也一起忽略了，
+# 结果这个文件从来没进过 git，换个 worktree / 换台机器就跑不了评测。
+eval/results/
 *.key
 *.pem
 *.crt
