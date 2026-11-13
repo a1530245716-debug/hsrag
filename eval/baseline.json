@@ -1,0 +1,78 @@
+{
+  "name": "压测基线问题集（从 results-baseline.json 恢复）",
+  "kb_id": "20261019_121148_5a7a33",
+  "cases": [
+    {
+      "id": "lt-01",
+      "question": "otrade 部署需要准备哪些安装包"
+    },
+    {
+      "id": "lt-02",
+      "question": "otrade 和 oorder 有什么区别"
+    },
+    {
+      "id": "lt-03",
+      "question": "正回购排券分户怎么操作"
+    },
+    {
+      "id": "lt-04",
+      "question": "询价意向确认可以批量处理吗"
+    },
+    {
+      "id": "lt-05",
+      "question": "ZooKeeper 集群需要几台机器"
+    },
+    {
+      "id": "lt-06",
+      "question": "Hsiar 是做什么的"
+    },
+    {
+      "id": "lt-07",
+      "question": "系统上线投产需要准备哪些材料"
+    },
+    {
+      "id": "lt-08",
+      "question": "智能交易平台的整体架构是怎样的"
+    },
+    {
+      "id": "lt-09",
+      "question": "otrade 登录失败怎么排查"
+    },
+    {
+      "id": "lt-10",
+      "question": "数据库连接池怎么配置"
+    },
+    {
+      "id": "lt-11",
+      "question": "交易时间之外能不能下单"
+    },
+    {
+      "id": "lt-12",
+      "question": "行情服务连不上怎么办"
+    },
+    {
+      "id": "lt-13",
+      "question": "otrade 支持哪些委托类型"
+    },
+    {
+      "id": "lt-14",
+      "question": "系统备份和恢复怎么做"
+    },
+    {
+      "id": "lt-15",
+      "question": "otrade 和 HIX 之间怎么交互"
+    },
+    {
+      "id": "lt-16",
+      "question": "部署需要开放哪些端口"
+    },
+    {
+      "id": "lt-17",
+      "question": "客户现场部署的步骤是什么"
+    },
+    {
+      "id": "lt-18",
+      "question": "日志文件放在哪个目录"
+    }
+  ]
+}

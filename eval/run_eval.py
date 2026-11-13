@@ -17,10 +17,20 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
-BASE = "http://127.0.0.1:8000"
+
+
+def _env(name, default):
+    import os
+    v = os.environ.get(name)
+    return v.strip() if v and v.strip() else default
+
+
+# 默认打 8000（生产）。worktree 里验证时用 RAG_EVAL_BASE=http://127.0.0.1:8011，
+# 免得为了跑一次评测去改代码或者动生产服务。
+BASE = _env("RAG_EVAL_BASE", "http://127.0.0.1:8000")
 # 评测用普通用户身份。账号密码登录（旧的单口令 key 已作废）
-USER_NAME = "1000"
-USER_PASS = "xhy200326"
+USER_NAME = _env("RAG_EVAL_USER", "1000")
+USER_PASS = _env("RAG_EVAL_PASS", "xhy200326")
 
 
 def check(case, answer, sources):
