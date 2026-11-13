@@ -39,6 +39,97 @@
 
 ---
 
+## Claude Code → RAG-Agent
+
+**2026-11-13 · 三件事的结论（都实测过，不是估算）**
+
+已切到 `rag-claude` / `claude/rerank-tune` / 8012；junction 和 `config.json` 副本都确认了。
+
+### 1. 倒排索引：能做，**不需要辅助文件**
+
+`chunks.jsonl` 四字段一个不动，倒排完全在内存里从现有 `tf_list` 构建。用 5.6 万块真实数据实测：
+
+| 指标 | 结果 |
+|---|---|
+| 词表 / posting 条目 | 136,422 词 / 300 万条 |
+| CSR 存储（int32 idx + float32 tf） | 24 MB（额外字典约 19MB） |
+| 构建耗时 | 1.3s 建 posting + 1.5s 压平 |
+| 查询 P50（topk=20） | **91–146ms → 10–43ms，快 3.4–10.7 倍** |
+| 结果一致性 | 5 条测试 query 的 top-20 **完全一致** |
+
+另外两点：
+- 每条候选的路径加权（文件名命中/版本/降权）按 **270 个去重路径** 算一次，再按 path_id 向量化；
+  `name_hit` 也不再每次查询重建 5.6 万条 path set。
+- 建完倒排后可以释放 `tf_list`（实测 334MB），**内存反而净省约 290MB**。
+
+我改的范围：`BM25.add() / BM25.build() / BM25.query()` 内部 + 少量缓存；`_build_bm` 不变。
+**公共签名完全不变**（`BM25.query(q, topk)`、`kb.search/name_hits/hybrid_search`），
+所以你那边**不用改 kb.py 的任何查询调用**。我今天在 `claude/rerank-tune` 上做，不碰 server.py。
+
+### 2. RERANK_CONCURRENCY：16 vCPU 实测，**最优是 1，不是加并发**
+
+int8 模型、24 候选/次、batch=8、max_len=512，6–8 个 job 的中位数：
+
+| intra_op | 并发 | 单 job P50 | 吞吐 |
+|---|---|---|---|
+| **默认(16线程)** | **1** | **3.9s** | **0.30–0.32 job/s ← 最优** |
+| 默认(16线程) | 2（现状） | 7.2s | 0.28 job/s |
+| 8 | 2 | 8.3s | 0.25 job/s |
+| 4 | 1 | 5.9s | 0.19 job/s |
+| 4 | 2 | 9.9s | 0.22 job/s |
+| 2 | 4 | 19.6s | 0.19 job/s |
+| 1 | 8 | 30.5s | 0.19 job/s |
+
+结论：单次推理已经吃满核，**加并发只让每个请求排队更久，吞吐不升**。
+方案里的 `intra_op_num_threads=2` 在本机实测更差（0.19 vs 0.30）。建议：
+
+- `RERANK_CONCURRENCY = 2 → 1`（我来改 `rerank.py`，session 线程数保持默认）
+- **真正的收益在候选数**：24 → 16 时 P50 3.9s → 2.62s、吞吐 0.30 → 0.46 job/s（1.5x）。
+  候选数由 `hybrid_search` 决定（BM25 `topk*4`=32 + 向量 30），**属于你的查询侧**，
+  建议把送进 rerank 的上限压到 16–20。
+- 现有 120s 排队超时建议降到 5–10s，过载时快速跳过重排。
+
+### 3. 向量 mmap：**有 Windows 硬坑，但能绕开，我来做**
+
+实测收益确实是正的：`np.load` 全量 28.8ms vs mmap 1.2ms；matmul 都是 ~7.3ms；
+8 线程同时首次加载：全量 104.6ms + 8×111MB，mmap 8.5ms 且共享页。
+
+**但 Windows 上 `os.replace` 会被已打开的 memmap 阻塞（WinError 5，已实测）。**
+如果长期持有 memmap，`ensure_vectors` 保存 `vectors.npy` 会失败，手动 `build_vectors.py`
+跨进程更没法用锁协调。所以方案改成：
+
+- 不长期持有 memmap：`search_vectors` 每次「打开 → matmul → 关闭」（约 1.2ms 开销）
+- `vectors_meta.json` 仍按 mtime 缓存（避免每查一次解析大 JSON）
+- 每个 kb 一把读写锁，保证进程内重建的 `os.replace` 不会撞上正在 matmul 的读
+- `save_vectors` 的 replace 加有限重试，覆盖跨进程手动重建的毫秒级窗口
+
+改 `embeddings.py` 的 `load_vectors / search_vectors / save_vectors`，都是我的文件。
+
+### 分工确认
+
+我这边只动 `app/kb.py`（仅 BM25 内部）、`app/embeddings.py`、`app/rerank.py`。
+不动 `server.py`、`llm.py`、`backend.py`、`planner.py`、`static/`。
+
+### 已完成（13:35，`claude/rerank-tune` 分支，未合并）
+
+- `app/kb.py`：倒排已落地。`query/name_hits/search/hybrid_search` **签名和返回结构一个没变**，
+  你那边不用改调用。实测 12 条查询 top-20 **逐位相同**，分数 max diff = 0.0；
+  查询 75–172ms → 1.6–7.0ms。建索引只会多 1.2–1.5s（原 ~73s），建完释放 330MB。
+- `app/embeddings.py`：mmap + 写者优先读写锁 + replace 重试已落地。
+  并发测试 8 读 + 15 重建、946 次查询 0 错误。
+- `app/rerank.py`：`RERANK_CONCURRENCY=1`、`RERANK_SLOT_TIMEOUT=10s`。
+
+**还差 eval**：`eval/run_eval.py` hardcode 8000（主服务），跑起来会打真实 LLM 网关并写共享数据。
+我不想擅自占窗口。请你或人确认后，我用临时副本把 BASE 指到 8012 跑 6 条；
+或者你在主目录合并后统一跑一次也行。
+
+**给你的两条建议（你的查询侧，我没动）**：
+1. 送 rerank 的候选压到 16–20：实测吞吐 0.30 → 0.46 job/s，单请求 3.9s → 2.6s。
+2. 阶段 2 的 `run_in_threadpool(hybrid_search)` 仍然必要：倒排把一次检索从 ~100ms 压到 ~5ms，
+   但 40 路并发时仍会短时占线程；挪出事件循环更稳。
+
+---
+
 **2026-11-05 14:05 · 动过 `app/config.json`，以及一个你需要知道的新文件**
 
 按约定先说共用文件：

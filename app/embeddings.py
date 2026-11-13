@@ -10,6 +10,7 @@
             app/data/<kb_id>/vectors_meta.json {count, dim, provider, model}
 """
 import hashlib, json, os, sys, threading, time
+from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
@@ -142,13 +143,17 @@ def save_vectors(kb_id, vecs: np.ndarray, model="bge-m3-onnx", provider="cpu", *
     np_path, meta_path = vdb_path(kb_id)
     np_path.parent.mkdir(parents=True, exist_ok=True)
     arr = np.asarray(vecs, dtype=np.float32)
-    # 先写临时文件再原子替换: 正在提问的进程不会读到半截 vectors.npy
-    tmp = np_path.with_name(np_path.name + ".tmp")
+    # 先写临时文件再原子替换: 正在提问的进程不会读到半截 vectors.npy。
+    # 写入磁盘期间不持锁, 只有替换这一下进入写锁(查询侧不长期持有 memmap)。
+    tmp = np_path.with_name(f"{np_path.name}.{os.getpid()}.tmp")
     with open(tmp, "wb") as f:
         np.save(f, arr)
         f.flush()
         os.fsync(f.fileno())
-    os.replace(tmp, np_path)
+    with _rw(kb_id).write():
+        _replace_retry(tmp, np_path)
+        with _META_LOCK:
+            _META_CACHE.pop(kb_id, None)
     meta = {"count": int(len(arr)), "dim": int(arr.shape[1]) if arr.ndim > 1 else 0,
             "model": model, "provider": provider,
             "ts": time.strftime("%Y-%m-%d %H:%M:%S")}
@@ -156,30 +161,129 @@ def save_vectors(kb_id, vecs: np.ndarray, model="bge-m3-onnx", provider="cpu", *
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-_VDB_CACHE = {}   # kb_id -> {"mtime": float, "v": ndarray, "meta": dict}
+_META_CACHE = {}       # kb_id -> {"mtime": int, "meta": dict} (meta 含 ids/hashes, 不重复解析)
+_META_LOCK = threading.Lock()
+_RW = {}               # kb_id -> _RWLock
+_RW_LOCK = threading.Lock()
+
+
+class _RWLock:
+    """每个库一把读写锁: 查询可并行, 重建替换 vectors.npy 时独占。
+
+    写者优先: 有重建在排队时, 新查询先在门口等, 避免持续查询把替换饿死。
+    """
+    def __init__(self):
+        self._cond = threading.Condition()
+        self._readers = 0
+        self._writers_waiting = 0
+        self._writing = False
+
+    @contextmanager
+    def read(self):
+        with self._cond:
+            while self._writing or self._writers_waiting:
+                self._cond.wait()
+            self._readers += 1
+        try:
+            yield
+        finally:
+            with self._cond:
+                self._readers -= 1
+                if self._readers == 0:
+                    self._cond.notify_all()
+
+    @contextmanager
+    def write(self):
+        with self._cond:
+            self._writers_waiting += 1
+            try:
+                while self._writing or self._readers:
+                    self._cond.wait()
+                self._writing = True
+            finally:
+                self._writers_waiting -= 1
+        try:
+            yield
+        finally:
+            with self._cond:
+                self._writing = False
+                self._cond.notify_all()
+
+
+def _rw(kb_id):
+    with _RW_LOCK:
+        lock = _RW.get(kb_id)
+        if lock is None:
+            lock = _RW[kb_id] = _RWLock()
+        return lock
 
 
 def load_vectors(kb_id):
-    """读向量库,带 mtime 缓存: 文件未变则复用内存,避免每次提问全量读盘。"""
+    """读向量库, 返回 (只读 memmap, meta)。
+
+    用 mmap_mode="r" 避免每个进程常驻 100MB+ 全量数组, 多进程共享页缓存。
+    调用方用完必须 `close_vectors(v)` —— Windows 上文件被映射时无法替换,
+    长期持有会让 ensure_vectors/build_vectors.py 的原子替换失败(WinError 5)。
+    meta 按 mtime 缓存, 不每次解析(里面含全部 ids/hashes, 文件不小)。
+    """
     np_path, meta_path = vdb_path(kb_id)
     if not np_path.exists():
         return None, None
-    mtime = np_path.stat().st_mtime_ns
-    hit = _VDB_CACHE.get(kb_id)
+    try:
+        mtime = np_path.stat().st_mtime_ns
+    except OSError:
+        return None, None
+    with _META_LOCK:
+        hit = _META_CACHE.get(kb_id)
     if hit and hit["mtime"] == mtime:
-        return hit["v"], hit["meta"]
-    v = np.load(np_path)
-    meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
-    _VDB_CACHE[kb_id] = {"mtime": mtime, "v": v, "meta": meta}
+        meta = hit["meta"]
+    else:
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+        except Exception:
+            meta = {}
+        with _META_LOCK:
+            _META_CACHE[kb_id] = {"mtime": mtime, "meta": meta}
+    try:
+        v = np.load(np_path, mmap_mode="r")
+    except Exception as e:
+        print(f"[embeddings] 向量库读取失败 {kb_id}: {e}", file=sys.stderr)
+        return None, meta
     return v, meta
+
+
+def close_vectors(v):
+    if isinstance(v, np.memmap):
+        try:
+            v._mmap.close()
+        except Exception:
+            pass
+
+
+def _replace_retry(src, dst, tries=6, delay=0.2):
+    """os.replace 重试: 覆盖服务器正在 mmap 的窗口(跨进程手动重建时)。"""
+    for i in range(tries):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if i == tries - 1:
+                raise
+            time.sleep(delay)
 
 
 def search_vectors(kb_id, qvec, topk=20):
     """余弦相似度召回。返回 [(idx, score)] score∈[0,1], 已降序。"""
-    v, _ = load_vectors(kb_id)
-    if v is None or qvec is None:
+    if qvec is None:
         return []
-    sims = v @ qvec  # 已 L2 归一化 => 点积即余弦
+    with _rw(kb_id).read():
+        v, _ = load_vectors(kb_id)
+        if v is None:
+            return []
+        try:
+            sims = v @ qvec  # 已 L2 归一化 => 点积即余弦
+        finally:
+            close_vectors(v)
     order = np.argsort(-sims)[:topk]
     return [(int(i), float(sims[i])) for i in order]
 
