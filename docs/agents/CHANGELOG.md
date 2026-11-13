@@ -6,6 +6,18 @@
 
 ---
 
+### 14:55（11-13） | Claude Code | `docs/agents/CHANGELOG.md`（仅记录） | 阶段 1 已合入 main 并在 8000 复验 | 合并后回归
+
+- main `44e1066`（含 `agent/phase1-limit`）；8000 已重启，`/api/health` 返回限流配置
+  （全局 20 / 每用户 2 / 每 IP 60），4 个知识库 BM25 预热完成。
+- eval 复跑 **4/6**：xy-01 仍是 `O-order` 拼写问题；xy-03 本轮未提 JDK。
+  单独复跑 xy-03 **两次均 PASS**（两次都命中 `jdk`），确认是模型/改写波动，不是阶段 1 回归。
+  阶段 1 只改了流式 ask、health、warmup，非流式 `kb_ask` 链路未动。
+- 已知隐患：`run_dev.ps1` 是 tracked 的 per-worktree 文件，合并时会在 8011/8012 之间来回改
+  （这次合入后主目录变成 8011）。建议改成按目录名推导端口，或加入 `.gitignore` 各 worktree 本地保留。
+
+---
+
 ### 14:40（11-13） | Claude Code | `docs/agents/CHANGELOG.md`（仅记录） | 合并后 eval 验收 5/6，唯一 FAIL 是关键词拼写 | 记录合并后的真实验收状态
 
 - main `6615f10`（含 `claude/rerank-tune`）已在 8000 启动，4 个知识库 BM25 预热完成。
