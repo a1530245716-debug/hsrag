@@ -12,6 +12,8 @@ import json, math, os, re, threading, difflib
 from pathlib import Path
 from collections import Counter
 
+import numpy as np
+
 try:
     import jieba
     jieba.initialize()
@@ -253,7 +255,7 @@ class BM25:
     def __init__(self, k1=1.5, b=0.75):
         self.k1, self.b = k1, b
         self.docs = []        # (id, path, chunk, text)
-        self.tf_list = []     # 预计算的每块词频,避免每次 query 重建 Counter
+        self.tf_list = []     # 预计算的每块词频(建倒排后释放)
         self.df = Counter()
         self.lens = []
         self.boosts = []      # 每块的权威权重(乘在得分上)
@@ -261,6 +263,19 @@ class BM25:
         self.path_toks = []   # 每块所属文件名的分词(用于"文件名命中"加权)
         self.N = 0
         self.avgdl = 0.0
+        # 倒排索引: 只给查询词命中的块打分, 避免每次查询扫全部 N 块(全程持 GIL)
+        self._post = {}          # term -> (start, end), 切 _post_idx/_post_tf
+        self._post_idx = None    # int32[entries] 命中的块下标
+        self._post_tf = None     # float32[entries] 该词在块内词频
+        self._dl_term = None     # float64[N] b*dl/avgdl
+        self._boosts_arr = None  # float64[N]
+        self._suppress_arr = None
+        self._path_ids = None    # int32[N] 每块所属路径的编号
+        self._paths_unique = []  # 去重路径(文件名加权按路径算一次)
+        self._path_toks_by_id = []
+        self._path_docs = []     # 路径编号 -> 该文件的块下标列表
+        self._path_id = {}       # 路径 -> 编号
+        self._build_guard = threading.Lock()
 
     def add(self, doc_id, path, chunk, text, extra_boost=1.0):
         toks = tokenize(text)
@@ -281,62 +296,154 @@ class BM25:
             self.df[w] += 1
 
     def build(self):
-        self.N = len(self.tf_list)
-        if self.N:
-            self.avgdl = sum(self.lens) / self.N
+        with self._build_guard:
+            if self._post_idx is not None:
+                return
+            self.N = len(self.tf_list)
+            if self.N:
+                self.avgdl = sum(self.lens) / self.N
+            if self.avgdl <= 0:
+                self.avgdl = 1.0
+            self._build_postings()
+
+    def _build_postings(self):
+        """把 tf_list 压成 CSR 倒排, 并预计算查询用定长数组。
+
+        不落盘、不改 chunks.jsonl: 词表与 posting 全部从内存词频表构建。
+        构建完释放 tf_list(5.6 万块约 330MB), 查询只触碰命中词的 posting,
+        不再对全部 N 块做纯 Python 循环(那会全程持 GIL, 拖慢事件循环)。
+        """
+        if self.N == 0:
+            self._post = {}
+            self._post_idx = np.empty(0, dtype=np.int32)
+            self._post_tf = np.empty(0, dtype=np.float32)
+            self._dl_term = np.empty(0, dtype=np.float64)
+            self._boosts_arr = np.empty(0, dtype=np.float64)
+            self._suppress_arr = np.empty(0, dtype=np.float64)
+            self._path_ids = np.empty(0, dtype=np.int32)
+            return
+
+        # df[w] 就是词 w 的 posting 数(每块内同一个词只记一次)
+        starts = {}
+        p = 0
+        for w, cnt in self.df.items():
+            starts[w] = p
+            p += int(cnt)
+        idx = np.empty(p, dtype=np.int32)
+        tfv = np.empty(p, dtype=np.float32)
+        cursor = dict(starts)
+        for i, tf in enumerate(self.tf_list):
+            for w, f in tf.items():
+                q = cursor[w]
+                idx[q] = i
+                tfv[q] = f
+                cursor[w] = q + 1
+        self._post = {w: (s, s + int(self.df[w])) for w, s in starts.items()}
+        self._post_idx = idx
+        self._post_tf = tfv
+
+        lens = np.asarray(self.lens, dtype=np.float64)
+        # 保持与旧实现相同的运算顺序: denom = f + k1*(1 - b + b*dl/avgdl)
+        self._dl_term = self.b * lens / self.avgdl
+        self._boosts_arr = np.asarray(self.boosts, dtype=np.float64)
+        self._suppress_arr = np.asarray(self.suppress, dtype=np.float64)
+
+        # 同一文件的所有块共享路径权重, 所以按"去重路径"算一次
+        self._paths_unique = []
+        self._path_toks_by_id = []
+        self._path_docs = []
+        self._path_id = {}
+        pid = np.empty(self.N, dtype=np.int32)
+        for i, d in enumerate(self.docs):
+            path = d[1]
+            j = self._path_id.get(path)
+            if j is None:
+                j = len(self._paths_unique)
+                self._path_id[path] = j
+                self._paths_unique.append(path)
+                self._path_toks_by_id.append(self.path_toks[i])
+                self._path_docs.append([])
+            pid[i] = j
+            self._path_docs[j].append(i)
+        self._path_ids = pid
+        self.tf_list = []      # 倒排已包含词频, 释放约 330MB
+
+    def _path_factors(self, q, qcnt):
+        """每条去重路径的两个文件名加权系数(每查一次算 270 条左右)。
+
+        拆成"词重叠"和"逐字命中"两个数组, 是为了让乘法顺序与旧实现一致,
+        保证 top-k 逐位相同(否则浮点结合律差异会让近分并列的块换位)。
+        """
+        n = len(self._paths_unique)
+        tok_f = np.ones(n, dtype=np.float64)
+        name_f = np.ones(n, dtype=np.float64)
+        name_hit = _path_phrase_hits(q, self._paths_unique)
+        keys = qcnt.keys()
+        nq = len(qcnt) or 1
+        for pid, path in enumerate(self._paths_unique):
+            pt = self._path_toks_by_id[pid]
+            if pt:
+                ov = keys & pt
+                if ov:
+                    ratio = len(ov) / nq
+                    if ratio >= _PATH_HIT_MIN:
+                        tok_f[pid] = 1.0 + (_PATH_HIT_GAIN - 1.0) * ratio
+            hit = name_hit.get(path)
+            if hit:
+                name_f[pid] = min(3.0, 1.0 + 0.4 * (hit[0] - _NAME_PHRASE_MIN + 1)
+                                  + 0.1 * min(hit[1], 5))
+        return tok_f, name_f
 
     def query(self, q, topk=8):
+        if self._post_idx is None:
+            self.build()
         qcnt = Counter(tokenize(q))
-        if self.N == 0:
+        if self.N == 0 or not qcnt:
             return []
-        b, k1, N, avgdl = self.b, self.k1, self.N, self.avgdl
+
+        scores = np.zeros(self.N, dtype=np.float64)
+        idxs = self._post_idx
+        tfs = self._post_tf
+        dl_term = self._dl_term
         df = self.df
-        scores = []
-        tfs = self.tf_list
-        lens = self.lens
-        boosts = self.boosts
-        sup = self.suppress
-        ptx = self.path_toks
+        N = self.N
+        k1, b, k1p1 = self.k1, self.b, self.k1 + 1.0
+        for w in qcnt:
+            rng = self._post.get(w)
+            if rng is None:
+                continue
+            a, z = rng
+            d = int(df[w])
+            idf = math.log((N - d + 0.5) / (d + 0.5) + 1)
+            ii = idxs[a:z]
+            ff = tfs[a:z].astype(np.float64)
+            # 与旧实现同序: denom = f + k1*(1 - b + b*dl/avgdl)
+            denom = ff + k1 * (1.0 - b + dl_term[ii])
+            scores[ii] += idf * (ff * k1p1) / denom
+
+        cand = np.flatnonzero(scores > 0)
+        if cand.size == 0:
+            return []
         # 用户明确在问"清单/台账/配置表"时，不再压制这类文档：
         # 他要的就是那份清单，压制等于答"没找到"
         exempt = _list_exempt(q)
-        # 文件名逐字命中（见 _path_phrase_hits 上方说明）
-        name_hit = _path_phrase_hits(q, {d[1] for d in self.docs})
-        for i in range(N):
-            tf = tfs[i]
-            s = 0.0
-            dl = lens[i]
-            for w, qw in qcnt.items():
-                f = tf.get(w, 0)
-                if not f:
-                    continue
-                idf = math.log((N - df[w] + 0.5) / (df[w] + 0.5) + 1)
-                denom = f + k1 * (1 - b + b * dl / avgdl)
-                s += idf * (f * (k1 + 1)) / (denom or 1)
-            if s:
-                w = boosts[i]
-                if not exempt:
-                    w *= sup[i]
-                # 文件名命中加权
-                pt = ptx[i]
-                if pt:
-                    ov = qcnt.keys() & pt
-                    if ov:
-                        ratio = len(ov) / len(qcnt)
-                        if ratio >= _PATH_HIT_MIN:
-                            w *= 1.0 + (_PATH_HIT_GAIN - 1.0) * ratio
-                # 文件名逐字命中（"环境信息"直接出现在文件名里）
-                if name_hit:
-                    hit = name_hit.get(self.docs[i][1])
-                    if hit:
-                        w *= min(3.0, 1.0 + 0.4 * (hit[0] - _NAME_PHRASE_MIN + 1)
-                                 + 0.1 * min(hit[1], 5))
-                scores.append((s * w, i))
-        scores.sort(key=lambda x: -x[0])
+        tok_f, name_f = self._path_factors(q, qcnt)
+        pi = self._path_ids[cand]
+        factor = self._boosts_arr[cand].copy()
+        if not exempt:
+            factor *= self._suppress_arr[cand]
+        factor *= tok_f[pi]
+        factor *= name_f[pi]
+        final = scores[cand] * factor
+
+        k = min(topk, cand.size)
+        order = np.argsort(-final, kind="stable")[:k]
         out = []
-        for score, i in scores[:topk]:
+        for j in order:
+            score = float(final[j])
             if score <= 0:
                 break
+            i = int(cand[j])
             id_, path, chunk, text = self.docs[i]
             out.append({"score": round(score, 3), "id": id_, "path": path,
                         "chunk": chunk, "text": text})
@@ -349,7 +456,7 @@ class BM25:
         更强的文档挤到 15 名开外；这里把它们单独拎出来，交给上层保留固定引用位，
         避免"库里明明有、答案却说没找到"。
         """
-        hits = _path_phrase_hits(q, {d[1] for d in self.docs})
+        hits = _path_phrase_hits(q, self._paths_unique)
         if not hits:
             return []
         qtoks = [t for t in set(tokenize(q)) if t]
@@ -357,9 +464,7 @@ class BM25:
         ranked = sorted(hits.items(), key=lambda kv: (-kv[1][0], -kv[1][1]))
         for path, _hit in ranked[:max_docs]:
             scored = []
-            for i in range(self.N):
-                if self.docs[i][1] != path:
-                    continue
+            for i in self._path_docs[self._path_id[path]]:
                 text = self.docs[i][3]
                 cnt = sum(text.count(t) for t in qtoks)
                 # 《XXX环境信息.txt》这种文件，值钱的是带 IP / 账号密码的那几段，

@@ -24,8 +24,11 @@ except Exception:
 _INT8_DIR = Path(__file__).parent.parent / "models" / "bge-reranker-base-int8-onnx"
 _FP32_DIR = Path(__file__).parent.parent / "models" / "bge-reranker-base-onnx"
 
-RERANK_CONCURRENCY = 2          # 同时允许的推理数(超出排队)
-RERANK_SLOT_TIMEOUT = 120.0     # 排队等位最久(秒), 超时放弃重排(降级为 BM25 排序)
+# 16 vCPU 实测(int8, 24 候选/次): 默认线程 + 并发 1 = 0.30-0.32 job/s,
+# 并发 2 = 0.28 job/s 且单请求耗时翻倍(intra=2/并发4 只有 0.19)。
+# 单次推理已吃满核, 加并发只会让所有人排队更久。
+RERANK_CONCURRENCY = 1          # 同时允许的推理数(超出排队)
+RERANK_SLOT_TIMEOUT = 10.0      # 排队等位最久(秒), 超时放弃重排(降级为 BM25 排序)
 _SESS = None
 _SESS_LOCK = threading.Lock()
 _SLOT = None                    # 懒初始化 BoundedSemaphore

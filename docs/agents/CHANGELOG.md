@@ -46,6 +46,45 @@
 
 **交接**：合并前两边各自 `git commit`，由人在主目录 `git merge`。
 冲突处理原则：「只改自己负责的文件；两边都要改同一文件时，先合一个，另一个基于新 main 改」。
+---
+
+### 13:35（11-13） | Claude Code | `app/kb.py`、`app/embeddings.py`、`app/rerank.py` | BM25 倒排索引、向量 mmap（兼容重建）、重排并发调参 | 落实 `09-并发重构方案` 中分给 Claude Code 的三项，数据依据见 INBOX 13:35 条
+
+**`app/kb.py` — BM25 倒排索引（公共 API 完全不变）**
+
+- `BM25.build()` 从已有 `tf_list` 构建内存 CSR 倒排：`term -> [start,end)` 切
+  `_post_idx(int32)` / `_post_tf(float32)`，查询只遍历命中词的 posting。
+- 路径加权（文件名词重叠、逐字命中、权威/降权、版本权重）改为按 **270 个去重路径** 算一次，
+  再按 `_path_ids` 向量化；`name_hit` 不再每次重建 5.6 万条 path set。
+- 建完释放 `tf_list`（实测 5.6 万块约 330MB），倒排本身约 24MB。
+- `query/name_hits/search/hybrid_search` 签名与返回结构不变，RAG-Agent 无需改调用。
+- 运算顺序刻意与旧实现保持一致，实测 **12 条查询 top-20 逐位相同、分数 max diff = 0.0**；
+  查询耗时 75–172ms → 1.6–7.0ms（20–49 倍）。
+
+**`app/embeddings.py` — 向量 mmap**
+
+- `load_vectors` 改为 `np.load(..., mmap_mode="r")`，不再常驻 100MB+ 全量数组；
+  `search_vectors` 每查询「打开 → matmul → 关闭」，meta 按 mtime 缓存。
+- 原因：Windows 上已打开的 memmap 会让 `os.replace` 失败（实测 WinError 5）。
+  为避免 `ensure_vectors` / 手动 `build_vectors.py` 重建被阻塞，改成不长期持有映射。
+- 每 kb 一把写者优先读写锁：查询可并行，替换 `vectors.npy` 时独占；
+  `save_vectors` 的 replace 加 6×0.2s 重试，覆盖跨进程手动重建的毫秒窗口。
+- 实测：8 读线程 + 15 次并发重建，946 次查询 0 错误；替换后立即可读到新向量。
+
+**`app/rerank.py` — 并发与排队超时**
+
+- `RERANK_CONCURRENCY 2 → 1`；`RERANK_SLOT_TIMEOUT 120 → 10s`（过载快速降级为 BM25 排序）。
+- 16 vCPU 实测：默认线程+并发1 = 0.30–0.32 job/s；并发2 = 0.28 且单请求耗时翻倍；
+  `intra_op_num_threads=2` 的方案实测更差（0.19），故未采用。
+
+**未做 / 待确认**
+
+- `eval/run_eval.py` 未跑：脚本 hardcode `BASE=http://127.0.0.1:8000`（主服务），
+  且会写共享数据。需人给一个窗口，用临时副本指向 8012 再跑。
+- 「候选数 24→16」收益最大（吞吐 +50%），但改在 `hybrid_search`（RAG-Agent 查询侧），
+  已在 INBOX 建议，未擅自改。
+
+---
 
 ### 17:05（11-12） | RAG-Agent | 新增 `docs/ai-fde/09-并发重构方案.md`；清理 5 个死代码脚本 + 1 个空目录 | 人要求把后续重构方案落盘到工作目录，并清理废案以免干扰其它 agent
 
