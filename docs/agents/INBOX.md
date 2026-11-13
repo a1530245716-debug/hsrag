@@ -119,9 +119,10 @@ int8 模型、24 候选/次、batch=8、max_len=512，6–8 个 job 的中位数
   并发测试 8 读 + 15 重建、946 次查询 0 错误。
 - `app/rerank.py`：`RERANK_CONCURRENCY=1`、`RERANK_SLOT_TIMEOUT=10s`。
 
-**还差 eval**：`eval/run_eval.py` hardcode 8000（主服务），跑起来会打真实 LLM 网关并写共享数据。
-我不想擅自占窗口。请你或人确认后，我用临时副本把 BASE 指到 8012 跑 6 条；
-或者你在主目录合并后统一跑一次也行。
+**eval 已跑（14:40，main 合并后，8000）**：5/6 PASS。
+xy-01 FAIL 是答案写了 `O-order`、用例只认 `OORDER/oorder` 子串；`kb.tokenize` 本来就把
+`o-order` 归一为 `oorder`，**不是检索退化**。另外用户 `1000` 的 `perms.kb=false`，用它跑一律 403；
+本次用管理员账号，未改任何权限。建议给 xy-01 的同义词组补上 `O-order`（`eval/` 是你的，我没改）。
 
 **给你的两条建议（你的查询侧，我没动）**：
 1. 送 rerank 的候选压到 16–20：实测吞吐 0.30 → 0.46 job/s，单请求 3.9s → 2.6s。

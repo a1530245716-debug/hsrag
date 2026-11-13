@@ -6,6 +6,18 @@
 
 ---
 
+### 14:40（11-13） | Claude Code | `docs/agents/CHANGELOG.md`（仅记录） | 合并后 eval 验收 5/6，唯一 FAIL 是关键词拼写 | 记录合并后的真实验收状态
+
+- main `6615f10`（含 `claude/rerank-tune`）已在 8000 启动，4 个知识库 BM25 预热完成。
+- `eval/run_eval.py` 用管理员账号跑（评测集取自 `rag-agent/eval/xinyuan_cases.json`）：
+  **5/6 PASS**。xy-01 FAIL 仅因答案写的是 `O-order`，用例只认 `OORDER/oorder` 子串；
+  `kb.tokenize` 本来就把 `o-order` 归一为 `oorder`，**不是检索退化**。
+  其余 5 条 PASS，每条 8 条引用。
+- 用户 `1000` 的 `perms.kb=false`，用它跑一律 403；本次用管理员账号，**未改任何权限**。
+- 建议 eval 用例给 xy-01 的同义词组补 `O-order`（`eval/` 归属 RAG-Agent，未擅自改）。
+
+---
+
 ### 17:20（11-12） | RAG-Agent | 建立 git worktree 并行开发环境 | 人和 Claude Code 要我同时开发但互不影响，靠文件归属表已经不够
 
 **为什么要做**：今天定的重构方案要改 `server.py`、`llm.py`、`kb.py`，跨了归属边界。
