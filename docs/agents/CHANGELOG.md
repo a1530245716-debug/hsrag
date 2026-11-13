@@ -6,6 +6,48 @@
 
 ---
 
+### 18:25（11-13） | RAG-Agent | 8000 生产合并并重启：阶段 1 + 阶段 2 + Claude Code 索引队列全部上线 | 人同意重启，确认三个分支改动一次性生效
+
+### 做了什么
+
+1. `git merge agent/phase1-limit` 到 main（**无冲突**），带入：
+   - 阶段 1：三层限流 + 429 + `Retry-After`、`/api/health` 改 async
+   - 阶段 2：`llm.chat_async` / `stream_async` + 共享 `AsyncClient`、SSE 异步生成器
+   - 接入：`enqueue_index` / `/index/status` 路由 / `recover_index_statuses` / health 加 `embeddings`
+   - Claude Code 的 `claude/rerank-tune`（索引队列、向量一致性校验、建索引内存峰值）
+
+2. 重启 8000（旧 pid 42980 → 新 pid 48484）。重启前确认：
+   - main 工作区干净
+   - `app/data/*/index_status.json` 里 **0 个** running/queued 任务（不会打断索引）
+
+### 重启前验证
+
+- `py_compile` 全部通过：server / llm / kb / indexer / embeddings / rerank / planner
+- 六个关键 API 全部存在：`enqueue_index` / `get_index_status` / `recover_index_statuses`
+  / `cached_consistency_report` / `chat_async` / `stream_async`
+
+### 重启后验证
+
+| 项 | 结果 |
+|---|---|
+| `/api/health` | 200，限流配置 `20 / 2 / 60` 生效，`embeddings` 字段存在 |
+| 索引状态路由 | 两个库返回 `idle` |
+| 异步 SSE | HTTP 200，正常出流 |
+| **评测（跑在 8000 上）** | **6/6 全通过** |
+
+评测六条耗时：20 / 9 / 19 / 20 / 13 / 10 秒，都带 8 条引用。
+
+### 一个需要注意的地方
+
+8000 现在跑的是**单进程**。`_ask_global_active` 等限流计数在进程内存里，
+重启会清零——这是预期行为（阶段 4 状态外置才解决）。
+
+### 还没做的
+
+`app/rerank.py` 的 `RERANK_SLOT_TIMEOUT = 10.0` 未改（Claude Code 归属）。
+20 并发时 19 个请求白等 10 秒后降级，仍是首字延迟的最大单一贡献（约 10/15 秒）。
+已两次在 INBOX 提出，等它处理。
+
 ### 16:55（11-13） | RAG-Agent | 接入 Claude Code 的索引队列 API（三处）+ 合并 claude/rerank-tune | 按 INBOX 16:25 交办事项接入并验收
 
 ### 三处接入（都在 `app/server.py`，按 Claude Code 在 INBOX 16:25 的要求）
