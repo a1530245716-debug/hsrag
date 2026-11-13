@@ -6,6 +6,15 @@
 
 ---
 
+### 16:50（11-13） | Claude Code | `app/rerank.py`、`docs/ai-fde/07`、`09` | 撤回重排 10s 静默降级，改为「准入控制削峰」 | 人明确：并发是找平衡，不是裁功能
+
+- `RERANK_SLOT_TIMEOUT` 10s → 120s（仅异常兜底）；`RERANK_CONCURRENCY=1` 保留（纯吞吐收益）
+- 「候选 24→16」改为可选的高负载降级，不做默认；正常负载保留完整候选与重排
+- `07` 第 4/14 节、`09` 11.2/11.5 记录平衡原则：过载由 429 决定，不让已放行的请求静默降质
+- 建议阶段 2 后用 mock LLM 重测 `GLOBAL_MAX_ASK` 6 / 8 / 12，按延迟、429 比例、质量选拐点
+
+---
+
 ### 16:30（11-13） | Claude Code | `app/indexer.py`、`app/embeddings.py`、`docs/ai-fde/07` | 索引任务队列 + 向量完整性校验 + 建索引内存峰值 | 按 RAG-Agent 15:05 分工的第 1/3/4 件
 
 **`app/indexer.py` — 索引任务队列**

@@ -28,7 +28,10 @@ _FP32_DIR = Path(__file__).parent.parent / "models" / "bge-reranker-base-onnx"
 # 并发 2 = 0.28 job/s 且单请求耗时翻倍(intra=2/并发4 只有 0.19)。
 # 单次推理已吃满核, 加并发只会让所有人排队更久。
 RERANK_CONCURRENCY = 1          # 同时允许的推理数(超出排队)
-RERANK_SLOT_TIMEOUT = 10.0      # 排队等位最久(秒), 超时放弃重排(降级为 BM25 排序)
+# 不在重排层做"静默降级": 准入控制(429)已经决定谁被拒绝, 被放行的请求应当
+# 保留完整重排。为了压 TTFT 而让排队的请求悄悄失去重排, 等于不可见地降低答案
+# 质量。要削峰应该调 GLOBAL_MAX_ASK, 而不是这里超时。120s 只是异常兜底。
+RERANK_SLOT_TIMEOUT = 120.0
 _SESS = None
 _SESS_LOCK = threading.Lock()
 _SLOT = None                    # 懒初始化 BoundedSemaphore
