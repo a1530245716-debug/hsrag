@@ -1,0 +1,80 @@
+{
+  "name": "鑫元基金项目 - 核心问答评测集",
+  "kb_id": "20261019_121148_5a7a33",
+  "kb_name": "鑫元基金项目",
+  "note": "从 eval/results/20261105_135909.json 的历史记录恢复。问题、min_len、关键词分组与原版一致；expect 文字按 README 的考察点重写。",
+  "cases": [
+    {
+      "id": "xy-01",
+      "topic": "项目认知",
+      "question": "我是一个刚接手项目的小白，这个项目目前是什么进展，这个项目的内容是什么。",
+      "expect": "要讲清楚三件事：项目由哪些系统组成（OTRADE、OORDER 都要提到）、各自定位、以及当前进展到哪一步（上线/投产/验收）。只说进度不报系统构成就算不合格——这正是历史 FAIL 的原因。",
+      "must_include_any": [
+        ["OTRADE", "otrade"],
+        ["OORDER", "oorder"],
+        ["上线", "投产", "验收", "实施"]
+      ],
+      "min_len": 500
+    },
+    {
+      "id": "xy-02",
+      "topic": "系统关系",
+      "question": "项目里面的otrade和oorder是什么，之间什么联系。",
+      "expect": "分别说明 OTRADE 和 OORDER 的定位，并讲清两者怎么连通（HIX 网关/对接方式）。只说一个、或讲了两个但不说关系，都不合格。",
+      "must_include_any": [
+        ["OTRADE", "otrade"],
+        ["OORDER", "oorder"],
+        ["HIX", "hix", "网关", "对接"]
+      ],
+      "min_len": 300
+    },
+    {
+      "id": "xy-03",
+      "topic": "部署升级-OTRADE",
+      "question": "otrade的部署和升级需要注意什么，准备什么？",
+      "expect": "要覆盖部署/安装准备、升级/补丁注意事项，以及依赖组件（Zookeeper、Redis、RabbitMQ、JDK、数据库之类）。只泛泛说'按手册来'不算。",
+      "must_include_any": [
+        ["部署", "安装"],
+        ["升级", "补丁"],
+        ["Zookeeper", "Redis", "RabbitMQ", "JDK", "数据库"]
+      ],
+      "min_len": 500
+    },
+    {
+      "id": "xy-04",
+      "topic": "部署升级-OORDER",
+      "question": "oorder的部署和升级需要注意什么，准备什么？",
+      "expect": "OORDER 自己的部署升级要点，不能照搬 OTRADE 的答案——回答里必须明确针对 OORDER。",
+      "must_include_any": [
+        ["部署", "安装"],
+        ["升级", "补丁"],
+        ["OORDER", "oorder"]
+      ],
+      "min_len": 500
+    },
+    {
+      "id": "xy-05",
+      "topic": "环境信息",
+      "question": "客户的环境信息是什么，我需要知道测试环境和生产环境，o32，otrade，oorder的环境信息。",
+      "expect": "给出具体的环境区分（测试/生产）和 IP 地址，至少要落到 O32。只说要查手册、不给具体信息，不合格。",
+      "must_include_any": [
+        ["172.", "10.", "IP"],
+        ["测试环境", "生产环境"],
+        ["o32", "O32"]
+      ],
+      "min_len": 300
+    },
+    {
+      "id": "xy-06",
+      "topic": "操作流程",
+      "question": "otrade升级的流程是什么样的",
+      "expect": "按步骤说升级流程：发布物/版本准备、参数配置确认、执行升级。顺序错乱或只列清单不说是流程，都不合格。",
+      "must_include_any": [
+        ["升级"],
+        ["发布物", "部署", "版本", "补丁"],
+        ["参数", "配置", "确认"]
+      ],
+      "min_len": 300
+    }
+  ]
+}

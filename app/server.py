@@ -8,6 +8,8 @@
 - 静态 /    :轻量单页前端
 """
 import base64, html as _html, os, re, sys, shutil, threading, time, urllib.parse
+import asyncio
+import contextlib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -66,6 +68,300 @@ _IMGIDX_LOCK = threading.Lock()
 # 答案配图的匹配（含模型看图核对）比较慢，扔到这个池里算，别占着请求线程
 _FIG_POOL = ThreadPoolExecutor(max_workers=4)
 _IMGIDX_STATE = {}      # kb_id -> {"running":bool, "msg":str, "ts":float}
+
+
+# ---------------- 问答限流（三层） ----------------
+# 为什么要有这个：一次提问会串行跑「改写 → 拆解 → 检索 → 生成」，
+# 全程占着一个线程池线程（uvicorn 默认 40 个），跑完要 10~90 秒。
+# 没有上限时，50 并发排队能排到 170 秒，连 /api/health 都被拖慢到 2 秒。
+#
+# 三层：
+#   全局   —— 同时进行的问答数。公司网关每把 Key 约 2 路并发（实测 30 并发就 429），
+#             所以这里留余量设 20，宁可早拒绝也别把网关打爆。
+#   每用户 —— 一个人连点几下不该挤掉别人。
+#   每 IP  —— 防止共享账号被当成压测工具。
+#
+# 超限一律立刻返回 429 + Retry-After，**不排队**。用户重试比干等 3 分钟好。
+# 依据 docs/ai-fde/03-目标架构与数据权限.md:129-130、09-并发重构方案.md 阶段 1。
+
+_ASK_LIMIT_CFG = {
+    "global_max": 20,       # 全局同时进行的问答数
+    "per_user_max": 2,      # 单用户同时进行的问答数
+    "per_ip_per_min": 60,   # 单 IP 每分钟问答次数
+    "retry_after": 5,       # 429 里告诉客户端等几秒
+}
+
+# 全局用纯计数器而不是 asyncio.Semaphore：
+# 信号量一旦因为客户端断开没释放，计数就永远回不来，只能重启服务。
+# 用整数 + 锁，超时回收时能直接把计数改对。
+_ask_global_active = 0
+_ask_user_active = {}       # user_id -> 正在进行的问答数
+_ask_ip_hits = {}           # ip -> [时间戳,...]（只保留 60 秒内的）
+_ask_lock = threading.Lock()  # 保护上面三个
+
+
+def _clip(v, lo, hi, default):
+    try:
+        n = int(v)
+    except Exception:
+        return default
+    return max(lo, min(hi, n))
+
+
+def _load_ask_limits():
+    """从配置文件读限流参数，读不到就用默认值。
+
+    配置写在 app/config.json 的 "ask_limits" 段，例如：
+        "ask_limits": {"global_max": 20, "per_user_max": 2, "per_ip_per_min": 60}
+    """
+    try:
+        cfg = llm.load_config().get("ask_limits") or {}
+    except Exception:
+        cfg = {}
+    _ASK_LIMIT_CFG["global_max"] = _clip(cfg.get("global_max"), 1, 500, 20)
+    _ASK_LIMIT_CFG["per_user_max"] = _clip(cfg.get("per_user_max"), 1, 50, 2)
+    _ASK_LIMIT_CFG["per_ip_per_min"] = _clip(cfg.get("per_ip_per_min"), 1, 10000, 60)
+    _ASK_LIMIT_CFG["retry_after"] = _clip(cfg.get("retry_after"), 1, 300, 5)
+    return dict(_ASK_LIMIT_CFG)
+
+
+# 模块加载时就应用配置（必须在 _ASK_LIMIT_CFG 定义之后）
+_load_ask_limits()
+
+
+def _ask_global_inc():
+    """占一个全局名额。满了返回 False（不排队）。"""
+    global _ask_global_active
+    with _ask_lock:
+        if _ask_global_active >= _ASK_LIMIT_CFG["global_max"]:
+            return False, _ask_global_active
+        _ask_global_active += 1
+        return True, _ask_global_active
+
+
+def _ask_global_dec():
+    global _ask_global_active
+    with _ask_lock:
+        if _ask_global_active > 0:
+            _ask_global_active -= 1
+        return _ask_global_active
+
+
+def _client_ip(request):
+    """取客户端 IP。内网部署常走 Nginx，优先 X-Forwarded-For 第一段。"""
+    try:
+        xff = request.headers.get("x-forwarded-for") or ""
+        if xff:
+            return xff.split(",")[0].strip() or "unknown"
+        return (request.client.host if request.client else "") or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def _ask_ip_hit(ip):
+    """记一次 IP 访问并判断是否超频。返回 (allowed, 已用次数, 上限)。"""
+    now = time.time()
+    limit = _ASK_LIMIT_CFG["per_ip_per_min"]
+    with _ask_lock:
+        arr = _ask_ip_hits.get(ip)
+        if arr is None:
+            arr = []
+            _ask_ip_hits[ip] = arr
+        # 滑窗：丢掉 60 秒前的记录
+        cut = now - 60
+        if arr and arr[0] < cut:
+            arr[:] = [t for t in arr if t >= cut]
+        if len(arr) >= limit:
+            return False, len(arr), limit
+        arr.append(now)
+        # 顺手清理长期不用的 IP，避免 dict 无限涨
+        if len(_ask_ip_hits) > 2048:
+            for k in [k for k, v in _ask_ip_hits.items() if not v or v[-1] < cut]:
+                _ask_ip_hits.pop(k, None)
+    return True, len(arr), limit
+
+
+def _ask_user_inc(uid):
+    """占一个用户名额。成功返回 True。"""
+    with _ask_lock:
+        n = _ask_user_active.get(uid, 0)
+        if n >= _ASK_LIMIT_CFG["per_user_max"]:
+            return False, n
+        _ask_user_active[uid] = n + 1
+        return True, n + 1
+
+
+def _ask_user_dec(uid):
+    with _ask_lock:
+        n = _ask_user_active.get(uid, 0)
+        if n <= 1:
+            _ask_user_active.pop(uid, None)
+        else:
+            _ask_user_active[uid] = n - 1
+
+
+# 泄漏兜底：每个占住的名额登记开始时间，超时强制回收。
+#
+# 为什么必须有：客户端中途断开（关浏览器、网络断、read 到一半取消）时，
+# 同步生成器在 yield 处被丢弃，finally 不一定执行，名额就收不回来。
+# 实测：用 read(64) 只读一小段就断开，2 个名额一直没还回来。
+#
+# 那个 600 秒太长了——真出问题用户要等 10 分钟。正常问答最长 90 秒
+#（llm.total_timeout），留一倍余量设 180 秒：正常请求永远够用，
+# 异常断开两分钟内必定回收。
+ASK_SLOT_MAX_HOLD = 180     # 秒
+_ask_slots = {}             # slot_id(int) -> (uid, 开始时间)
+_next_slot_id = [0]
+
+
+def _slot_register(uid):
+    """登记一个名额，返回 id。"""
+    with _ask_lock:
+        _next_slot_id[0] += 1
+        sid = _next_slot_id[0]
+        _ask_slots[sid] = (uid, time.time())
+        return sid
+
+
+def _slot_gc():
+    """回收超时名额（客户端断开导致的泄漏）。返回回收了几个。
+
+    两个触发点：
+      1. 每次新请求进来时顺带跑一次（_acquire_ask_slot）——保证总有请求时能自愈
+      2. 后台线程每 30 秒跑一次（_start_slot_gc_thread）——没人提问时也能回收
+    """
+    global _ask_global_active
+    now = time.time()
+    with _ask_lock:
+        dead = [(s, u, t) for s, (u, t) in _ask_slots.items()
+                if now - t > ASK_SLOT_MAX_HOLD]
+        for sid, u, started in dead:
+            _ask_slots.pop(sid, None)
+            n = _ask_user_active.get(u, 0)
+            if n <= 1:
+                _ask_user_active.pop(u, None)
+            else:
+                _ask_user_active[u] = n - 1
+            if _ask_global_active > 0:
+                _ask_global_active -= 1
+            print(f"[ask] 回收超时名额#{sid} user={u} 持有{int(now-started)}s",
+                  file=sys.stderr)
+        return len(dead)
+
+
+def _slot_unregister(sid):
+    """名额被正常释放时，把它从登记表摘掉。"""
+    with _ask_lock:
+        _ask_slots.pop(sid, None)
+
+
+_slot_gc_started = [False]
+
+
+def _start_slot_gc_thread():
+    """起一个每 30 秒回收一次的后台线程。
+
+    为什么不用 asyncio 定时任务：服务器可能在没有事件循环的地方被导入
+    （脚本、测试），线程更稳，而且 _ask_lock 本来就是线程锁。
+    """
+    if _slot_gc_started[0]:
+        return
+    _slot_gc_started[0] = True
+
+    def loop():
+        while True:
+            time.sleep(30)
+            try:
+                _slot_gc()
+            except Exception as e:
+                print(f"[ask] 名额回收出错: {type(e).__name__}", file=sys.stderr)
+
+    threading.Thread(target=loop, daemon=True, name="ask-slot-gc").start()
+
+
+def _too_many(msg, wait=0):
+    """统一的 429 响应。带 Retry-After，前端据此提示"等几秒再试"。"""
+    wait = wait or _ASK_LIMIT_CFG["retry_after"]
+    return JSONResponse({"ok": False, "msg": msg, "retry_after": wait},
+                        status_code=429, headers={"Retry-After": str(wait)})
+
+
+async def _acquire_ask_slot(request):
+    """申请一个问答名额，返回释放函数。
+
+    三层依次判断，**任何一层不过都立刻抛 RateLimited**，不排队。
+    返回的 release() 必须在问答真正结束后调用。
+
+    为什么不是 async context manager：StreamingResponse 是懒执行的——
+    端点函数只负责把生成器交给 FastAPI，真正跑起来是后面的事。如果用
+    `async with` 包住 `return StreamingResponse(...)`，出块的瞬间名额就被释放了，
+    等于没限流（实测 5 并发全部放行就是这个原因）。
+    所以这里拆成 acquire / release 两步，由调用方在生成器里保证成对调用。
+    """
+    user = _current_user(request)
+    uid = (user or {}).get("id") or "anon"
+    ip = _client_ip(request)
+
+    # 每次新请求顺带回收超时名额（客户端断开导致的泄漏），不需要额外定时器
+    try:
+        _slot_gc()
+    except Exception:
+        pass
+
+    # 第 3 层：每 IP 频率（最先判，最便宜）
+    ok_ip, used, limit = _ask_ip_hit(ip)
+    if not ok_ip:
+        raise RateLimited(f"请求太频繁（每分钟上限 {limit} 次），请稍后再试。")
+
+    # 第 2 层：每用户并发
+    ok_u, n_u = _ask_user_inc(uid)
+    if not ok_u:
+        raise RateLimited(
+            f"你还有 {n_u} 个问题正在回答中，等它们结束后再问"
+            f"（每人同时 {_ASK_LIMIT_CFG['per_user_max']} 个）。")
+
+    # 第 1 层：全局并发（不排队，满就拒绝）
+    ok_g, n_g = _ask_global_inc()
+    if not ok_g:
+        _ask_user_dec(uid)
+        raise RateLimited(
+            f"系统繁忙（同时回答上限 {_ASK_LIMIT_CFG['global_max']} 个），请几秒后重试。")
+
+    # 名额到手，登记（客户端断开的兜底回收靠它）
+    sid = _slot_register(uid)
+    released = False
+
+    def release():
+        nonlocal released
+        if released:
+            return
+        released = True
+        _slot_unregister(sid)
+        _ask_global_dec()
+        _ask_user_dec(uid)
+
+    return release
+
+
+class RateLimited(Exception):
+    """限流拒绝。携带给用户看的提示文案。"""
+
+    def __init__(self, msg):
+        super().__init__(msg)
+        self.msg = msg
+
+
+def ask_limits_state():
+    """给管理员总览/健康检查看的实时状态。"""
+    with _ask_lock:
+        return {
+            "config": dict(_ASK_LIMIT_CFG),
+            "active_users": dict(_ask_user_active),
+            "active_total": _ask_global_active,
+            "slots_held": len(_ask_slots),
+            "tracked_ips": len(_ask_ip_hits),
+            "global_free": max(0, _ASK_LIMIT_CFG["global_max"] - _ask_global_active),
+        }
 
 
 def _refresh_image_index(kb_id: str):
@@ -2067,7 +2363,14 @@ def _build_ask_context(sources, q, history=None, answer_len="normal", images=Non
 
 
 @app.post("/api/kb/{kb_id}/ask/stream")
-def kb_ask_stream(kb_id: str, body: AskIn, request: Request):
+async def kb_ask_stream(kb_id: str, body: AskIn, request: Request):
+    """流式问答。
+
+    这个端点必须是 async：限流名额用的是 asyncio.Semaphore，同步端点里没有运行中的
+    事件循环，拿不到名额也就没法限流。端点本身只做"准入判断"，真正的问答逻辑仍然
+    放到线程池里跑（原来的 gen() 是同步生成器，一次占一个线程到回答结束）。
+    阶段 2 会把 gen() 本身改成异步，届时这里就不用再进线程池了。
+    """
     _u, err = _require_kb_perm(request)
     if err:
         return err
@@ -2076,6 +2379,42 @@ def kb_ask_stream(kb_id: str, body: AskIn, request: Request):
     kb_ = indexer.get_kb(kb_id)
     if not kb_:
         return JSONResponse({"ok": False, "msg": "知识库不存在"}, status_code=404)
+
+    # 轻量短路（寒暄/泛问/空问题）先判，不占限流名额——它们不调模型，几毫秒就返回。
+    # 只有真的要检索+生成时才去抢名额。
+    _q_probe = _strip_cmd((body.question or "").strip())
+    _cheap = (not _q_probe and not body.images) or \
+             (bool(_q_probe) and not body.images and
+              (_is_chitchat(_q_probe) or _is_generic_ask(_q_probe)))
+    if _cheap:
+        return await _run_ask_stream(kb_id, body, request, kb_, _json)
+
+    try:
+        _release = await _acquire_ask_slot(request)
+    except RateLimited as e:
+        return _too_many(e.msg)
+
+    # 名额要一直持有到流结束。StreamingResponse 是懒执行的，所以不能在这里
+    # release——那样流还没开始名额就还回去了。
+    #
+    # 用一个哨兵对象把 release 传进生成器，让 gen() 自己在 finally 里调用：
+    # 这样名额的生命周期和同步生成器完全一致，它结束（正常/异常/被 close）
+    # 就释放，不依赖 Starlette 外层会不会包对。
+    resp = await _run_ask_stream(kb_id, body, request, kb_, _json,
+                                 on_finish=_release)
+    return resp
+
+
+async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
+    """流式问答的真正实现（原 kb_ask_stream 的函数体）。
+
+    仍然是同步生成器 gen()：阶段 1 只做限流，不动内部逻辑。
+    阶段 2 会把它改造成 async 生成器 + AsyncClient，彻底不占线程池。
+
+    on_finish: 生成器结束（正常/异常/被关闭）时调用一次。用它在流末尾释放
+    限流名额——名额必须在"整条流都发完"之后才归还，放在端点函数里会提前释放。
+    """
+    from fastapi.responses import StreamingResponse
     q_raw = (body.question or "").strip()
     # 有人会把操作指令直接打进输入框：「开启上下文，那demo对应的uat账号呢」。
     # 这些词不是问题的一部分，混进检索会把相关片段稀释掉，先剥掉。
@@ -2097,6 +2436,18 @@ def kb_ask_stream(kb_id: str, body: AskIn, request: Request):
     has_img = bool(body.images)
 
     def gen():
+        try:
+            yield from _gen_body()
+        finally:
+            # 流结束/异常/被客户端关闭，都在这里归还限流名额。
+            # 放在最外层的 finally：无论内层怎么 return/raise 都会走到。
+            if on_finish is not None:
+                try:
+                    on_finish()
+                except Exception:
+                    pass
+
+    def _gen_body():
         _t_start = time.time()
         # 只贴图不写字也算有效提问：让模型看图说明就行，不要报"问题不能为空"
         if not q_raw and not has_img:
@@ -2412,13 +2763,20 @@ def kb_ask_stream(kb_id: str, body: AskIn, request: Request):
 
 
 @app.get("/api/health")
-def health():
+async def health():
+    """健康检查。
+
+    必须是 async def：同步端点会进线程池排队，问答高负载时线程被占满，
+    连这个探活接口都要等 2 秒（压测实测 100 并发时 P95=1985ms）。
+    这里只读几个内存变量，本来就是毫秒级，不该排在问答后面。
+    """
     return {"ok": True, "llm_configured": llm.llm_enabled(),
+            "ask": ask_limits_state(),
             "llm": llm.llm_settings() | {"api_key": "***" if llm.llm_settings()["api_key"] else ""}}
 
 
 @app.get("/api/warmup")
-def warmup_status():
+async def warmup_status():
     """启动预热进度（免登录）。前端轮询它显示进度条。"""
     with _WARMUP_LOCK:
         return {"ok": True, **dict(_WARMUP)}
@@ -2829,6 +3187,8 @@ def main():
     print(f"LLM 已配置: {llm.llm_enabled()} (model={llm.llm_settings().get('model')})")
     print(f"LLM 未配置 API Key 时也可用(仅返回检索片段)。key 配置: app/config.json 的 llm 段 或 环境变量 RAG_LLM_API_KEY")
     threading.Thread(target=preload_kbs, daemon=True).start()
+    # 限流名额的后台回收（客户端异常断开时靠它兜底）
+    _start_slot_gc_thread()
     uvicorn.run(app, host=host, port=port)
 
 
