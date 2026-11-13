@@ -6,6 +6,173 @@
 
 ---
 
+### 16:55（11-13） | RAG-Agent | 接入 Claude Code 的索引队列 API（三处）+ 合并 claude/rerank-tune | 按 INBOX 16:25 交办事项接入并验收
+
+### 三处接入（都在 `app/server.py`，按 Claude Code 在 INBOX 16:25 的要求）
+
+1. **`kb_index` 异步分支改用 `indexer.enqueue_index(kb_id)`**
+   原来是起一个裸 `threading.Thread` 直接跑 `index_kb`：没有队列、没有持久化状态、
+   服务重启就丢进度、失败不重试。现在交给 `indexer` 的单 worker 队列。
+   `sync=True` 分支保持直接跑不变（脚本/排障要同步拿结果）。
+
+2. **新增 `GET /api/kb/{kb_id}/index/status`**
+   返回 `indexer.get_index_status(kb_id)`，前端可轮询。
+   状态取值：`idle / queued / running / done / failed / interrupted`。
+   库不存在返回 404。
+
+3. **启动时恢复 + health 加向量一致性**
+   - `preload_kbs()` 最前面调 `indexer.recover_index_statuses()`：
+     上次没跑完的 `queued/running` 标成 `interrupted`，否则前端一直转圈。
+   - `/api/health` 增加 `embeddings` 字段，来自
+     `embeddings.cached_consistency_report()`。**只返回已算过的结果**，
+     探活路径不做文件 I/O——否则健康检查又变慢接口。
+
+### 合并 `claude/rerank-tune`
+
+Claude Code 说它的分支已含最新 main、等我阶段 2 提交后再合。阶段 2 已提交（`7791cd4`），
+故现在合并：`f34ab27`（索引队列 + 完整性校验 + 峰值观测）、`1178f2f`（INBOX caption 进度）。
+
+**冲突**：只有 `docs/agents/CHANGELOG.md`（双方都往顶部加条目）。
+解决方式：**两侧条目全保留**，我的在前、它的在后，只删冲突标记行，不删任何一篇内容。
+
+### 验证
+
+| 项 | 结果 |
+|---|---|
+| 接口可用性 | `enqueue_index` / `get_index_status` / `recover_index_statuses` / `cached_consistency_report` 全部 True |
+| 编译 | `server.py` AST 通过 |
+| `/api/health` | 200，`embeddings` 字段已生效（返回 `{}`，符合「只读已算过的」设计） |
+| 索引状态路由 | 两个库返回 `status=idle`；不存在的库返回 **404** |
+| 异步入队 | POST `/api/kb/{id}/index` 返回 `status=queued`（走队列，不是裸线程） |
+| 队列执行 | 1 秒后查状态为 `done`，`attempt=1` |
+| **评测** | **6/6** —— 历史最好成绩（基线一直是 5/6） |
+
+**xy-01 和 xy-03 这轮都 PASS**。xy-01 是 11-13 补同义词后转正的；
+xy-03 是已知波动项，本轮正常发挥。6/6 值得记一笔：说明当前代码在评测集上
+没有已知退化点。
+
+### 服务状态
+
+改动在 `rag-agent` worktree（分支 `agent/phase1-limit`），**8000 生产未重启**。
+注意：8000 现在跑的仍是旧 main 代码，不含本次合并与阶段 2，要生效需要合并到 main
+并重启（重启前请确认没有在跑的评测）。
+
+### 16:40（11-13） | RAG-Agent | 阶段 2 完成：LLM/SSE 异步化 | 同步 SSE 占线程池，并发越高越慢（50 并发首字 64.9s）
+
+**依据**：`docs/ai-fde/09-并发重构方案.md` 第四节、`07-技术笔记:14-21`
+
+### `app/llm.py` 新增异步层（同步版一个没删）
+
+- `get_async_client()`：按事件循环缓存的共享 `httpx.AsyncClient`，
+  `Limits(max_connections=100, max_keepalive_connections=50)`。
+  用 `id(loop)` 做键——AsyncClient 绑定 loop，uvicorn 重启/测试换 loop 会报
+  "Event loop is closed"。
+- `chat_async()` / `stream_async()`：与同步版一一对应，**重试语义完全一致**
+  （`chat` 最多 3 次；`stream` 只在"一个字都没吐出来"时重试，避免重复半截回答）。
+- `aclose_async_clients()`：进程退出时清理。
+- **回滚保证**：`chat()` / `stream()` / `_stream_anthropic()` / `_stream_openai()`
+  一行未动，异步版出问题立刻能切回。
+
+### `app/server.py`
+
+- `_run_ask_stream` 里新增 `_agen_body()`（异步生成器，311 行），
+  由 `_gen_body()` 用脚本机械复制后替换 4 处调用生成，避免手抄 300 行出错：
+  - 4 处 `for token in llm.stream(...)` → `async for token in llm.stream_async(...)`
+  - `kb.hybrid_search` / `_multi_search` → `await run_in_threadpool(...)`
+  - `planner.rewrite_query` / `planner.plan_queries` → 同样走线程池
+    （里面是 `httpx.post`，同步跑会阻塞事件循环）
+- `agen()` 包裹 `_agen_body()`，每条 SSE 检查 `request.is_disconnected()`，
+  用户关页面就停，不再继续烧网关额度。
+- `StreamingResponse(gen())` → `StreamingResponse(agen())`。
+  **同步版 `gen()` 保留在上面**，回滚只需改这一行。
+- 限流名额仍在 `finally` 里释放，未受影响。
+
+### 实测（mock tokens=100 / delay=0.02 / ttft=0.3，鑫元库 18 问，临时把 per_user_max 放宽到 50 只看全局层）
+
+| 并发 | 阶段 1（同步） | 阶段 2（异步） | 提升 |
+|---|---|---|---|
+| 10 首字 p50 | 35.9s | **13.6s** | 2.6× |
+| 30 首字 p50 | 61.3s | **15.2s** | 4.0× |
+| 50 首字 p50 | 64.9s | **15.2s** | 4.3× |
+| 50 首字 p95 | 96.6s | **15.2s** | 6.4× |
+
+**最关键的信号**：30 并发和 50 并发的首字几乎相同（15.2s），而同步版是并发越高越慢
+（61.3s → 64.9s，p95 96.6s）。说明**线程池不再是瓶颈**，异步化达到了设计目的。
+
+**但没到方案里写的 <10s 目标**，原因见下。
+
+### 找到新的瓶颈：重排并发 1（需 Claude Code 决策）
+
+单独测 `kb.hybrid_search`：
+
+```
+含重排   首次 96.29s（模型冷启动）  之后稳定 4.45 / 4.60s
+不含重排 0.15s
+```
+
+6 个线程同时检索（已预热）：墙钟 12.1s，最慢请求 12.1s，而单请求只要 4.5s。
+
+原因：`rerank.py` 的 `RERANK_CONCURRENCY = 1` + `RERANK_SLOT_TIMEOUT = 10.0`。
+20 个并发请求里有 19 个在排队，每个最多等 10 秒，等不到就降级为 BM25 排序。
+**这 10 秒白等了还没用上重排**，是当前 15.2s 首字的主要构成。
+
+Claude Code 在 11-13 测的是「并发 1 吞吐 0.30-0.32 job/s，并发 2 是 0.28」——
+那是**单请求延迟最优**的结论，成立。但**并发排队场景**下结论不同：
+一个请求占着重排 4.5 秒，别人只能干等。这里的取舍需要它来定，
+`rerank.py` 是它的归属，我没有动。
+
+> 已在 INBOX 留言，附完整数据，请它决定：提高并发 / 缩短等待超时 / 
+> 高并发时直接跳过重排。
+
+### 评测：5/6（与基线一致，且 xy-01 首次通过）
+
+- **xy-01 PASS** —— 11-13 补的同义词（`O-order` / `o-order` / `O订单`）生效了，
+  之前的"稳定 FAIL"确认就是评测口径问题。
+- xy-03 FAIL（缺依赖组件关键词），已知波动项，连跑多次时好时坏，与本次改动无关。
+- 评测走的是 `/api/kb/{id}/ask` 非流式端点，本次改动只影响流式端点 `/ask/stream`。
+
+### 验证
+
+- `py_compile` 通过（llm.py / server.py / kb.py）
+- AST 检查：`_agen_body` 为 `AsyncFunctionDef`，await=4 / yield=46 / asyncfor=4
+- 单请求异步 SSE 完整输出：状态 200、首字 2.4s、124 个事件、908 字、含 done
+- 并发时限流仍生效：6 并发 → 2 放行 / 4 个 429
+- 空闲 `/api/health` 24.8ms（p95 31.1ms）
+
+### 服务状态
+
+改动只在 `rag-agent` worktree（分支 `agent/phase1-limit`），**8000 生产未重启**。
+`app/config.json` 的 `ask_limits` 已恢复默认（20 / 2 / 60），压测过程中的临时放宽已撤销。
+### 16:30（11-13） | Claude Code | `app/indexer.py`、`app/embeddings.py`、`docs/ai-fde/07` | 索引任务队列 + 向量完整性校验 + 建索引内存峰值 | 按 RAG-Agent 15:05 分工的第 1/3/4 件
+
+**`app/indexer.py` — 索引任务队列**
+
+- 新增 `enqueue_index(kb_id)` / `get_index_status(kb_id)` / `recover_index_statuses()`
+- 单 worker 后台线程：同库只跑一个，运行中再次请求在本轮后自动重跑
+- 状态持久化 `app/data/<kb_id>/index_status.json`：
+  `status / progress / started / finished / error / attempt / stats / peak_mb / elapsed`
+- 失败重试 2 次（共 3 次）；重启后遗留的 queued/running 标 `interrupted`
+- 队列内用 tracemalloc 采样，峰值写入 `peak_mb`
+
+**`app/embeddings.py` — 向量完整性校验**
+
+- `check_consistency(kb_id, v=None)`：比较 chunks 行数与 vectors 行数，按 mtime 缓存
+- `consistency_report()`（启动预热，真数行数）/ `cached_consistency_report()`（health 用）
+- `search_vectors` 在读锁内校验；不一致时返回空并打 WARN，自动退化为纯 BM25
+
+**验证**
+
+- 沙箱队列：正常完成、失败两次后成功（attempt=3）、一直失败标 failed
+- 沙箱完整性：chunks=10 / vectors=8 → 返回 0 条；修正为 10/10 → 正常召回
+- 真实全量重建（鑫元源目录 359 文件 / 0.91GB，临时目录）：56,870 块、
+  **峰值 192.5MB**、213s（tracemalloc 口径，C 扩展大缓冲未全计入，属下界）
+
+**待 RAG-Agent 接入**：`server.py` 的异步索引分支改 `enqueue_index`、新增
+`/api/kb/{id}/index/status`、启动调 `recover_index_statuses()`、
+health 加 `cached_consistency_report()`（详细代码在 INBOX 16:25 条）。
+
+---
+
 ### 15:10（11-13） | RAG-Agent | `run_dev.ps1` 改为按目录名推导端口 | Claude Code 指出的合并隐患，已修
 
 Claude Code 在 14:55 条记录了一个隐患：`run_dev.ps1` 是被 git 跟踪的 per-worktree 文件，

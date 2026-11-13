@@ -1361,6 +1361,17 @@ def kb_index(kb_id: str, sync: bool = False):
     kb_ = indexer.get_kb(kb_id)
     if not kb_:
         return JSONResponse({"ok": False, "msg": "知识库不存在"}, status_code=404)
+
+    # sync=True：调用方要求同步拿结果（脚本/排障用），保持直接跑不变。
+    # 异步分支交给 indexer 的任务队列（Claude Code 实现）：
+    #   - 单 worker，同库只跑一个，运行中再次请求会在本轮后自动重跑
+    #   - 状态落盘 app/data/<kb_id>/index_status.json，重启后能标 interrupted
+    #   - 失败自动重试 2 次（共 3 次），仍失败标 failed
+    # 之前这里是「起个 threading.Thread 直接跑 index_kb」，没有队列、没有
+    # 持久化状态、没有重试，服务重启就丢进度。
+    if not sync:
+        return indexer.enqueue_index(kb_id, reason="manual")
+
     st = STATUS.setdefault(kb_id, {"running": False, "err": ""})
     if st["running"]:
         return {"ok": True, "status": "indexing", "msg": "已在索引中"}
@@ -1391,11 +1402,27 @@ def kb_index(kb_id: str, sync: bool = False):
         finally:
             st["running"] = False
 
-    if sync:
-        run()
-        return {"ok": True, "stats": st.get("last_stats"), "status": "done"}
-    threading.Thread(target=run, daemon=True).start()
-    return {"ok": True, "status": "started", "msg": "索引已后台启动"}
+    # 走到这里只可能是 sync=True（异步分支上面已经 return 了）
+    run()
+    return {"ok": True, "stats": st.get("last_stats"), "status": "done"}
+
+
+@app.get("/api/kb/{kb_id}/index/status")
+def kb_index_status(kb_id: str):
+    """索引任务进度（前端轮询）。
+
+    返回 index_status.json 里那一份：status / progress / started / finished /
+    error / attempt / stats / peak_mb / elapsed。
+    状态取值：idle / queued / running / done / failed / interrupted。
+    """
+    if not indexer.get_kb(kb_id):
+        return JSONResponse({"ok": False, "msg": "知识库不存在"}, status_code=404)
+    try:
+        job = indexer.get_index_status(kb_id)
+    except Exception as e:
+        return JSONResponse({"ok": False, "msg": f"读取索引状态失败: {e}"},
+                            status_code=500)
+    return {"ok": True, "job": job}
 
 
 @app.post("/api/kb/{kb_id}/upload")
@@ -2447,6 +2474,34 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
                 except Exception:
                     pass
 
+    async def agen():
+        """异步生成器（阶段 2）。
+
+        SSE 全程走事件循环：LLM 调用用 llm.stream_async（共享 AsyncClient），
+        检索走线程池。这样一个回答从头到尾都不占 anyio 线程池的线程，
+        40 个线程不会再被流式请求吃光。
+
+        顺带做了客户端断开检测：用户关掉页面后，下面的 finally 会让
+        _agen_body 提前退出，httpx 的 async with 随之关闭上游连接，
+        不再继续消耗网关额度（依据 03-目标架构:128）。
+        """
+        try:
+            async for chunk in _agen_body():
+                # 每条 SSE 都检查一次：便宜（读一个标志位），但能省下整段生成
+                try:
+                    if await request.is_disconnected():
+                        print("[ask] 客户端已断开，停止生成", file=sys.stderr)
+                        break
+                except Exception:
+                    pass          # 拿不到连接状态就继续发，不影响正常回答
+                yield chunk
+        finally:
+            if on_finish is not None:
+                try:
+                    on_finish()
+                except Exception:
+                    pass
+
     def _gen_body():
         _t_start = time.time()
         # 只贴图不写字也算有效提问：让模型看图说明就行，不要报"问题不能为空"
@@ -2759,7 +2814,322 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
             except Exception as _e:
                 print(f"[figures] 取结果超时/失败 {type(_e).__name__}", file=sys.stderr)
 
-    return StreamingResponse(gen(), media_type="text/event-stream")
+    async def _agen_body():
+        _t_start = time.time()
+        # 只贴图不写字也算有效提问：让模型看图说明就行，不要报"问题不能为空"
+        if not q_raw and not has_img:
+            yield sse("answer", {"text": "问题不能为空"}); return
+        if cmd_only and not has_img:
+            yield sse("answer", {"text": "上下文开关在输入框上方的「💬 上下文」按钮，直接点就行。"
+                                         "你是想问什么？"})
+            yield sse("done", {"full": "", "source_type": "kb", "source_label": "知识库"})
+            return
+        # 寒暄/应答: 直接回一句, 不检索不调模型(省十几秒, 也不会搜出奇怪的片段)
+        if _is_chitchat(q):
+            greet = _chitchat_reply(q)
+            yield sse("status", {"text": "寒暄已跳过检索"})
+            yield sse("answer", {"text": greet, "chitchat": True})
+            yield sse("done", {"full": greet, "source_type": "kb", "source_label": "助手"})
+            return
+        # 只问「密码」「账号」这种孤立名词: 先反问, 别把整套口令铺给用户
+        if _is_generic_ask(q):
+            kbn = (kb_ or {}).get("name") or "这个知识库"
+            ask = (f"「{q}」问的范围有点大——{kbn} 里不同系统、不同环境各有各的账号密码。\n\n"
+                   "你要问的是哪一个？可以说得具体些，例如：\n"
+                   "· 哪个系统（demo / O32 / oorder / UFT …）\n"
+                   "· 哪个环境（测试 / UAT / 生产）\n"
+                   "· 要账号、密码，还是数据库连接信息")
+            yield sse("status", {"text": "问题范围太大，先确认一下"})
+            yield sse("answer", {"text": ask, "clarify": True})
+            yield sse("done", {"full": ask, "source_type": "kb", "source_label": "请补充问题"})
+            return
+        rc = cfg.get("retrieval", {})
+        topk_ = body.top_k or rc.get("top_k", 8)
+        hist = body.history or []
+        # 索引刚更新时会有一两分钟还在用旧索引, 这个状态要告诉用户,
+        # 否则"刚加的文档搜不到"会被当成 bug
+        try:
+            _st = kb.state(kb_id)
+            _stale = bool(_st.get("stale") or _st.get("loading"))
+        except Exception:
+            _stale = False
+        # 首问先看缓存(追问依赖上下文, 不走缓存; 演示模式/换个回答也不走)
+        # 带图更不能走缓存: 缓存键只有问题文本, 同一句话配不同图会拿到上一次的答案
+        if not hist and not body.no_cache and not has_img:
+            hit = cache.get(kb_id, q)
+            if hit:
+                srcs = _build_sources(hit["sources"], kb_id=kb_id)
+                yield sse("sources", {"sources": srcs, "planning": {"split": False, "queries": [q]},
+                                      "status": "⚡ 这个问题刚问过，直接给你上次的结果"})
+                yield sse("answer", {"text": hit["answer"], "cached": True})
+                _log_ask(q, kb_id, request, hit["answer"], srcs, "kb", False, _t_start, "", False, cfg)
+                yield sse("done", {"full": hit["answer"], "source_type": "kb",
+                                   "source_label": "知识库（缓存）", "cached": True,
+                                   "stale": _stale})
+                return
+        yield sse("status", {"text": "正在理解问题…"})
+        # 多轮: 依赖上文的追问 → 先改写成独立问题
+        rw = await run_in_threadpool(planner.rewrite_query, q, hist, cfg=cfg)
+        q_eff = rw["q"] if rw["rewritten"] else q
+        if rw["rewritten"]:
+            yield sse("rewrite", {"q": q_eff, "original": q,
+                                  "status": f"已结合上文理解你的问题：{q_eff}"})
+        # 查询规划: 拆分模糊/复合问题后再检索
+        plan_ = await run_in_threadpool(planner.plan_queries, q_eff, cfg=cfg)
+        queries = plan_["queries"]
+        if len(queries) > 1:
+            yield sse("plan", {"queries": queries,
+                               "status": f"已拆解为 {len(queries) - 1} 个子问题，正在多路检索…"})
+            results = await run_in_threadpool(_multi_search, kb_id, queries, topk_, rc)
+        else:
+            yield sse("status", {"text": "正在检索知识库…"})
+            results = await run_in_threadpool(
+                kb.hybrid_search,
+                kb_id, q_eff, topk=topk_,
+                enable_vector=rc.get("enable_vector", True),
+                enable_rerank=rc.get("enable_rerank", True),
+            )
+        if results is None:
+            _log_ask(q, kb_id, request, "该知识库还没有索引", [], "none", True, _t_start, "", False, cfg)
+            yield sse("answer", {"text": "该知识库还没有索引,请先点\"重建索引\"。"}); return
+
+        # 知识库未命中 → 兜底(联网搜索 / 大模型自身知识), 并显著标注来源
+        if not results or (fallback.should_fallback(results) and not _has_confident_hit(results)):
+            if not llm.llm_enabled(cfg=cfg):
+                _log_ask(q, kb_id, request, "未检索到相关内容", results or [], "none", True, _t_start, "", False, cfg)
+                yield sse("answer", {"text": "未检索到相关内容,换个问法试试。"}); return
+            fb_mode = (body.fallback_mode or "").strip().lower()
+            # 默认不自动联网、不自动拿模型知识顶上，先让用户选
+            if fb_mode not in ("web", "llm", "none") and fallback.ask_first(cfg):
+                yield sse("offer", {
+                    "q": q,
+                    "text": f"知识库里没有找到能回答「{q}」的内容。\n\n要继续的话得换个来源，你选一个：",
+                    "options": fallback.offer_options(cfg) + [{"id": "none", "label": "不用了"}],
+                    "note": "知识库里的答案更可靠；联网搜索和模型自身知识都可能不准，请自行判断。",
+                })
+                return
+            if fb_mode == "none":
+                yield sse("offer", {"q": q, "text": "好的，知识库里确实没有相关内容。可以换个问法，或者把资料补进来再问。",
+                                    "options": []})
+                return
+            src_type, user_msg, system, refs = fallback.prepare_fallback(q_eff, mode=fb_mode or "auto")
+            label = "网络搜索" if src_type == "web" else "大模型知识"
+            yield sse("status", {"text": f"知识库未命中，正在基于{label}回答…"})
+            if refs:
+                yield sse("refs", {"refs": refs, "status": f"已获取 {len(refs)} 条网络参考"})
+            buf, got = [], False
+            async for token in llm.stream_async([{"role": "user", "content": user_msg}], cfg=cfg,
+                                    system=system, user_key=_ukeys):
+                got = True
+                buf.append(token)
+                yield sse("delta", {"text": token})
+            if got:
+                yield sse("done", {"full": "".join(buf), "source_type": src_type, "refs": refs,
+                                   "source_label": label})
+            else:
+                yield sse("answer", {"text": "大模型兜底调用失败,请检查网络或稍后重试。"})
+            return
+
+        sources = _reorder_for_listing(q_eff, _build_sources(results, kb_id=kb_id))
+        yield sse("sources", {"sources": sources,
+                              "planning": {"split": plan_["split"], "queries": queries,
+                                           "reason": plan_["reason"]},
+                              "rewrite": {"q": q_eff, "rewritten": rw["rewritten"]},
+                              "status": f"已找到 {len(sources)} 个相关片段，正在生成回答…"})
+        if not llm.llm_enabled(cfg=cfg):
+            lines = [f"{i}. **{s['path']}** (得分 {s['score']})\n{s.get('text_full') or s['text']}"
+                     for i, s in enumerate(sources, 1)]
+            yield sse("answer", {"text": "未配置大模型,以下为检索命中片段:\n\n" + "\n\n".join(lines),
+                                 "llm": False}); return
+        system, msgs = _build_ask_context(sources, q_eff, hist, body.answer_len, body.images)
+        buf = []
+        got = False
+        meta = {}
+        async for token in llm.stream_async(msgs, cfg=cfg, system=system, meta=meta, user_key=_ukeys):
+            got = True
+            buf.append(token)
+            yield sse("delta", {"text": token})
+
+        # 撞上单次输出上限别把半截话丢给用户——自动接着写。
+        # 用户的原话是"有回答就答完呀"：答案写到一半停住，比答得长难受得多。
+        for _round in range(_MAX_CONTINUE):
+            if meta.get("stop_reason") != "max_tokens" or not buf:
+                break
+            if meta.get("error") or meta.get("timeout"):
+                break
+            yield sse("status", {"text": "回答较长，正在接着写…"})
+            cont = list(msgs) + [
+                {"role": "assistant", "content": "".join(buf)},
+                {"role": "user", "content":
+                    "接着上面最后一句继续写，写完为止。"
+                    "不要重复已写过的内容，不要重新开头，不要加总结性开场白。"},
+            ]
+            meta = {}
+            try:
+                async for token in llm.stream_async(cont, cfg=cfg, system=system, meta=meta,
+                                        user_key=_ukeys):
+                    got = True
+                    buf.append(token)
+                    yield sse("delta", {"text": token})
+            except Exception as _e:
+                print(f"[ask] 续写失败: {_e}", file=sys.stderr)
+                break
+        full = "".join(buf) if got else ""
+        # 超时/异常: 明确告知, 而不是静默结束
+        tmo = meta.get("timeout")
+        if tmo:
+            limit = llm.read_timeout() if tmo in ("read", "connect") else llm.total_timeout()
+            if tmo in ("read", "connect"):
+                why = f"等了 {limit:.0f} 秒，大模型网关一直没有开始返回内容"
+            else:
+                why = f"生成超过 {limit:.0f} 秒上限，已中断"
+            if full.strip():
+                tail = f"\n\n---\n⚠️ 回答未完（{why}）。以上是已生成的部分，可点下方「↻ 重试」再试一次。"
+                yield sse("delta", {"text": tail})
+                full += tail
+                _log_ask(q, kb_id, request, full, sources, "kb", False, _t_start, q_eff, plan_["split"], cfg)
+                yield sse("done", {"full": full, "source_type": "kb",
+                                   "source_label": "知识库（超时截断）", "timeout": tmo})
+            else:
+                _log_ask(q, kb_id, request, "大模型超时", sources, "timeout", True, _t_start, "", False, cfg)
+                if _ukeys:
+                    tail_tip = "· 若经常这样，可能是你自己的 Key 额度受限，换一把试试"
+                else:
+                    tail_tip = ("· 若经常这样，多半是公共 Key 在排队——"
+                                "点右上角「🔑 我的 Key」填一个自己的 Key 会稳定很多")
+                tip = (f"⚠️ 大模型超时：{why}。\n\n"
+                       "已检索到的片段见下方引用。可以：\n"
+                       "· 点「↻ 重试」再试一次（网关常是偶发慢）\n"
+                       "· 换个更具体的问法\n"
+                       + tail_tip)
+                yield sse("answer", {"text": tip, "timeout": tmo})
+            return
+        if meta.get("error") and not full.strip():
+            err = str(meta["error"])
+            if any(c in err for c in ("503", "502", "504")):
+                msg = "⚠️ 大模型网关暂时不可用（HTTP 5xx），这是网关侧的问题，通常几分钟后恢复。"
+            elif "429" in err:
+                if _ukeys:
+                    msg = "⚠️ 大模型调用太频繁（429），等十几秒再试。"
+                else:
+                    msg = ("⚠️ 大模型调用太频繁（429）。你正在用公共 Key，"
+                           "大家共用它的并发额度——点右上角「🔑 我的 Key」"
+                           "填一个自己的会好很多。")
+
+            elif "401" in err or "403" in err:
+                # 自己的 key 出问题就让他自己换，别叫人去找管理员（管理员也帮不上）
+                if _ukeys:
+                    msg = ("⚠️ 你自己填的大模型 Key 鉴权失败（401/403）。\n"
+                           "它可能已过期或权限不足。点右上角「🔑 我的 Key」换一把，"
+                           "或改回使用公共 Key。")
+                else:
+                    msg = "⚠️ 大模型鉴权失败（401/403），api_key 可能过期了，联系管理员。"
+            else:
+                msg = f"⚠️ 大模型调用失败：{err}"
+            _log_ask(q, kb_id, request, err, sources, "error", True, _t_start, "", False, cfg)
+            yield sse("answer", {"text": msg + "\n\n已检索到的片段见下方引用，可点「↻ 重试」。"})
+            return
+        if not got:
+            _log_ask(q, kb_id, request, "大模型无输出", sources, "none", True, _t_start, "", False, cfg)
+            yield sse("answer", {"text": "大模型没有返回内容（网关可能繁忙）。已检索到的片段见下方引用，可点「↻ 重试」。"})
+            return
+        # 已经自动续写过 _MAX_CONTINUE 轮还撞上限，才提示（正常情况走不到这里）
+        if meta.get("stop_reason") == "max_tokens" and full.strip():
+            tail = (f"\n\n---\n⚠️ 回答未完：已连续续写 {_MAX_CONTINUE} 轮，仍达到单次输出上限。\n"
+                    "问题涉及的范围太大，建议拆开问——例如只问其中一个模块或一个阶段。")
+            yield sse("delta", {"text": tail})
+            full += tail
+        # 知识库命中但回答"未找到" → 默认先问用户要不要换来源，不自动联网/不自动编
+        if _looks_like_not_found(full):
+            fb_mode = (body.fallback_mode or "").strip().lower()
+            if fb_mode not in ("web", "llm", "none") and fallback.ask_first(cfg):
+                yield sse("offer", {
+                    "q": q,
+                    "text": (f"知识库里没有找到能回答「{q}」的内容。\n\n"
+                             "已检索到的片段见下方引用。要继续的话得换个来源，你选一个："),
+                    "options": fallback.offer_options(cfg) + [{"id": "none", "label": "不用了"}],
+                    "note": "知识库里的答案更可靠；联网搜索和模型自身知识都可能不准，请自行判断。",
+                })
+                return
+            if fb_mode == "none":
+                yield sse("offer", {"q": q, "text": "好的，知识库里确实没有相关内容。可以换个问法，或者把资料补进来再问。",
+                                    "options": []})
+                return
+            yield sse("status", {"text": "知识库中未找到相关内容，正在尝试网络/大模型知识…"})
+            src_type, fuser, fsystem, frefs = fallback.prepare_fallback(q_eff, mode=fb_mode or "auto")
+            if frefs:
+                yield sse("refs", {"refs": frefs, "status": f"已获取 {len(frefs)} 条网络参考"})
+            label = "网络搜索" if src_type == "web" else "大模型知识"
+            fbuf, fgot = [], False
+            async for token in llm.stream_async([{"role": "user", "content": fuser}], cfg=cfg,
+                                    system=fsystem, user_key=_ukeys):
+                fgot = True
+                fbuf.append(token)
+                yield sse("delta", {"text": token})
+            if fgot:
+                yield sse("done", {"full": "".join(fbuf), "source_type": src_type,
+                                   "refs": frefs, "source_label": label})
+            else:
+                yield sse("done", {"full": full, "source_type": "kb", "source_label": "知识库"})
+            return
+        try:
+            # 带图的答案不写缓存：缓存键只有问题文本，会把"看图得出的结论"污染给下次纯文字提问
+            if not hist and not rw["rewritten"] and not body.no_cache and not has_img:
+                cache.put(kb_id, q, full, results)
+            qa_id = qa_log.record(q, kb_id, _current_user(request), full,
+                                  sources, "kb", False, int((time.time() - _t_start) * 1000),
+                                  q_eff if rw["rewritten"] else "", plan_["split"],
+                                  (llm.llm_settings(cfg) or {}).get("model", ""))
+            yield sse("qid", {"id": qa_id})
+        except Exception as _e:
+            print(f"[qa_log] {_e}", file=sys.stderr)
+
+        # 答案配图：把命中文档里的截图按"意思"挂到答案对应段落上。
+        # 不走物理位置（PDF 没有段落结构、docx 段落和图也常错位），
+        # 而是答案段落 vs 图片摘要做向量匹配。见 imgindex.bind_to_answer。
+        # 答案配图：把命中文档里的截图按"意思"挂到答案对应段落上。
+        # 不走物理位置（PDF 没有段落结构、docx 段落和图也常错位），
+        # 而是答案段落 vs 图片摘要做向量匹配，再让模型看图确认（见 imgindex.bind_to_answer）。
+        #
+        # 这一步要 10~30 秒（每张候选图都要上传给模型核对），**不能挡在文字流前面**，
+        # 所以扔到独立线程里算，文字照常先流完；算完再补推 figures。
+        fig_fut = None
+        if _figures_enabled() and full and len(full) >= 60:
+            try:
+                import imgindex
+                paths = {s.get("path") for s in (sources or []) if s.get("path")}
+                _full, _srcs, _paths, _kb = full, list(sources or []), paths, kb_id
+                _pool = _FIG_POOL
+
+                def _calc():
+                    try:
+                        return imgindex.bind_to_answer(_kb, _full, source_paths=_paths,
+                                                       sources=_srcs)
+                    except Exception as _e:
+                        print(f"[figures] 异常 {type(_e).__name__}: {_e}", file=sys.stderr)
+                        return []
+
+                fig_fut = _pool.submit(_calc)
+            except Exception as _e:
+                print(f"[figures] 提交失败 {type(_e).__name__}: {_e}", file=sys.stderr)
+
+        # 先收尾，让用户立刻看到完整答案；配图算完再补推（前端会插进已渲染的消息里）
+        yield sse("done", {"full": full, "source_type": "kb",
+                           "source_label": "知识库", "stale": _stale})
+
+        if fig_fut is not None:
+            try:
+                blocks = fig_fut.result(timeout=30)
+                if blocks:
+                    yield sse("figures", {"blocks": blocks})
+                else:
+                    print(f"[figures] 未挂图 kb={kb_id} 答案{len(full)}字", file=sys.stderr)
+            except Exception as _e:
+                print(f"[figures] 取结果超时/失败 {type(_e).__name__}", file=sys.stderr)
+
+    # 阶段 2：改用异步生成器。SSE 全程在事件循环里跑，不再占 anyio 线程池。
+    # 同步版 gen() 保留在上面，需要回滚时把 agen() 改回 gen() 即可。
+    return StreamingResponse(agen(), media_type="text/event-stream")
 
 
 @app.get("/api/health")
@@ -2770,8 +3140,17 @@ async def health():
     连这个探活接口都要等 2 秒（压测实测 100 并发时 P95=1985ms）。
     这里只读几个内存变量，本来就是毫秒级，不该排在问答后面。
     """
+    # 向量一致性：chunks.jsonl 行数与 vectors.npy 行数对不上时，检索会静默出错。
+    # 只返回"已经算过的"结果（cached_consistency_report 不碰文件 I/O），
+    # 探活路径绝不做磁盘操作，否则又变回慢接口。
+    try:
+        import embeddings
+        consistency = embeddings.cached_consistency_report()
+    except Exception:
+        consistency = {}
     return {"ok": True, "llm_configured": llm.llm_enabled(),
             "ask": ask_limits_state(),
+            "embeddings": consistency,
             "llm": llm.llm_settings() | {"api_key": "***" if llm.llm_settings()["api_key"] else ""}}
 
 
@@ -3141,6 +3520,17 @@ def preload_kbs():
     业务手册优先加载（答辩演练默认用它），其余按注册表顺序。
     进度写进 _WARMUP，/api/warmup 给前端显示。
     """
+    # 先恢复上次遗留的索引任务状态：服务重启时还标着 queued/running 的，
+    # 实际已经不会继续跑了，不改成 interrupted 前端会一直转圈。
+    try:
+        n = indexer.recover_index_statuses()
+        if n:
+            print(f"[preload] 恢复索引状态: {n} 个任务标记为 interrupted",
+                  file=__import__("sys").stderr, flush=True)
+    except Exception as e:
+        print(f"[preload] 恢复索引状态失败: {type(e).__name__}: {e}",
+              file=__import__("sys").stderr, flush=True)
+
     try:
         reg = indexer.load_registry()
         reg.sort(key=lambda k: 0 if "业务手册" in (k.get("name") or "") else 1)

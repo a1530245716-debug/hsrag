@@ -10,7 +10,7 @@
 - 增量索引:按文件 size+mtime 签名,未变文件跳过,只处理新增/修改;删除文件同步移除其块。
 - 复用 index_docs.py 的抽取函数(EXTRACTORS)保证与旧版一致。
 """
-import json, math, os, sys, threading, time, hashlib
+import json, math, os, queue, sys, threading, time, hashlib, tracemalloc
 from pathlib import Path
 
 APP_DIR = Path(__file__).parent
@@ -195,6 +195,220 @@ def _sig(path: Path):
 def _sig_mb(path: Path):
     st = path.stat()
     return f"mb:{st.st_size}:{int(st.st_mtime)}"
+
+
+# ---------------- 索引任务队列 ----------------
+# index_kb 是同步的; 直接在请求线程里跑会占满 HTTP 线程池, 重建期间其他库的
+# 提问也会变慢。这里用「单 worker 后台线程 + 持久化状态文件」:
+#   - 入队立即返回, 前端轮询 index_status.json 看进度
+#   - 同一库同时只跑一个; 运行中再次请求会合并成本轮后的重跑
+#   - 失败重试 2 次, 仍失败标记 failed
+#   - 重启后把遗留的 queued/running 标记为 interrupted, 不静默卡住
+INDEX_STATUS_FILE = "index_status.json"
+INDEX_MAX_ATTEMPTS = 3          # 首次 + 2 次重试
+INDEX_RETRY_DELAY = 3.0         # 重试间隔(秒)
+
+_INDEX_Q = queue.Queue()
+_INDEX_LOCK = threading.Lock()
+_INDEX_STATE = {}               # kb_id -> 状态 dict (内存镜像)
+_INDEX_RUNNING = set()
+_INDEX_PENDING = set()
+_INDEX_WORKER = None
+
+
+def _now_str():
+    return time.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _status_path(kb_id):
+    return _kb_dir(kb_id) / INDEX_STATUS_FILE
+
+
+def _write_status(kb_id, st):
+    try:
+        p = _status_path(kb_id)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_name(p.name + ".tmp")
+        tmp.write_text(json.dumps(st, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, p)
+    except Exception as e:
+        print(f"[index] 状态写入失败 {kb_id}: {e}", file=sys.stderr)
+
+
+def get_index_status(kb_id):
+    with _INDEX_LOCK:
+        st = _INDEX_STATE.get(kb_id)
+        if st:
+            return dict(st)
+    p = _status_path(kb_id)
+    if p.exists():
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {"kb_id": kb_id, "status": "idle", "progress": "", "started": "",
+            "finished": "", "error": "", "attempt": 0}
+
+
+def recover_index_statuses():
+    """服务启动时调用: 上次没跑完的任务标记为 interrupted, 避免一直显示 running。"""
+    try:
+        reg = load_registry()
+    except Exception:
+        return 0
+    n = 0
+    for kb in reg:
+        kid = kb.get("id")
+        if not kid:
+            continue
+        st = get_index_status(kid)
+        if st.get("status") in ("queued", "running"):
+            st.update({"status": "interrupted", "finished": _now_str(),
+                       "error": st.get("error") or "服务重启，任务中断"})
+            with _INDEX_LOCK:
+                _INDEX_STATE[kid] = st
+            _write_status(kid, st)
+            n += 1
+    return n
+
+
+def _ensure_worker():
+    global _INDEX_WORKER
+    with _INDEX_LOCK:
+        if _INDEX_WORKER and _INDEX_WORKER.is_alive():
+            return
+    # recover 内部会拿 _INDEX_LOCK, 必须在锁外调用(同一把非重入锁, 否则死锁)
+    recover_index_statuses()
+    with _INDEX_LOCK:
+        if _INDEX_WORKER and _INDEX_WORKER.is_alive():
+            return
+        t = threading.Thread(target=_index_worker, daemon=True, name="index-worker")
+        _INDEX_WORKER = t
+        t.start()
+
+
+def enqueue_index(kb_id, reason="manual"):
+    """把某库的增量重建放进队列。返回 {"ok", "status", "msg", "job"}。"""
+    kb = get_kb(kb_id)
+    if not kb:
+        return {"ok": False, "msg": "知识库不存在"}
+    # 先恢复上次遗留状态并确保 worker 在跑, 再入队。
+    # 顺序反过来会把刚入队的任务误判成"上次服务遗留"。
+    _ensure_worker()
+    with _INDEX_LOCK:
+        st = _INDEX_STATE.get(kb_id)
+        cur = st.get("status") if st else None
+        if cur in ("queued", "running"):
+            if cur == "running":
+                _INDEX_PENDING.add(kb_id)
+            return {"ok": True, "status": cur, "msg": "已在队列/索引中", "job": dict(st)}
+        st = {"kb_id": kb_id, "status": "queued", "progress": "等待执行",
+              "started": "", "queued_at": _now_str(), "finished": "",
+              "error": "", "attempt": 0, "max_attempts": INDEX_MAX_ATTEMPTS,
+              "stats": None, "peak_mb": None, "elapsed": None, "reason": reason}
+        _INDEX_STATE[kb_id] = st
+    _write_status(kb_id, st)
+    _INDEX_Q.put(kb_id)
+    return {"ok": True, "status": "queued", "msg": "已加入索引队列", "job": dict(st)}
+
+
+def _memory_profile_enabled():
+    try:
+        import llm
+        return bool(llm.load_config().get("indexing", {}).get("memory_profile", True))
+    except Exception:
+        return True
+
+
+def _index_worker():
+    while True:
+        kb_id = _INDEX_Q.get()
+        try:
+            _run_index_job(kb_id)
+        except Exception as e:
+            print(f"[index] worker 异常 {kb_id}: {e}", file=sys.stderr)
+        finally:
+            with _INDEX_LOCK:
+                _INDEX_RUNNING.discard(kb_id)
+            _INDEX_Q.task_done()
+        # 运行期间又来了请求: 按最新内容再跑一轮
+        with _INDEX_LOCK:
+            again = kb_id in _INDEX_PENDING
+            if again:
+                _INDEX_PENDING.discard(kb_id)
+                st = _INDEX_STATE.get(kb_id) or {"kb_id": kb_id}
+                st.update({"status": "queued", "progress": "等待重跑", "queued_at": _now_str()})
+                _INDEX_STATE[kb_id] = st
+        if again:
+            _write_status(kb_id, st)
+            _INDEX_Q.put(kb_id)
+
+
+def _run_index_job(kb_id):
+    kb = get_kb(kb_id)
+    with _INDEX_LOCK:
+        _INDEX_RUNNING.add(kb_id)
+        st = _INDEX_STATE.get(kb_id) or {"kb_id": kb_id}
+        st.update({"status": "running", "started": _now_str(),
+                   "progress": "准备中", "error": ""})
+        _INDEX_STATE[kb_id] = st
+    if not kb:
+        st.update({"status": "failed", "error": "知识库不存在", "finished": _now_str()})
+        _write_status(kb_id, st)
+        return
+    _write_status(kb_id, st)
+
+    last_write = [0.0]
+
+    def progress(msg):
+        st["progress"] = str(msg)[:300]
+        now = time.time()
+        if now - last_write[0] >= 1.0:
+            last_write[0] = now
+            _write_status(kb_id, st)
+
+    trace = _memory_profile_enabled()
+    started_here = False
+    if trace and not tracemalloc.is_tracing():
+        tracemalloc.start()
+        started_here = True
+    t0 = time.time()
+    stats = None
+    err = None
+    try:
+        for attempt in range(1, INDEX_MAX_ATTEMPTS + 1):
+            st["attempt"] = attempt
+            _write_status(kb_id, st)
+            try:
+                stats = index_kb(kb, progress=progress)
+                err = None
+                break
+            except Exception as e:
+                err = f"{type(e).__name__}: {e}"
+                st["error"] = err
+                if attempt < INDEX_MAX_ATTEMPTS:
+                    st["progress"] = (f"失败, {INDEX_RETRY_DELAY:.0f}s 后重试 "
+                                      f"({attempt}/{INDEX_MAX_ATTEMPTS - 1})")
+                    _write_status(kb_id, st)
+                    time.sleep(INDEX_RETRY_DELAY)
+    finally:
+        if started_here:
+            _, peak = tracemalloc.get_traced_memory()
+            tracemalloc.stop()
+            st["peak_mb"] = round(peak / (1024 * 1024), 1)
+        st["elapsed"] = round(time.time() - t0, 1)
+
+    if stats is not None:
+        st.update({"status": "done", "progress": "完成", "finished": _now_str(),
+                   "stats": stats, "error": ""})
+    else:
+        st.update({"status": "failed", "progress": "失败", "finished": _now_str(),
+                   "error": err or "未知错误"})
+    with _INDEX_LOCK:
+        _INDEX_STATE[kb_id] = st
+    _write_status(kb_id, st)
+    print(f"[index] {kb_id} {st['status']} elapsed={st.get('elapsed')}s "
+          f"peak={st.get('peak_mb')}MB", file=sys.stderr)
 
 
 def index_kb(kb, progress=None):

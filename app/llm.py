@@ -3,12 +3,63 @@
 读取 config.json 的 llm 段;若未配置 api_key 则 llm 层被禁用,
 上层可降级为仅返回检索上下文。所有函数不抛网络异常,失败返回 None。
 """
-import json, os, sys, time
+import json, os, sys, threading, time
 from pathlib import Path
 
 import httpx
 
 CFG_PATH = Path(__file__).with_name("config.json")
+
+# ---------------- 异步客户端（阶段 2） ----------------
+# 下面 chat / stream 是同步实现，用模块级 httpx.post / httpx.stream，
+# 每次调用新建连接，而且要在工作线程里跑完整个流式回答（占线程池 40 个里的一格）。
+#
+# 异步版用了共享的 httpx.AsyncClient：连接复用，SSE 走事件循环不占线程。
+# **同步版一个都没删**——异步版出问题能立刻切回去，这是回滚保证。
+#
+# 客户端按事件循环缓存：AsyncClient 绑定 loop，uvicorn 重启/测试里 loop 会变，
+# 用错 loop 的 client 会报 "Event loop is closed"。
+_async_clients = {}          # id(loop) -> httpx.AsyncClient
+_async_clients_lock = threading.Lock()
+
+
+def _async_limits():
+    """连接池大小。
+
+    网关每把 key 约 2 路并发，但进程内可能同时有多人的 key；
+    连接池给宽松些，真正的并发上限交给 server 层的三层限流。
+    """
+    return httpx.Limits(max_connections=100, max_keepalive_connections=50)
+
+
+def get_async_client():
+    """取当前事件循环的共享 AsyncClient，没有就建一个。"""
+    import asyncio
+    loop = asyncio.get_running_loop()
+    key = id(loop)
+    with _async_clients_lock:
+        c = _async_clients.get(key)
+        if c is None or c.is_closed:
+            c = httpx.AsyncClient(
+                timeout=httpx.Timeout(connect=connect_timeout(),
+                                      read=read_timeout(),
+                                      write=15.0, pool=10.0),
+                limits=_async_limits(),
+            )
+            _async_clients[key] = c
+        return c
+
+
+async def aclose_async_clients():
+    """进程退出时关掉所有 AsyncClient。"""
+    with _async_clients_lock:
+        clients = list(_async_clients.values())
+        _async_clients.clear()
+    for c in clients:
+        try:
+            await c.aclose()
+        except Exception:
+            pass
 
 # ---------------- 超时策略 ----------------
 # 网关偶发挂起: 不设总时长上限会让用户盯着转圈好几分钟。
@@ -381,6 +432,241 @@ def _stream_openai(s, msgs, meta=None):
             delta = obj.get("choices", [{}])[0].get("delta", {})
             if delta.get("content"):
                 yield delta["content"]
+
+
+# ================= 异步版（阶段 2） =================
+# 与上面的同步实现一一对应，语义相同，只是不阻塞事件循环。
+# 返回值和 meta 语义刻意保持一致，上层可以无缝切换。
+
+
+async def _chat_anthropic_async(s, msgs, timeout=None, meta=None):
+    url = s["base_url"].rstrip("/") + "/v1/messages"
+    payload = {"model": s["model"],
+               "max_tokens": int(s.get("max_tokens", 1024)),
+               "temperature": float(s.get("temperature", 0.3)),
+               "messages": msgs}
+    r = await get_async_client().post(
+        url, json=payload,
+        headers={"Authorization": f"Bearer {s['api_key']}",
+                 "anthropic-version": s.get("anthropic_version", "2023-06-01"),
+                 "Content-Type": "application/json"},
+        timeout=float(timeout or default_timeout()))
+    data = _parse_json_or_raise(r)
+    if meta is not None and data.get("stop_reason"):
+        meta["stop_reason"] = data["stop_reason"]
+    if isinstance(data.get("content"), list):
+        return "".join(b.get("text", "") for b in data["content"] if b.get("type") == "text")
+    err = data.get("error", {}).get("message", str(data))
+    raise RuntimeError(f"{data.get('error')}: {err}")
+
+
+async def _chat_openai_async(s, msgs, timeout=None, meta=None):
+    url = s["base_url"].rstrip("/") + "/chat/completions"
+    payload = {"model": s["model"], "messages": msgs,
+               "temperature": float(s.get("temperature", 0.3)),
+               "max_tokens": int(s.get("max_tokens", 1024)), "stream": False}
+    r = await get_async_client().post(
+        url, json=payload,
+        headers={"Authorization": f"Bearer {s['api_key']}",
+                 "Content-Type": "application/json"},
+        timeout=float(timeout or default_timeout()))
+    data = _parse_json_or_raise(r)
+    ch = (data.get("choices") or [{}])[0]
+    if meta is not None and ch.get("finish_reason") == "length":
+        meta["stop_reason"] = "max_tokens"
+    return ch.get("message", {}).get("content") or ""
+
+
+async def chat_async(messages, cfg=None, system=None, timeout=None, meta=None,
+                     user_key=""):
+    """`chat` 的异步版。语义完全一致，重试策略也一致（最多 3 次）。"""
+    import asyncio
+    s = llm_settings(cfg, user_key=user_key)
+    if not llm_enabled(cfg=s):
+        return None
+    if isinstance(messages, str):
+        msgs = [{"role": "user", "content": messages}]
+    else:
+        msgs = messages
+    if system:
+        msgs = [{"role": "system", "content": system}] + msgs
+    os.environ.pop("SSL_CERT_FILE", None)
+    os.environ.pop("SSL_CERT_DIR", None)
+
+    last_err = None
+    md = meta if meta is not None else {}
+    s = dict(s)
+    for attempt in range(3):
+        try:
+            if s.get("protocol", "openai") == "anthropic":
+                out = await _chat_anthropic_async(s, msgs, timeout=timeout, meta=md)
+            else:
+                out = await _chat_openai_async(s, msgs, timeout=timeout, meta=md)
+            if out is not None and str(out).strip():
+                return out
+            last_err = RuntimeError("网关返回空内容")
+            if md.get("stop_reason") == "max_tokens":
+                try:
+                    s["max_tokens"] = min(
+                        max(int(s.get("max_tokens") or 1024) * 2, 2048), 8192)
+                except Exception:
+                    pass
+            if attempt < 2:
+                await asyncio.sleep(1.0 * (attempt + 1))
+                continue
+        except Exception as e:
+            last_err = e
+            if attempt < 2:
+                await asyncio.sleep(1.0 * (attempt + 1))
+    print(f"[llm] 异步调用失败(已重试 2 次): {last_err} stop={md.get('stop_reason')}",
+          file=sys.stderr)
+    return None
+
+
+def _sse_obj(line):
+    """把一行 SSE 解析成 dict，不是 data 行或是坏 JSON 就返回 None。"""
+    if not line or not line.startswith("data:"):
+        return None
+    data = line[5:].strip()
+    if not data or data == "[DONE]":
+        return None
+    try:
+        obj = json.loads(data)
+    except Exception:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+async def _stream_anthropic_async(s, msgs, meta=None):
+    url = s["base_url"].rstrip("/") + "/v1/messages"
+    payload = {"model": s["model"], "max_tokens": int(s.get("max_tokens", 1500)),
+               "temperature": float(s.get("temperature", 0.3)),
+               "messages": msgs, "stream": True}
+    headers = {"Authorization": f"Bearer {s['api_key']}",
+               "anthropic-version": s.get("anthropic_version", "2023-06-01"),
+               "Content-Type": "application/json"}
+    limit = total_timeout()
+    t0 = time.time()
+    client = get_async_client()
+    async with client.stream("POST", url, json=payload, headers=headers,
+                             timeout=_sse_timeout()) as r:
+        if r.status_code >= 400:
+            body = (await r.aread()).decode("utf-8", "replace")[:300]
+            raise RuntimeError(f"HTTP {r.status_code}: {body}")
+        async for line in r.aiter_lines():
+            if time.time() - t0 > limit:
+                if meta is not None:
+                    meta["timeout"] = "total"
+                print(f"[llm] 流式生成超过 {limit:.0f}s 上限, 提前结束", file=sys.stderr)
+                return
+            obj = _sse_obj(line)
+            if not obj:
+                continue
+            t = obj.get("type")
+            if t == "content_block_delta":
+                d = obj.get("delta", {})
+                if d.get("type") == "text_delta" and d.get("text"):
+                    yield d.get("text")
+            elif t == "message_delta":
+                sr = (obj.get("delta") or {}).get("stop_reason")
+                if sr and meta is not None:
+                    meta["stop_reason"] = sr
+            elif t == "error":
+                msg = (obj.get("error") or {}).get("message") or json.dumps(
+                    obj, ensure_ascii=False)
+                raise RuntimeError(f"流中错误: {msg[:200]}")
+
+
+async def _stream_openai_async(s, msgs, meta=None):
+    url = s["base_url"].rstrip("/") + "/chat/completions"
+    payload = {"model": s["model"], "messages": msgs,
+               "temperature": float(s.get("temperature", 0.3)),
+               "max_tokens": int(s.get("max_tokens", 1500)), "stream": True}
+    headers = {"Authorization": f"Bearer {s['api_key']}",
+               "Content-Type": "application/json"}
+    limit = total_timeout()
+    t0 = time.time()
+    client = get_async_client()
+    async with client.stream("POST", url, json=payload, headers=headers,
+                             timeout=_sse_timeout()) as r:
+        if r.status_code >= 400:
+            body = (await r.aread()).decode("utf-8", "replace")[:300]
+            raise RuntimeError(f"HTTP {r.status_code}: {body}")
+        async for line in r.aiter_lines():
+            if time.time() - t0 > limit:
+                if meta is not None:
+                    meta["timeout"] = "total"
+                print(f"[llm] 流式生成超过 {limit:.0f}s 上限, 提前结束", file=sys.stderr)
+                return
+            if line and line.startswith("data:") and line[5:].strip() == "[DONE]":
+                break
+            obj = _sse_obj(line)
+            if not obj:
+                continue
+            delta = obj.get("choices", [{}])[0].get("delta", {})
+            if delta.get("content"):
+                yield delta["content"]
+
+
+async def stream_async(messages, cfg=None, system=None, meta=None, retries=3,
+                       user_key=""):
+    """`stream` 的异步版。重试语义一致：只在"一个字都没吐出来"时重试。
+
+    这是阶段 2 的核心：SSE 走事件循环，不再占线程池线程。
+    """
+    import asyncio
+    s = llm_settings(cfg, user_key=user_key)
+    if not llm_enabled(cfg=s):
+        return
+    if isinstance(messages, str):
+        msgs = [{"role": "user", "content": messages}]
+    else:
+        msgs = messages
+    if system:
+        msgs = [{"role": "system", "content": system}] + msgs
+    os.environ.pop("SSL_CERT_FILE", None)
+    os.environ.pop("SSL_CERT_DIR", None)
+
+    last_err = None
+    for attempt in range(retries + 1):
+        got = False
+        try:
+            if s.get("protocol", "openai") == "anthropic":
+                gen = _stream_anthropic_async(s, msgs, meta)
+            else:
+                gen = _stream_openai_async(s, msgs, meta)
+            async for piece in gen:
+                got = True
+                yield piece
+            if got or (meta is not None and meta.get("timeout")):
+                return
+            last_err = RuntimeError("网关返回空流(没有任何文本)")
+        except httpx.ReadTimeout:
+            if meta is not None:
+                meta["timeout"] = "read"
+            last_err = RuntimeError(f"等待首个响应超过 {read_timeout():.0f}s")
+        except httpx.ConnectTimeout:
+            if meta is not None:
+                meta["timeout"] = "connect"
+            last_err = RuntimeError(f"连接网关超时({connect_timeout():.0f}s)")
+        except Exception as e:
+            last_err = e
+
+        if got:
+            if meta is not None and not meta.get("error") and not meta.get("timeout"):
+                meta["error"] = f"{type(last_err).__name__}: {last_err}"
+            print(f"[llm] 异步流式中途失败(已输出, 不重试): {last_err}", file=sys.stderr)
+            return
+
+        if attempt < retries:
+            wait = 2.0 * (attempt + 1)
+            print(f"[llm] 异步第 {attempt + 1} 次失败: {last_err}；{wait:.1f}s 后重试",
+                  file=sys.stderr)
+            await asyncio.sleep(wait)
+
+    if meta is not None and not meta.get("error"):
+        meta["error"] = f"{type(last_err).__name__}: {last_err}"
+    print(f"[llm] 异步流式最终失败(已重试 {retries} 次): {last_err}", file=sys.stderr)
 
 
 if __name__ == "__main__":
