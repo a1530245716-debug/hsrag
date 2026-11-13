@@ -1361,6 +1361,17 @@ def kb_index(kb_id: str, sync: bool = False):
     kb_ = indexer.get_kb(kb_id)
     if not kb_:
         return JSONResponse({"ok": False, "msg": "知识库不存在"}, status_code=404)
+
+    # sync=True：调用方要求同步拿结果（脚本/排障用），保持直接跑不变。
+    # 异步分支交给 indexer 的任务队列（Claude Code 实现）：
+    #   - 单 worker，同库只跑一个，运行中再次请求会在本轮后自动重跑
+    #   - 状态落盘 app/data/<kb_id>/index_status.json，重启后能标 interrupted
+    #   - 失败自动重试 2 次（共 3 次），仍失败标 failed
+    # 之前这里是「起个 threading.Thread 直接跑 index_kb」，没有队列、没有
+    # 持久化状态、没有重试，服务重启就丢进度。
+    if not sync:
+        return indexer.enqueue_index(kb_id, reason="manual")
+
     st = STATUS.setdefault(kb_id, {"running": False, "err": ""})
     if st["running"]:
         return {"ok": True, "status": "indexing", "msg": "已在索引中"}
@@ -1391,11 +1402,27 @@ def kb_index(kb_id: str, sync: bool = False):
         finally:
             st["running"] = False
 
-    if sync:
-        run()
-        return {"ok": True, "stats": st.get("last_stats"), "status": "done"}
-    threading.Thread(target=run, daemon=True).start()
-    return {"ok": True, "status": "started", "msg": "索引已后台启动"}
+    # 走到这里只可能是 sync=True（异步分支上面已经 return 了）
+    run()
+    return {"ok": True, "stats": st.get("last_stats"), "status": "done"}
+
+
+@app.get("/api/kb/{kb_id}/index/status")
+def kb_index_status(kb_id: str):
+    """索引任务进度（前端轮询）。
+
+    返回 index_status.json 里那一份：status / progress / started / finished /
+    error / attempt / stats / peak_mb / elapsed。
+    状态取值：idle / queued / running / done / failed / interrupted。
+    """
+    if not indexer.get_kb(kb_id):
+        return JSONResponse({"ok": False, "msg": "知识库不存在"}, status_code=404)
+    try:
+        job = indexer.get_index_status(kb_id)
+    except Exception as e:
+        return JSONResponse({"ok": False, "msg": f"读取索引状态失败: {e}"},
+                            status_code=500)
+    return {"ok": True, "job": job}
 
 
 @app.post("/api/kb/{kb_id}/upload")
@@ -3113,8 +3140,17 @@ async def health():
     连这个探活接口都要等 2 秒（压测实测 100 并发时 P95=1985ms）。
     这里只读几个内存变量，本来就是毫秒级，不该排在问答后面。
     """
+    # 向量一致性：chunks.jsonl 行数与 vectors.npy 行数对不上时，检索会静默出错。
+    # 只返回"已经算过的"结果（cached_consistency_report 不碰文件 I/O），
+    # 探活路径绝不做磁盘操作，否则又变回慢接口。
+    try:
+        import embeddings
+        consistency = embeddings.cached_consistency_report()
+    except Exception:
+        consistency = {}
     return {"ok": True, "llm_configured": llm.llm_enabled(),
             "ask": ask_limits_state(),
+            "embeddings": consistency,
             "llm": llm.llm_settings() | {"api_key": "***" if llm.llm_settings()["api_key"] else ""}}
 
 
@@ -3484,6 +3520,17 @@ def preload_kbs():
     业务手册优先加载（答辩演练默认用它），其余按注册表顺序。
     进度写进 _WARMUP，/api/warmup 给前端显示。
     """
+    # 先恢复上次遗留的索引任务状态：服务重启时还标着 queued/running 的，
+    # 实际已经不会继续跑了，不改成 interrupted 前端会一直转圈。
+    try:
+        n = indexer.recover_index_statuses()
+        if n:
+            print(f"[preload] 恢复索引状态: {n} 个任务标记为 interrupted",
+                  file=__import__("sys").stderr, flush=True)
+    except Exception as e:
+        print(f"[preload] 恢复索引状态失败: {type(e).__name__}: {e}",
+              file=__import__("sys").stderr, flush=True)
+
     try:
         reg = indexer.load_registry()
         reg.sort(key=lambda k: 0 if "业务手册" in (k.get("name") or "") else 1)
