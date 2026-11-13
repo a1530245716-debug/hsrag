@@ -92,6 +92,113 @@ Claude Code 在 11-13 测的是「并发 1 吞吐 0.30-0.32 job/s，并发 2 是
 
 改动只在 `rag-agent` worktree（分支 `agent/phase1-limit`），**8000 生产未重启**。
 `app/config.json` 的 `ask_limits` 已恢复默认（20 / 2 / 60），压测过程中的临时放宽已撤销。
+### 16:30（11-13） | Claude Code | `app/indexer.py`、`app/embeddings.py`、`docs/ai-fde/07` | 索引任务队列 + 向量完整性校验 + 建索引内存峰值 | 按 RAG-Agent 15:05 分工的第 1/3/4 件
+
+**`app/indexer.py` — 索引任务队列**
+
+- 新增 `enqueue_index(kb_id)` / `get_index_status(kb_id)` / `recover_index_statuses()`
+- 单 worker 后台线程：同库只跑一个，运行中再次请求在本轮后自动重跑
+- 状态持久化 `app/data/<kb_id>/index_status.json`：
+  `status / progress / started / finished / error / attempt / stats / peak_mb / elapsed`
+- 失败重试 2 次（共 3 次）；重启后遗留的 queued/running 标 `interrupted`
+- 队列内用 tracemalloc 采样，峰值写入 `peak_mb`
+
+**`app/embeddings.py` — 向量完整性校验**
+
+- `check_consistency(kb_id, v=None)`：比较 chunks 行数与 vectors 行数，按 mtime 缓存
+- `consistency_report()`（启动预热，真数行数）/ `cached_consistency_report()`（health 用）
+- `search_vectors` 在读锁内校验；不一致时返回空并打 WARN，自动退化为纯 BM25
+
+**验证**
+
+- 沙箱队列：正常完成、失败两次后成功（attempt=3）、一直失败标 failed
+- 沙箱完整性：chunks=10 / vectors=8 → 返回 0 条；修正为 10/10 → 正常召回
+- 真实全量重建（鑫元源目录 359 文件 / 0.91GB，临时目录）：56,870 块、
+  **峰值 192.5MB**、213s（tracemalloc 口径，C 扩展大缓冲未全计入，属下界）
+
+**待 RAG-Agent 接入**：`server.py` 的异步索引分支改 `enqueue_index`、新增
+`/api/kb/{id}/index/status`、启动调 `recover_index_statuses()`、
+health 加 `cached_consistency_report()`（详细代码在 INBOX 16:25 条）。
+
+---
+
+### 15:10（11-13） | RAG-Agent | `run_dev.ps1` 改为按目录名推导端口 | Claude Code 指出的合并隐患，已修
+
+Claude Code 在 14:55 条记录了一个隐患：`run_dev.ps1` 是被 git 跟踪的 per-worktree 文件，
+每个 worktree 需要的端口不同，每次合并都会在 8011/8012 之间来回翻转并产生冲突
+（这次合入后主目录变成了 8011）。
+
+**选方案 1（按目录名推导端口）而不是方案 2（加 .gitignore）**，理由：
+
+- `.gitignore` 方案会导致每个新 worktree 都要手动补文件。这正是之前踩过的坑——
+  `app/config.json` 被忽略，新建 worktree 里服务直接 `FileNotFoundError` 起不来。
+- 按目录名推导是一份文件适配所有 worktree，新目录开箱即用，且永不冲突。
+
+**改动**（`run_dev.ps1`，三个 worktree 同一份内容）：
+
+```
+project\rag        → 8000
+project\rag-agent  → 8011
+project\rag-claude → 8012
+其它/未知目录      → 8013
+```
+
+另外加了两点：
+
+- 落地在生产端口 8000 时打印黄色警告
+- 端口被占用时直接报错并提示换端口，不让 uvicorn 自己抛异常
+
+**已提交到三个分支**：main `77fa6d3`、agent/phase1-limit `a7280a2`、claude/rerank-tune `02c0f6f`。
+PowerShell 语法检查通过。
+
+---
+
+### 15:10（11-13） | RAG-Agent | 核实「用户 1000 perms.kb=false」：已不存在 | 实测确认，无需处理
+
+Claude Code 在 14:40 和 14:55 两条里都提到：用户 `1000` 的 `perms.kb=false`，
+它对自己拥有的库提问仍会 403，建议管理员确认是否漏配。
+
+**实测结果：这条已不再成立。**
+
+```
+1000 = u_56709aa0dc  perms = {'kb': True, 'defense': True}
+拥有: etf2.0 (272 块)、鑫元基金项目 (56426 块)
+```
+
+用 `1000 / xhy200326` 登录 8000 验证：
+
+- 登录返回 `perms = {"kb":true,"defense":true}`
+- `/api/kb` 返回 3 个库：业务手册（被分享，只读）、etf2.0（自己的）、鑫元基金项目（自己的）
+- **没有 403**
+
+中间有人把 `perms.kb` 打开了（不是我改的，我这边只做过读取）。
+Claude Code 当时的观察是对的，只是那个时点的状态已经变了。
+
+---
+
+### 14:55（11-13） | Claude Code | `docs/agents/CHANGELOG.md`（仅记录） | 阶段 1 已合入 main 并在 8000 复验 | 合并后回归
+
+- main `44e1066`（含 `agent/phase1-limit`）；8000 已重启，`/api/health` 返回限流配置
+  （全局 20 / 每用户 2 / 每 IP 60），4 个知识库 BM25 预热完成。
+- eval 复跑 **4/6**：xy-01 仍是 `O-order` 拼写问题；xy-03 本轮未提 JDK。
+  单独复跑 xy-03 **两次均 PASS**（两次都命中 `jdk`），确认是模型/改写波动，不是阶段 1 回归。
+  阶段 1 只改了流式 ask、health、warmup，非流式 `kb_ask` 链路未动。
+- 已知隐患：`run_dev.ps1` 是 tracked 的 per-worktree 文件，合并时会在 8011/8012 之间来回改
+  （这次合入后主目录变成 8011）。建议改成按目录名推导端口，或加入 `.gitignore` 各 worktree 本地保留。
+
+---
+
+### 14:40（11-13） | Claude Code | `docs/agents/CHANGELOG.md`（仅记录） | 合并后 eval 验收 5/6，唯一 FAIL 是关键词拼写 | 记录合并后的真实验收状态
+
+- main `6615f10`（含 `claude/rerank-tune`）已在 8000 启动，4 个知识库 BM25 预热完成。
+- `eval/run_eval.py` 用管理员账号跑（评测集取自 `rag-agent/eval/xinyuan_cases.json`）：
+  **5/6 PASS**。xy-01 FAIL 仅因答案写的是 `O-order`，用例只认 `OORDER/oorder` 子串；
+  `kb.tokenize` 本来就把 `o-order` 归一为 `oorder`，**不是检索退化**。
+  其余 5 条 PASS，每条 8 条引用。
+- 用户 `1000` 的 `perms.kb=false`，用它跑一律 403；本次用管理员账号，**未改任何权限**。
+- 建议 eval 用例给 xy-01 的同义词组补 `O-order`（`eval/` 归属 RAG-Agent，未擅自改）。
+
+---
 
 ### 14:25（11-13） | RAG-Agent | 阶段 1「止血」完成：三层限流 + 健康检查异步化 | 50 并发下用户要干等 127 秒才拿到首字，过载时应当明确拒绝而不是排队
 
