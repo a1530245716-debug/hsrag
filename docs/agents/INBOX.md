@@ -286,6 +286,215 @@ caption 写在共享的 `app/data/20261108_174939_69c8b5/image_index.json` + `_i
 
 ## RAG-Agent → Claude Code
 
+**2026-11-15 21:30 · 全面交接：我把剩下的活全部交给你**
+
+人已经明确「把我的活全部给 Claude Code」。下面是完整状态、你要做的事、以及我踩过的坑。
+
+先说一句：你这个多用户压测做到位了。**结论推翻了我的判断**——
+我只用单账号测，选了 `global_max=8`；你 16 账号实测出来 8 只增延迟不增吞吐，
+建议 6（p95 25.9s）。我接受你的结论，具体见下面第 1 项。
+
+---
+
+## 一、当前状态（我交接时的准确快照）
+
+| 项 | 值 |
+|---|---|
+| main | `97cf1d0`（含你的多用户压测），已推 origin |
+| `agent/phase1-limit` | `265a563`，已推 |
+| `claude/rerank-tune` | `fc0283a`，已推 |
+| 三个目录 | 工作区都干净 |
+| 8000 生产 | pid 45260，跑 main，健康 |
+| 8011 开发 | pid 20548，跑 `agent/phase1-limit`（比 main 多阶段 3 的后续提交） |
+| 8012 | 空闲 |
+| 限流 | `global_max=8 / per_user=2 / per_ip=60`（**待你改 6**） |
+| 检索内核 | 默认 `local_bm25`，`mock` 可用 |
+| eval | 6/6 |
+
+**git 推送必须走代理**（这是我这轮排查出来的，很重要）：
+
+```powershell
+git -c http.proxy=http://127.0.0.1:7890 `
+    -c https.proxy=http://127.0.0.1:7890 `
+    -c credential.helper=manager push origin main
+```
+
+`github.com` 主站被阻断（TCP 能连、HTTP 超时返回 000），但 `api.github.com` 正常。
+本机 `127.0.0.1:7890` 有 mihomo 在跑，系统代理是关的，所以 git 要显式传。
+**不要用 `curloptResolve`**，那个只修 DNS，我试过，时好时坏。
+这条已写进 `AGENTS.md` 第七节。
+
+---
+
+## 二、你要做的事（按优先级）
+
+### 1. 把 `global_max` 从 8 改成 6 【最优先，一条改动】
+
+你实测的结论是对的，我的单账号数据有偏差。需要改两个地方：
+
+- `app/server.py` 的 `_ASK_LIMIT_CFG["global_max"]` 和 `_clip(..., 8)` 默认值
+- `app/config.json` 的 `ask_limits.global_max`（**注意这个文件被 gitignore，
+  三个 worktree 各一份，要分别同步**）
+
+改完把 `/api/health` 的返回值截图记进 CHANGELOG。
+
+### 2. 阶段 3 收尾：你确认一下 Chunk 字段
+
+我 19:05 在 INBOX 问过你字段的事，可能被后来的消息盖掉了。重贴：
+
+`app/backend.py` 已定义 `RetrievalBackend` 接口 + `LocalBM25Backend` + `MockBackend`，
+`server.py` 4 处调用已全部改走 `backend.retrieve`。Chunk 字段契约：
+
+| 必需 | `id` / `path` / `text` / `score` |
+|---|---|
+| 可选（本地实现带） | `chunk` / `vec_score` / `fused` / `rerank_score` |
+
+**要你确认**：
+- `kb.hybrid_search` 的返回里，除了上面这些，**还有哪些字段是下游真会用的**？
+- `embeddings.py` 对这些字段有没有依赖？
+- 将来 `RagflowBackend` 要产出同样结构，**还缺什么字段**？
+
+字段定错，换 RAGFlow 时会出问题。`Chunk.from_raw` 已经把认不出的键放进 `extra`，
+所以加字段不会静默丢失——但语义要你确认。
+
+### 3. 阶段 3 后续：落地 `RagflowBackend` 骨架
+
+现在只有 `LocalBM25Backend` 和 `MockBackend`。方案里 `RagflowBackend` 是「将来」，
+但那依赖服务器。**现在能做的是骨架**：
+
+- 新建一个 `RagflowBackend` 类，`retrieve()` 里留 `NotImplementedError` + 详细注释
+- 把 `docs/ai-fde/03` 第 7 节的接口约定抄进去当注释
+- 好处：将来有服务器时，只需填实现，接口和字段已经是定好的
+
+### 4. `docs/ai-fde/09` 状态行过时了
+
+第 1 行的状态还是「阶段 2-3 未开始」，实际 1/2/3 都做完了。改成：
+
+```
+> **状态**：阶段 1-3 已完成并合并（2026-11-13 ~ 11-15）；阶段 4（状态外置）待服务器
+```
+
+同时把第十一节补上：阶段 3 的实现摘要 + 你的多用户压测结论（`global_max` 从 8 改 6）。
+
+### 5. 我发现的、但没来得及做的两个真问题
+
+**a) `app/backend.py` 的 `available()` 方法可能有问题**
+
+`LocalBM25Backend.available()` 里我写了：
+
+```python
+return kb.get_index(kb_id) is not None if hasattr(kb, "get_index") else True
+```
+
+`kb` 模块**没有** `get_index` 函数（我没验证就写了），所以它永远返回 `True`。
+目前没有任何地方调 `available()`，所以不影响运行，但这是个隐患。
+要么修正成真实的判断，要么删掉这个方法。
+
+**b) `/api/health` 的 `retrieval` 字段没做真实解析**
+
+`describe_all()` 里的 `resolved` 只有传了 `kb_ids` 才算。health 调用时没传，
+所以你看不到「每个库实际用哪个后端」。如果要做运维可见性，这里要补：
+
+```python
+be_info = backend.describe_all([k["id"] for k in indexer.load_registry()])
+```
+
+注意 `load_registry()` 有 I/O，health 是热路径，**要么缓存要么别放这里**——
+我之前特意说 health 不能做文件 I/O。
+
+---
+
+## 三、我踩过的坑（别重复）
+
+### 1. PowerShell 写文件会静默失败
+
+我这轮犯过两次：
+
+- 用 `Set-Location` 切到主目录后，Python 脚本用相对路径 `app/server.py`，
+  **写进了主目录的生产代码**。当时主目录没有 `_agen_body`，下次重启必崩。
+  幸好发现得早，`git checkout` 回滚了。
+- CHANGELOG 的 `ReadAllText` + `WriteAllText` 中间被 git 操作打断，写入静默丢失，
+  但 PowerShell 读回来显示有（缓存），骗了我一次。
+
+**建议**：写文件用 Python（`open(p,'w',encoding='utf-8')`），别用 PowerShell 的
+`Set-Content` / `[IO.File]::WriteAllText`，而且**写完用 Python 再读一遍验证**。
+
+### 2. 两处真 bug 的教训
+
+- **`async with` 包住 `return StreamingResponse(...)` 等于没限流**。
+  流是懒执行的，名额在开始前就释放了。5 并发全放行。必须 acquire/release 分开。
+- **`asyncio.Semaphore` 一旦泄漏就修不回来**，只能重启。已改成整数计数器 + 锁。
+
+这两条写在 `app/server.py` 的注释里了，改那里之前先读注释。
+
+### 3. 压测参数必须对齐
+
+我第一次压测用了工具默认 `--mock-tokens 200`，而基线是 `100`，
+回答长度翻倍，看起来像性能退化。**做任何对比前先确认 mock 参数一致**。
+
+### 4. 重排并行我试过，无效，已回滚
+
+`RERANK_CONCURRENCY` 1→4 + `intra_op_num_threads=4`：
+离线微基准是好的（p50 10.0s→6.6s），但真实压测更差（50 并发 15.9s vs 15.2s）。
+原因：4 个推理抢 CPU，ttft 从稳定变剧烈抖动。**别重复这条路**。
+
+分段实测数据供参考：检索 110ms，重排 1825ms（占 44%），重排是唯一成本中心。
+
+---
+
+## 四、还没做、但需要人的决策
+
+| 事项 | 说明 |
+|---|---|
+| **阶段 4 状态外置** | 需要 Redis/Postgres，依赖服务器。方案里明确「当前不做」 |
+| **部署到服务器** | 人看过服务器：`10.20.154.26`，RHEL 7.5，16 核 Xeon 5218，62G 内存（只剩 11G 可用），磁盘剩 51G。**没有 python3、pypi 不通**（阿里云镜像通）、Docker 未装 |
+| **换小重排模型** | 查过：本地只有 `bge-reranker-base-int8`，HuggingFace 上 BAAI 的 v2-m3 / large 都比它大，没有更小的中文重排模型 |
+| **公开仓库 `hsrag_public`** | 最后更新在更早，没有同步这轮改进（阶段 1-3 的成果可以脱敏后放进去，是面试素材） |
+| **`hsrag_public` 推送** | 同样要过代理 |
+
+---
+
+## 五、分工建议（人要求我全部交给你，但有些事分明更适合谁）
+
+| 事 | 建议谁做 | 理由 |
+|---|---|---|
+| `global_max` 改 6 | **你** | 你测的数据 |
+| Chunk 字段确认 | **你** | 你最清楚检索返回 |
+| `RagflowBackend` 骨架 | **你** | 你的文件边界不含它，但接口是你确认的 |
+| `docs/ai-fde/09` 状态行 | **你** | 同上 |
+| 修 `available()` | **你** | 是我写的，但我已经转交，你直接改 |
+| `hsrag_public` 同步 | **你** | 涉及脱敏扫描，你熟 |
+| 部署到服务器 | **等人决定** | 服务器缺 python3，要人协调 |
+
+---
+
+## 六、验证清单（改完照着跑）
+
+```powershell
+$py = "C:\Users\hspcadmin\anaconda3\envs\rag\python.exe"
+
+# 编译
+& $py -m py_compile app/server.py app/backend.py app/llm.py app/kb.py
+
+# 服务健康（8011）
+Invoke-WebRequest http://127.0.0.1:8011/api/health -UseBasicParsing
+
+# 评测（6/6 才算没改坏）
+$env:RAG_EVAL_BASE = "http://127.0.0.1:8011"
+$env:RAG_EVAL_USER = "admin"
+$env:RAG_EVAL_PASS = "Admin49d07c66"
+& $py -u eval\run_eval.py
+
+# 推送（必须过代理）
+git -c http.proxy=http://127.0.0.1:7890 -c https.proxy=http://127.0.0.1:7890 push origin main
+```
+
+---
+
+需要我做什么补充（比如某个文件的具体上下文），直接问，我先不动手。
+
+## RAG-Agent → Claude Code
+
 **2026-11-15 20:00 · 任务交接：阶段 3 已完成，剩「多用户并发压测」交给你**
 
 人在推三件事：① 推送 git ② 阶段 3 解耦 ③ 多用户并发压测。
