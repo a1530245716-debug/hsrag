@@ -43,6 +43,10 @@
          white-space:nowrap; }
   .btn.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
   .btn:hover { filter:brightness(.96); }
+  /* 被限流时的提示块 */
+  .busy { margin-bottom:6px; }
+  .busy-act { margin-top:6px; }
+  .retry-btn[disabled] { opacity:.6; cursor:default; }
   .goto { margin-top:6px; font-size:12px; color:var(--muted); }
   .goto a { color:var(--accent); cursor:pointer; }
   /* 主区 */
@@ -1351,6 +1355,31 @@ function select(k){
   renderKbs();
   if (!k.chunk_count) addMsg('assistant', '该知识库还没有索引。点右上角"重建索引"，或先添加/补充文档后重建。');
 }
+// 被限流（429）时的提示：说明原因 + 倒计时重试按钮。
+// 后端保证带 retry_after，这里倒计时结束自动把按钮变成可点的「重试」。
+let _busyTimer = null;
+function showBusy(msg, wait){
+  const esc = (s) => String(s == null ? '' : s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const m = addMsg('bot',
+    `<div class="busy">⏳ ${esc(msg)}</div>
+     <div class="busy-act"><button class="btn retry-btn" disabled>
+       请稍候 <span class="busy-n">${wait}</span> 秒</button></div>`);
+  const btn = m.querySelector('.retry-btn');
+  const num = m.querySelector('.busy-n');
+  let left = Number(wait) || 5;
+  if (_busyTimer) clearInterval(_busyTimer);
+  _busyTimer = setInterval(() => {
+    left -= 1;
+    if (left > 0){ if (num) num.textContent = left; return; }
+    clearInterval(_busyTimer); _busyTimer = null;
+    if (btn){ btn.disabled = false; btn.innerHTML = '↻ 现在重试'; }
+  }, 1000);
+  if (btn) btn.onclick = () => { m.remove(); ask(); };
+  m.scrollIntoView({block:'nearest'});
+  return m;
+}
+
 function addMsg(role, html){
   const box = $('#chat');
   $('#chat .empty') && box.querySelector('.empty')?.remove();
@@ -2017,6 +2046,21 @@ async function ask(retryQ, reuseNode, fbMode){
         images: imgs}),                      // 本轮贴的图（历史轮次不带图）
       signal: ac.signal }));
     if (resp.status === 401){ showLogin('登录已过期，请重新登录'); return; }
+    // 429 = 被限流。后端会带 Retry-After 和一段通俗的 msg（"系统繁忙…"/"你还有 N 个问题…"），
+    // 直接把那段话显示给用户，并给一个倒计时的重试按钮——比让他看到空白崩掉好得多。
+    if (resp.status === 429){
+      let msg = '系统繁忙，请稍后重试';
+      let wait = 5;
+      try{
+        const d = await resp.json();
+        if (d && d.msg) msg = d.msg;
+        if (d && d.retry_after) wait = Number(d.retry_after) || 5;
+      }catch(e){}
+      const ra = Number(resp.headers.get('Retry-After'));
+      if (ra) wait = ra;
+      showBusy(msg, wait);
+      return;
+    }
     const reader = resp.body.getReader(); const dec = new TextDecoder();
     let text = '', buf = '';
     while (true){
