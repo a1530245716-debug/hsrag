@@ -25,6 +25,12 @@ def main():
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8010)
     ap.add_argument("--mock-url", default="http://127.0.0.1:9099")
+    ap.add_argument("--global-max", type=int, default=0,
+                    help="覆盖 ask_limits.global_max（0=用 config）")
+    ap.add_argument("--per-user-max", type=int, default=0,
+                    help="覆盖 ask_limits.per_user_max（0=用 config）")
+    ap.add_argument("--per-ip-per-min", type=int, default=0,
+                    help="覆盖 ask_limits.per_ip_per_min（0=用 config）")
     args = ap.parse_args()
 
     os.environ["RAG_LLM_BASE_URL"] = args.mock_url
@@ -38,6 +44,17 @@ def main():
     fallback.web_search = lambda query: None
 
     import server
+
+    overrides = {}
+    if args.global_max:
+        overrides["global_max"] = args.global_max
+    if args.per_user_max:
+        overrides["per_user_max"] = args.per_user_max
+    if args.per_ip_per_min:
+        overrides["per_ip_per_min"] = args.per_ip_per_min
+    if overrides:
+        server._ASK_LIMIT_CFG.update(overrides)
+        print(f"[loadtest] ask_limits override: {overrides}", flush=True)
 
     server._figures_enabled = lambda: False
 

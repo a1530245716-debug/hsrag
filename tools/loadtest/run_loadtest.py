@@ -105,6 +105,43 @@ def make_token():
     return auth.make_token(admin["id"]), admin.get("name") or admin.get("id")
 
 
+def make_tokens(args):
+    """返回 (tokens, names)。
+
+    多用户压测必须每个并发用不同账号，否则先撞 per_user_max，测不到 global_max。
+    优先 --accounts（逗号分隔，可带 :密码），其次 --user-prefix + --user-count，
+    都没有时退回单管理员 token（旧行为）。
+    """
+    import auth
+    import users
+    if args.token:
+        return [args.token], ["cli-token"]
+
+    picked = []
+    if args.accounts:
+        for part in args.accounts.split(","):
+            un = part.split(":", 1)[0].strip()
+            if not un:
+                continue
+            u = users.find_by_username(un)
+            if not u:
+                raise SystemExit(f"账号不存在: {un}")
+            picked.append(u)
+    elif args.user_prefix and args.user_count:
+        for i in range(1, args.user_count + 1):
+            un = f"{args.user_prefix}{i:02d}"
+            u = users.find_by_username(un)
+            if not u:
+                raise SystemExit(f"账号不存在: {un}")
+            picked.append(u)
+    else:
+        tok, name = make_token()
+        return [tok], [name]
+
+    return ([auth.make_token(u["id"]) for u in picked],
+            [u.get("username") or u["id"] for u in picked])
+
+
 def pick_kb(kb_id):
     import indexer
     reg = indexer.load_registry()
@@ -158,7 +195,7 @@ async def wait_warmup(url, proc, log_path, timeout=600):
     raise TimeoutError("预热超时，看 tools/loadtest/test_server.log")
 
 
-async def ask_one(client, base, kb_id, question, idx):
+async def ask_one(client, base, kb_id, question, idx, headers=None):
     t0 = time.perf_counter()
     ttft_ms = None
     chars = 0
@@ -171,7 +208,7 @@ async def ask_one(client, base, kb_id, question, idx):
         payload = {"question": question, "no_cache": True, "history": [],
                    "answer_len": "normal"}
         async with client.stream("POST", f"{base}/api/kb/{kb_id}/ask/stream",
-                                 json=payload) as r:
+                                 json=payload, headers=headers) as r:
             status = r.status_code
             if status != 200:
                 body = await r.aread()
@@ -307,7 +344,7 @@ async def main_async(args):
 
     kb = pick_kb(args.kb_id)
     kb_id = kb["id"]
-    token, uname = (args.token, "cli-token") if args.token else make_token()
+    tokens, unames = make_tokens(args)
 
     mock_proc = server_proc = None
     mock_log_fh = server_log_fh = None
@@ -317,7 +354,8 @@ async def main_async(args):
     app_base = f"http://{args.host}:{args.app_port}"
 
     print(f"知识库: {kb.get('name')} ({kb_id}), {kb.get('chunk_count')} 块", flush=True)
-    print(f"问题数: {len(questions)}  用户: {uname}", flush=True)
+    print(f"问题数: {len(questions)}  账号: {len(tokens)} "
+          f"({unames[0]}..{unames[-1]})", flush=True)
     print(f"并发级别: {levels}", flush=True)
     if max(levels) >= 50 and not args.yes:
         raise SystemExit("并发 >= 50 会明显影响本机正在运行的服务；确认空闲后加 --yes")
@@ -346,23 +384,29 @@ async def main_async(args):
             )
             await wait_mock(mock_base, mock_proc, mock_log_path)
 
+            limit_args = []
+            if args.global_max:
+                limit_args += ["--global-max", str(args.global_max)]
+            if args.per_user_max:
+                limit_args += ["--per-user-max", str(args.per_user_max)]
+            if args.per_ip_per_min:
+                limit_args += ["--per-ip-per-min", str(args.per_ip_per_min)]
             server_log_fh = open(server_log_path, "w", encoding="utf-8")
             server_proc = subprocess.Popen(
                 [sys.executable, str(HERE / "test_server.py"),
                  "--host", args.host, "--port", str(args.app_port),
-                 "--mock-url", mock_base],
+                 "--mock-url", mock_base] + limit_args,
                 cwd=str(ROOT), env=env, stdout=server_log_fh, stderr=subprocess.STDOUT,
             )
             print("等待测试实例预热…", flush=True)
             await wait_warmup(app_base, server_proc, server_log_path, args.warmup_timeout)
 
-        headers = {"X-RAG-Token": token} if token else {}
         max_conn = max(20, max(levels) * 2)
         timeout = httpx.Timeout(connect=10, read=args.request_timeout,
                                 write=30, pool=args.request_timeout)
         limits = httpx.Limits(max_connections=max_conn,
                               max_keepalive_connections=max(10, max(levels)))
-        async with httpx.AsyncClient(base_url=app_base, headers=headers,
+        async with httpx.AsyncClient(base_url=app_base,
                                      timeout=timeout, limits=limits) as client, \
                    httpx.AsyncClient(timeout=timeout,
                                      limits=httpx.Limits(max_connections=4)) as probe_client, \
@@ -370,7 +414,8 @@ async def main_async(args):
             warm_n = max(1, args.warmup)
             print(f"\n预热请求 {warm_n} 次…", flush=True)
             for i in range(warm_n):
-                r = await ask_one(client, app_base, kb_id, questions[i % len(questions)], i)
+                r = await ask_one(client, app_base, kb_id, questions[i % len(questions)], i,
+                                  headers={"X-RAG-Token": tokens[i % len(tokens)]})
                 print(f"  #{i + 1} ttft={fmt(r['ttft_ms'])}ms total={r['total_ms']:.0f}ms "
                       f"chars={r['chars']} done={r['done']} err={r['error'][:60] or '-'}",
                       flush=True)
@@ -411,7 +456,8 @@ async def main_async(args):
 
                 t0 = time.perf_counter()
                 results = await asyncio.gather(*[
-                    ask_one(client, app_base, kb_id, questions[i % len(questions)], i)
+                    ask_one(client, app_base, kb_id, questions[i % len(questions)], i,
+                            headers={"X-RAG-Token": tokens[i % len(tokens)]})
                     for i in range(level)
                 ])
                 wall = time.perf_counter() - t0
@@ -475,6 +521,15 @@ def main():
     ap.add_argument("--keep", action="store_true")
     ap.add_argument("--skip-start", action="store_true")
     ap.add_argument("--token", default="")
+    ap.add_argument("--accounts", default="",
+                    help="逗号分隔的账号（可带 :密码）；每个并发轮转使用，避免撞 per_user_max")
+    ap.add_argument("--user-prefix", default="")
+    ap.add_argument("--user-count", type=int, default=0)
+    ap.add_argument("--user-password", default="benchPass2026")
+    ap.add_argument("--global-max", type=int, default=0,
+                    help="传给 test_server，覆盖 global_max")
+    ap.add_argument("--per-user-max", type=int, default=0)
+    ap.add_argument("--per-ip-per-min", type=int, default=0)
     ap.add_argument("--yes", action="store_true")
     args = ap.parse_args()
     asyncio.run(main_async(args))
