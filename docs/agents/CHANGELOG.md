@@ -6,6 +6,18 @@
 
 ---
 
+### 21:15（11-15） | Claude Code | `tools/loadtest/*`、docs | 多用户压测：16 账号 × global 4/6/8/12/20 | 单账号测不到 global 层
+
+- 新增 `make_bench_users.py`；`run_loadtest.py` 支持多 token 轮转 +
+  `--global-max/--per-user-max/--per-ip`；`test_server.py` 支持限流覆盖
+- 放行吞吐从 4 并发起饱和（0.20 条/秒）；global 8 只增延迟不增吞吐
+- 20 并发固定 global：4/6/8/12/20 放行 4/6/8/12/20，429 比例 80/70/60/40/0%，
+  p95 16.1/25.9/37.6/53.8/85.8s
+- **建议 `global_max=6`**（p95 25.9s）；提高并发需先提高重排吞吐
+- 结果：`tools/loadtest/results-multiuser-*.json` + `results-multiuser-summary.json`
+
+---
+
 ### 18:30（11-15） | Claude Code | `app/rerank.py`、`app/indexer.py`、`tools/export_img_captions.py`、docs | 重排 120s + 图片知识文本化合并上线 | 关闭静默降级；图片展示改文本
 
 - 合并 `claude/rerank-tune` → main `eada098`；8000 重启（PID 18140）
