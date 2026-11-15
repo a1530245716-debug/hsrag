@@ -8,7 +8,8 @@
 
 ### 21:45（11-15） | Claude Code | `app/backend.py`、`app/server.py`、`docs/ai-fde/09`、config | 五项交接：global_max=6、Chunk 契约、Ragflow 骨架、09 状态、两个缺陷 | RAG-Agent 20:00 交接
 
-- config `ask_limits.global_max 8→6`（备份 `.bak-global6`）；8000 重启 PID 17280
+- config `ask_limits.global_max 8→6`（备份 `.bak-global6`）；代码默认值与
+  `config.example.json` 同步为 6；8000 重启 PID 17280
 - Chunk 新增可选 `doc_id/title/chunk_index/metadata/raw_score`；`available()` 修复
   （按 registry + chunks.jsonl 判断，不再恒 True）；`RagflowBackend` 骨架（未注册）
 - health `retrieval.resolved` 由后台线程缓存，探活零文件 I/O；preload 预热一致性

@@ -133,7 +133,7 @@ def _load_ask_limits():
         cfg = llm.load_config().get("ask_limits") or {}
     except Exception:
         cfg = {}
-    _ASK_LIMIT_CFG["global_max"] = _clip(cfg.get("global_max"), 1, 500, 8)
+    _ASK_LIMIT_CFG["global_max"] = _clip(cfg.get("global_max"), 1, 500, 6)
     _ASK_LIMIT_CFG["per_user_max"] = _clip(cfg.get("per_user_max"), 1, 50, 2)
     _ASK_LIMIT_CFG["per_ip_per_min"] = _clip(cfg.get("per_ip_per_min"), 1, 10000, 60)
     _ASK_LIMIT_CFG["retry_after"] = _clip(cfg.get("retry_after"), 1, 300, 5)
