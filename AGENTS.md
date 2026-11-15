@@ -185,14 +185,39 @@ Start-Process $py -ArgumentList "app\server.py" -WorkingDirectory . -WindowStyle
 - 不要直接把私有仓库改 public；用全新仓库/孤立分支，避免历史残留。
 - 详细做法：`docs/ai-fde/08-FDE学习与简历路线.md`。
 
-### GitHub 连接（本机实测）
+### GitHub 连接（本机实测，2026-11-15 更新）
 
-- 本机 DNS 可能把 `github.com` 解析到 443 不通的地址（实测 `20.205.243.166` 超时）；`api.github.com` 可达。
-- 临时绕过（不改 hosts、不提权）：
-  `git -c http.curloptResolve=github.com:443:140.82.116.3 ...`
-- 推送示例：
-  `git -c http.curloptResolve=github.com:443:140.82.116.3 -c credential.helper=manager push origin main`
-- IP 会变；先 `curl --resolve github.com:443:140.82.116.3 https://github.com` 验证。不要把 IP 写进全局 git 配置。
+**根本原因**：`github.com` 主站被阻断（TCP 443 能连上，但 HTTP/TLS 完全超时，curl 返回 000）。
+`api.github.com` 却正常（200，0.8s）。所以「能 ping 通 / 能连 443」不代表能用。
+
+**正确解法：走本机已装好的 mihomo（Clash 内核）代理**
+
+本机 `127.0.0.1:7890` 有 mihomo 在监听，但**系统代理是关的**（`ProxyEnable: 0`），
+git 也不会自动走代理。加两个参数就行：
+
+```powershell
+git -c http.proxy=http://127.0.0.1:7890 `
+    -c https.proxy=http://127.0.0.1:7890 `
+    -c credential.helper=manager push origin main
+```
+
+拉取同理。**实测这个方式稳定可靠**（38 个提交一次推完）。
+
+**不要再用 `curloptResolve` 那套**：它只解决 DNS 解析，解决不了网络层阻断。
+之前碰巧成功过一次（某个 IP 短暂可用），但换 IP 就会失败，非常不可靠。
+
+**如果代理端口变了**，先查：
+
+```powershell
+Get-NetTCPConnection -LocalPort 7890 -State Listen | Select-Object OwningProcess
+Get-Process -Id <pid> | Select-Object ProcessName    # 应该看到 mihomo
+```
+
+**另一个备选**：SSH 端口 22 是通的（`ssh -T git@github.com` 能连上，只是本机没配 key）。
+如果哪天要长期用，可以生成密钥配到 GitHub，比走 HTTPS 省事——但加 key 需要访问
+github.com 网页，得先有代理。
+
+
 
 ### 文档与记录
 
