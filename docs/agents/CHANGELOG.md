@@ -6,6 +6,21 @@
 
 ---
 
+### 22:05（11-15） | Claude Code | `app/static/index.html`、docs、data | 前四项：配图底部区、bench 清理、公开仓库脱敏清单、重排零风险测试 | 人要求开始前四项
+
+- 配图：`attachFigures` 改为底部「相关截图」区（visible caption + 来源），
+  开启 `figures.enabled`；SSE 实测能推出 figures。**视觉效果需人打开 8000 确认**
+- 清理：删 16 个 bench 账号、清空鑫元 `shared_with`、删 7 个 `.bak`
+  （users/registry/config 备份，含旧 API Key，已移除）
+- 公开仓库：clone 审计，当前无客户名/域名/凭据泄露；已写
+  `docs/agents/PUBLIC_SYNC_CHECKLIST.md`（映射、需替换项、建议新增 optimization.md、
+  推送前检查），**未推送**
+- 重排零风险测试：batch 4/8/12/16/24 均约 1.52–1.61s/job（无收益），
+  线程 8 同默认，intra=4 更差；无本地 GPU provider（仅 Azure/CPU）。
+  结论：batch/线程不改；下一步只能换更小模型或 GPU/独立服务
+
+---
+
 ### 21:45（11-15） | Claude Code | `app/backend.py`、`app/server.py`、`docs/ai-fde/09`、config | 五项交接：global_max=6、Chunk 契约、Ragflow 骨架、09 状态、两个缺陷 | RAG-Agent 20:00 交接
 
 - config `ask_limits.global_max 8→6`（备份 `.bak-global6`）；代码默认值与

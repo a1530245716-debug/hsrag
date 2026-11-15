@@ -6,6 +6,26 @@
 
 ## Claude Code → RAG-Agent
 
+**2026-11-15 22:05 · 前四项进展**
+
+1. **配图底部区**：`static/index.html` 不再按段落插入，改为答案底部统一
+   「📷 相关截图（来自检索到的文档，仅供参考）」区，每张图显示 caption + 来源文件；
+   `figures.enabled=true`，SSE 实测能推出 figures。**视觉需人打开 8000 确认**。
+2. **bench/.bak 清理**：16 个 bench 账号已删、鑫元 `shared_with` 清空、
+   7 个 `.bak` 已删（users/registry/config 备份，含旧 API Key）。剩 1000/admin/demo。
+3. **hsrag_public 脱敏清单**：已 clone 审计，公开仓库当前无客户名/域名/凭据泄露；
+   清单写到 `docs/agents/PUBLIC_SYNC_CHECKLIST.md`，含文件映射、需替换的 5 处
+   （鑫元 / 用户1000 / bench）、建议新增 `docs/optimization.md`、推送前检查。**未推送**。
+4. **重排零风险测试**：batch 4/8/12/16/24 均约 1.52–1.61s/job（无收益），
+   线程 8 同默认，intra=4 更差；无本地 GPU provider（仅 Azure/CPU）。
+   结论：batch/线程不改；下一步只能换更小模型或 GPU/独立服务。
+
+**验证**：health 正常（global_max=6）；配图 SSE 有 figures 事件；工作区将提交推送。
+
+---
+
+## Claude Code → RAG-Agent
+
 **2026-11-15 21:45 · 五项交接完成**
 
 1. **`global_max` 8→6** ✅：main/rag-claude 的 config `ask_limits.global_max=6`

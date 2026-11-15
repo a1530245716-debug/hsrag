@@ -245,6 +245,18 @@
   .figstrip .fig img { width:100%; height:100%; object-fit:contain; display:block; }
   .figstrip .fig:hover { box-shadow:0 0 0 2px var(--accent); }
 
+  /* 底部「相关截图」区：每张图带可见文字说明，避免被误读成某段配图 */
+  .relfigs { margin-top:14px; padding-top:10px; border-top:1px dashed var(--line); }
+  .relfig-list { display:flex; flex-direction:column; gap:10px; }
+  .relfig { display:flex; gap:10px; align-items:flex-start; }
+  .relfig-thumb { width:150px; height:94px; flex:0 0 auto; border-radius:8px; overflow:hidden;
+                  cursor:zoom-in; border:1px solid var(--line); background:#f6f7f9; }
+  .relfig-thumb img { width:100%; height:100%; object-fit:contain; display:block; }
+  .relfig-thumb:hover { box-shadow:0 0 0 2px var(--accent); }
+  .relfig-meta { min-width:0; font-size:12.5px; line-height:1.6; color:var(--muted); }
+  .relfig-cap { color:var(--text); margin-bottom:2px; }
+  .relfig-src { font-size:12px; color:var(--muted); word-break:break-all; }
+
   /* 提问贴图：输入框上方一条缩略图，可横向滚动，点击放大 */
   .ask-imgs { display:flex; flex-wrap:wrap; gap:8px; padding:8px 14px 0; align-items:center; }
   .ask-imgs .ai { position:relative; width:78px; height:58px; border-radius:8px; overflow:hidden;
@@ -2182,7 +2194,7 @@ async function ask(retryQ, reuseNode, fbMode){
     }
     // 答案配图：按语义把文档截图挂到对应段落后（纯展示，失败不影响回答）
     if (figBlocks && figBlocks.length){
-      try{ attachFigures(newMsg.querySelector('.ansBody'), cur.id, figBlocks); }catch(e){}
+      try{ attachRelatedFigures(newMsg.querySelector('.ansBody'), cur.id, figBlocks); }catch(e){}
     }
     msg.appendChild(ctrl);
     stopBtn.style.display = 'none';
@@ -2715,58 +2727,54 @@ function figUrl(kbId, path, name){
   return `/api/kb/${encodeURIComponent(kbId)}/img?path=${encodeURIComponent(path)}&name=${encodeURIComponent(name)}`;
 }
 
-function figureStripHtml(kbId, imgs){
-  if (!imgs || !imgs.length) return '';
-  const items = imgs.map((im, i) => {
+function attr(s){ return esc(s || '').replace(/"/g, '&quot;'); }
+
+// 底部「相关截图」区：不再按段落插入。
+// 后端按语义给出 blocks（每段一组图），但前端 Markdown 渲染出的 DOM 块和后端
+// 段落不是一一对应，按 para_index 插会错位。这里统一放到答案末尾，并显示图片
+// 摘要和来源文件，让用户自己判断相关性。
+function relatedFiguresHtml(kbId, blocks){
+  if (!blocks || !blocks.length) return '';
+  const seen = new Set(), all = [];
+  for (const blk of blocks){
+    for (const im of (blk.images || [])){
+      const key = im.hash || `${im.path || ''}|${im.name || ''}`;
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      all.push(im);
+    }
+  }
+  all.sort((a, b) => (Number(b.sim) || 0) - (Number(a.sim) || 0));
+  const top = all.slice(0, 8);
+  if (!top.length) return '';
+  const items = top.map(im => {
     const u = figUrl(kbId, im.path, im.name);
-    const tip = esc(im.summary || im.name || '');
-    // 不把 url/title 塞进 onclick（摘要里有单引号会把属性截断），
-    // 改放 data-* ，由事件委托统一接。
-    // url 由 encodeURIComponent 拼成、只含 %XX 和 URL 保留字符，不含引号，
-    // 所以这里**不能**再走 esc()——esc 会把 & 变成 &amp; 把 URL 弄坏。
-    return `<div class="fig" title="${tip}" data-img="${u}" data-title="${tip}">
-              <img src="${u}" loading="lazy" alt="${esc(im.name || '')}">
-            </div>`;
+    const cap = (im.summary || im.name || '').slice(0, 160);
+    const src = ((im.path || '').split(/[\\/]/).pop() || '');
+    return `<div class="relfig">
+      <div class="fig relfig-thumb" title="${attr(cap)}" data-img="${u}" data-title="${attr(cap)}">
+        <img src="${u}" loading="lazy" alt="${attr(im.name || '')}">
+      </div>
+      <div class="relfig-meta">
+        <div class="relfig-cap">${esc(cap)}</div>
+        <div class="relfig-src">来自：${esc(src)}</div>
+      </div>
+    </div>`;
   }).join('');
-  const label = imgs.length > 1 ? `📷 ${imgs.length} 张` : '📷';
-  return `<div class="figbox"><div class="figlabel">${label}</div><div class="figstrip">${items}</div></div>`;
+  return `<div class="figbox relfigs">
+    <div class="figlabel">📷 相关截图（来自检索到的文档，仅供参考）</div>
+    <div class="relfig-list">${items}</div>
+  </div>`;
 }
 
-// 把图集插到答案对应段落之后。
-// 后端给的 para_index 是"拆段后的序号"，和 DOM 里的块不一定一一对应，
-// 所以用「段落首句文字」去 DOM 里找最像的那个块，找不到就退回按比例放。
-function attachFigures(ansBodyEl, kbId, blocks){
-  if (!ansBodyEl || !blocks || !blocks.length) return;
-  const kids = Array.from(ansBodyEl.children);
-  if (!kids.length) return;
-  const norm = s => (s || '').replace(/\s+/g, '').replace(/[#*`>\-|]/g, '').slice(0, 24);
-  const used = new Set();
-
-  for (const blk of blocks){
-    const key = norm(blk.para);
-    if (!key) continue;
-    // 找文字前缀最匹配的那块
-    let target = null, best = 0;
-    kids.forEach((el, i) => {
-      if (used.has(i)) return;
-      const t = norm(el.textContent);
-      if (!t) return;
-      // 前缀重合度
-      let k = 0;
-      while (k < key.length && k < t.length && key[k] === t[k]) k++;
-      if (k > best){ best = k; target = i; }
-    });
-    // 重合太少说明没对上，按段落序号兜底
-    const idx = (best >= 8 && target !== null) ? target : Math.min(blk.para_index, kids.length - 1);
-    if (used.has(idx)) continue;
-    used.add(idx);
-    const html = figureStripHtml(kbId, blk.images);
-    if (!html) continue;
-    const host = document.createElement('div');
-    host.innerHTML = html;
-    const node = host.firstElementChild;
-    if (node) kids[idx].after(node);
-  }
+function attachRelatedFigures(ansBodyEl, kbId, blocks){
+  if (!ansBodyEl) return;
+  const html = relatedFiguresHtml(kbId, blocks);
+  if (!html) return;
+  const host = document.createElement('div');
+  host.innerHTML = html;
+  const node = host.firstElementChild;
+  if (node) ansBodyEl.appendChild(node);
 }
 
 // 看大图：直接在页面里铺一层，不开新标签页。
