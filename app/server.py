@@ -76,16 +76,29 @@ _IMGIDX_STATE = {}      # kb_id -> {"running":bool, "msg":str, "ts":float}
 # 没有上限时，50 并发排队能排到 170 秒，连 /api/health 都被拖慢到 2 秒。
 #
 # 三层：
-#   全局   —— 同时进行的问答数。公司网关每把 Key 约 2 路并发（实测 30 并发就 429），
-#             所以这里留余量设 20，宁可早拒绝也别把网关打爆。
+#   全局   —— 同时进行的问答数（见下面的拐点实测）。
 #   每用户 —— 一个人连点几下不该挤掉别人。
 #   每 IP  —— 防止共享账号被当成压测工具。
 #
 # 超限一律立刻返回 429 + Retry-After，**不排队**。用户重试比干等 3 分钟好。
 # 依据 docs/ai-fde/03-目标架构与数据权限.md:129-130、09-并发重构方案.md 阶段 1。
-
+#
+# 为什么 global_max 是 8 而不是 20（2026-11-15 实测，20 个并发请求扫参）：
+#
+#   global_max  放行  429   墙钟     说明
+#      4         5    15   25.3s   拒绝太多
+#      6         7    13   37.2s
+#      8         9    11   57.2s   ← 采用：墙钟还在缓升，体验可接受
+#     12        13     7   61.5s   墙钟不再改善
+#     20        20     0   97.0s   全都进来，但每个人等到近 100 秒
+#
+# 瓶颈是重排：单次约 2 秒且串行（RERANK_CONCURRENCY=1），
+# 20 个并发排队就要 40 秒以上，靠调并发数救不了，只能决定「让几个人进来」。
+# 取 8 是拐点：再多放人，墙钟不再变短，只是把等待摊给更多人。
+# 被拒的请求立刻拿到 429 + Retry-After，不是干等。
+# 服务器扩容后（更多核 / 有 GPU），这个值要重新测。
 _ASK_LIMIT_CFG = {
-    "global_max": 20,       # 全局同时进行的问答数
+    "global_max": 8,        # 全局同时进行的问答数
     "per_user_max": 2,      # 单用户同时进行的问答数
     "per_ip_per_min": 60,   # 单 IP 每分钟问答次数
     "retry_after": 5,       # 429 里告诉客户端等几秒
@@ -112,13 +125,13 @@ def _load_ask_limits():
     """从配置文件读限流参数，读不到就用默认值。
 
     配置写在 app/config.json 的 "ask_limits" 段，例如：
-        "ask_limits": {"global_max": 20, "per_user_max": 2, "per_ip_per_min": 60}
+        "ask_limits": {"global_max": 8, "per_user_max": 2, "per_ip_per_min": 60}
     """
     try:
         cfg = llm.load_config().get("ask_limits") or {}
     except Exception:
         cfg = {}
-    _ASK_LIMIT_CFG["global_max"] = _clip(cfg.get("global_max"), 1, 500, 20)
+    _ASK_LIMIT_CFG["global_max"] = _clip(cfg.get("global_max"), 1, 500, 8)
     _ASK_LIMIT_CFG["per_user_max"] = _clip(cfg.get("per_user_max"), 1, 50, 2)
     _ASK_LIMIT_CFG["per_ip_per_min"] = _clip(cfg.get("per_ip_per_min"), 1, 10000, 60)
     _ASK_LIMIT_CFG["retry_after"] = _clip(cfg.get("retry_after"), 1, 300, 5)
