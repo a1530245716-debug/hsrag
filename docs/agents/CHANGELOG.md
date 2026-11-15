@@ -6,6 +6,16 @@
 
 ---
 
+### 18:30（11-15） | Claude Code | `app/rerank.py`、`app/indexer.py`、`tools/export_img_captions.py`、docs | 重排 120s + 图片知识文本化合并上线 | 关闭静默降级；图片展示改文本
+
+- 合并 `claude/rerank-tune` → main `eada098`；8000 重启（PID 18140）
+- `RERANK_SLOT_TIMEOUT 10s → 120s`（仅异常兜底），`RERANK_CONCURRENCY=1` 保留
+- 图片描述（摘要 + OCR）写成独立 chunk，业务手册重建 1969 块并验证答案可引用图中明细
+- **eval 6/6**：`eval/results/20261115_182521.json`
+- 仍待：业务手册 caption 70/1225；鑫元 5.6 万块重建；前端配图改为底部「相关截图」区后再开
+
+---
+
 ### 18:25（11-13） | RAG-Agent | 8000 生产合并并重启：阶段 1 + 阶段 2 + Claude Code 索引队列全部上线 | 人同意重启，确认三个分支改动一次性生效
 
 ### 做了什么
