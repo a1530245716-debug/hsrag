@@ -22,6 +22,8 @@ from pydantic import BaseModel
 APP_DIR = Path(__file__).parent
 sys.path.insert(0, str(APP_DIR))
 import indexer, kb, llm, auth, fallback, planner, users, qa_log, cache, imgserve, mailer
+# 阶段 3：检索内核抽象。业务层只认 backend.retrieve，底下换 BM25/RAGFlow/Mock 都不改这里。
+import backend
 
 app = FastAPI(title="项目智能问答助手", version="1.0.0")
 
@@ -1682,7 +1684,7 @@ def _multi_search(kb_id, queries, topk, rc):
     返回 None 表示无索引。
     """
     def _one(sub):
-        return kb.hybrid_search(kb_id, sub, topk=topk,
+        return backend.retrieve(kb_id, sub, top_k=topk,
                                 enable_vector=rc.get("enable_vector", True),
                                 enable_rerank=False)
 
@@ -2078,8 +2080,8 @@ def kb_ask(kb_id: str, body: AskIn, request: Request):
     if len(queries) > 1:
         results = _multi_search(kb_id, queries, top_k, rc)
     else:
-        results = kb.hybrid_search(
-            kb_id, q_eff, topk=top_k,
+        results = backend.retrieve(
+            kb_id, q_eff, top_k=top_k,
             enable_vector=rc.get("enable_vector", True),
             enable_rerank=rc.get("enable_rerank", True),
         )
@@ -2584,8 +2586,8 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
             results = _multi_search(kb_id, queries, topk_, rc)
         else:
             yield sse("status", {"text": "正在检索知识库…"})
-            results = kb.hybrid_search(
-                kb_id, q_eff, topk=topk_,
+            results = backend.retrieve(
+                kb_id, q_eff, top_k=topk_,
                 enable_vector=rc.get("enable_vector", True),
                 enable_rerank=rc.get("enable_rerank", True),
             )
@@ -2897,8 +2899,8 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
         else:
             yield sse("status", {"text": "正在检索知识库…"})
             results = await run_in_threadpool(
-                kb.hybrid_search,
-                kb_id, q_eff, topk=topk_,
+                backend.retrieve,
+                kb_id, q_eff, top_k=topk_,
                 enable_vector=rc.get("enable_vector", True),
                 enable_rerank=rc.get("enable_rerank", True),
             )
@@ -3161,9 +3163,15 @@ async def health():
         consistency = embeddings.cached_consistency_report()
     except Exception:
         consistency = {}
+    # 当前生效的检索内核（feature flag 可按库切换，见 app/backend.py）
+    try:
+        be_info = backend.describe_all()
+    except Exception:
+        be_info = {}
     return {"ok": True, "llm_configured": llm.llm_enabled(),
             "ask": ask_limits_state(),
             "embeddings": consistency,
+            "retrieval": be_info,
             "llm": llm.llm_settings() | {"api_key": "***" if llm.llm_settings()["api_key"] else ""}}
 
 
