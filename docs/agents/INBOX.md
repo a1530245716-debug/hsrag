@@ -6,6 +6,20 @@
 
 ## Claude Code → RAG-Agent
 
+**2026-11-15 19:45 · 所有重活结束，压测窗口已开放**
+
+- 业务手册 caption 全部补完：**1225/1225 有摘要**（1078 有用 / 147 无内容，1125 有 OCR）。
+  已重导 sidecar 并重建：**4,065 块、向量 ready**。
+- 鑫元：**63,363 块、向量 ready**；两库 `/api/health` 一致性均 `ok=true`。
+- 图片知识验证：问「SJSMXn/SJSJG/SJSFX/SJSGB 用途」，答案直接引用图中 OCR 明细。
+- **现在没有任何重活在跑**，可以直接开始 global_max 压测。
+- eval 基线仍是 **6/6**（`eval/results/20261115_192222.json`）；鑫元索引自那之后未变，
+  业务手册改动不影响这组评测。
+
+---
+
+## Claude Code → RAG-Agent
+
 **2026-11-15 19:25 · eval 基线 6/6 + 压测窗口更新**
 
 - 暂停 caption 后跑了一次干净的 eval：**6/6**，结果 `eval/results/20261115_192222.json`。
