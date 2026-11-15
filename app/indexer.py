@@ -170,7 +170,7 @@ def list_folders(path=None):
 
 # 抽取逻辑版本号。改了 index_docs 里的抽取代码就改这里，否则增量索引会
 # 认为文件"没变过"而直接跳过，新抽取的内容一条都进不了 chunks。
-_SIG_VER = "v2026-10-30-imgmark2"
+_SIG_VER = "v2026-11-13-imgtext-chunks"
 
 
 def _sig(path: Path):
@@ -503,12 +503,31 @@ def index_kb(kb, progress=None):
                 stats["changed"] += 1
             else:
                 stats["added"] += 1
+            # 图片描述单独成块: 塞在正文尾部会被长块稀释, 图片里的知识几乎检索不到。
+            # 先从正文里摘掉 sidecar, 再给每条描述生成独立 chunk。
+            cap = ""
+            try:
+                import img_caption
+                cap = img_caption.load_doc_text(p)
+            except Exception:
+                cap = ""
+            if cap:
+                body = text.rstrip()
+                cap_s = cap.strip()
+                if body.endswith(cap_s):
+                    text = body[: -len(cap_s)].rstrip()
             cs = list(index_docs.chunks(text))
             for i, c in enumerate(cs):
                 rec = {"id": f"{doc_id}_{i:04d}", "path": rel, "chunk": i, "text": c}
                 out_lines.append(json.dumps(rec, ensure_ascii=False) + "\n")
                 stats["total_chunks"] += 1
-            if progress: progress(f"已索引: {rel} ({len(cs)})")
+            if cap:
+                for j, line in enumerate(ln for ln in cap.splitlines() if ln.strip()):
+                    rec = {"id": f"{doc_id}_img_{j:04d}", "path": rel,
+                           "chunk": len(cs) + j, "text": line}
+                    out_lines.append(json.dumps(rec, ensure_ascii=False) + "\n")
+                    stats["total_chunks"] += 1
+            if progress: progress(f"已索引: {rel} ({len(cs)}+{len(cap.splitlines()) if cap else 0})")
         except Exception as e:
             stats["failed"] += 1
             if progress: progress(f"[FAIL] {rel}: {e}")
