@@ -143,6 +143,30 @@ Claude Code 在 11-13 测的是「并发 1 吞吐 0.30-0.32 job/s，并发 2 是
 
 改动只在 `rag-agent` worktree（分支 `agent/phase1-limit`），**8000 生产未重启**。
 `app/config.json` 的 `ask_limits` 已恢复默认（20 / 2 / 60），压测过程中的临时放宽已撤销。
+### 17:30（11-13） | Claude Code | `tools/export_img_captions.py`、`app/config.json`（figures off）、docs | 配图展示评估 + 关闭内联展示 + 图片摘要转文本 | 前端图文错配
+
+- 评估：图片哈希映射一致、视觉模型可读图、复核能拒绝不相关段落；
+  短板是前端 `attachFigures` 按首句前缀猜 DOM 块，后端段落与渲染块不对应
+- `figures.enabled=false`（main + rag-claude，备份 `.bak-figures-off`）；
+  `index.image_caption` 保持 `true`，文本通道不受影响
+- 新增导出工具：summary + OCR 写入 `_imgcap/text` sidecar；
+  已导出 鑫元 108 文档/3458 条、业务手册 14 文档/68 条
+- `indexer.py` 把图片描述拆成独立 chunk（摘要一行 + OCR 一行），避免被正文稀释、
+  也避免模型把 OCR 当成「图片说明」忽略
+- 实测：业务手册重建 1969 块；「SJSMXn/SJSJG/SJSFX/SJSGB 用途」的答案直接引用 OCR 明细
+- 建议前端改为底部「相关截图」区并显示 caption，再重新打开 figures
+
+---
+
+### 16:50（11-13） | Claude Code | `app/rerank.py`、`docs/ai-fde/07`、`09` | 撤回重排 10s 静默降级，改为「准入控制削峰」 | 人明确：并发是找平衡，不是裁功能
+
+- `RERANK_SLOT_TIMEOUT` 10s → 120s（仅异常兜底）；`RERANK_CONCURRENCY=1` 保留（纯吞吐收益）
+- 「候选 24→16」改为可选的高负载降级，不做默认；正常负载保留完整候选与重排
+- `07` 第 4/14 节、`09` 11.2/11.5 记录平衡原则：过载由 429 决定，不让已放行的请求静默降质
+- 建议阶段 2 后用 mock LLM 重测 `GLOBAL_MAX_ASK` 6 / 8 / 12，按延迟、429 比例、质量选拐点
+
+---
+
 ### 16:30（11-13） | Claude Code | `app/indexer.py`、`app/embeddings.py`、`docs/ai-fde/07` | 索引任务队列 + 向量完整性校验 + 建索引内存峰值 | 按 RAG-Agent 15:05 分工的第 1/3/4 件
 
 **`app/indexer.py` — 索引任务队列**
