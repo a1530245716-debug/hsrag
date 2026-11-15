@@ -24,6 +24,11 @@
 | `vec_score` | ❌ | 向量相似度（本地调试用） |
 | `fused` | ❌ | 融合分（本地调试用） |
 | `rerank_score` | ❌ | 重排分（本地调试用） |
+| `doc_id` | ❌ | 稳定文档身份（RAGFlow 有；本地实现可留空） |
+| `title` | ❌ | 文档标题（展示/调试用） |
+| `chunk_index` | ❌ | 片段在文档内的位置（RAGFlow 的 chunk 位置） |
+| `metadata` | ❌ | 后端原生元数据（page/section 等） |
+| `raw_score` | ❌ | 后端原生分；`score` 是归一化/排序用的分 |
 
 字段是 2026-11-15 对照 `kb.hybrid_search` 的实际返回核对的，
 新增字段只能追加、不能改语义——否则换后端时业务层拿到的数据会对不上。
@@ -58,6 +63,8 @@ chunks = be.retrieve(kb_id, "怎么部署", 8)     # None 表示无索引
 """
 import json
 import sys
+import threading
+import time
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional
 
@@ -77,6 +84,12 @@ class Chunk:
     vec_score: Optional[float] = None
     fused: Optional[float] = None
     rerank_score: Optional[float] = None
+    # 换 RAGFlow / 其它后端时建议填的稳定字段（本地实现可留空）
+    doc_id: Optional[str] = None
+    title: Optional[str] = None
+    chunk_index: Optional[int] = None
+    metadata: Optional[Dict[str, Any]] = None
+    raw_score: Optional[float] = None
     extra: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -87,7 +100,8 @@ class Chunk:
         """
         d = {"id": self.id, "path": self.path,
              "text": self.text, "score": self.score}
-        for k in ("chunk", "vec_score", "fused", "rerank_score"):
+        for k in ("chunk", "vec_score", "fused", "rerank_score",
+                  "doc_id", "title", "chunk_index", "metadata", "raw_score"):
             v = getattr(self, k)
             if v is not None:
                 d[k] = v
@@ -102,7 +116,8 @@ class Chunk:
         认不出来的键丢进 `extra`，这样 kb.py 以后加字段也不会在这里静默丢失。
         """
         known = {"id", "path", "text", "score", "chunk",
-                 "vec_score", "fused", "rerank_score"}
+                 "vec_score", "fused", "rerank_score",
+                 "doc_id", "title", "chunk_index", "metadata", "raw_score"}
         extra = {k: v for k, v in r.items() if k not in known}
         return cls(
             id=str(r.get("id") or ""),
@@ -113,6 +128,11 @@ class Chunk:
             vec_score=r.get("vec_score"),
             fused=r.get("fused"),
             rerank_score=r.get("rerank_score"),
+            doc_id=r.get("doc_id"),
+            title=r.get("title"),
+            chunk_index=r.get("chunk_index"),
+            metadata=r.get("metadata"),
+            raw_score=r.get("raw_score"),
             extra=extra,
         )
 
@@ -161,11 +181,18 @@ class LocalBM25Backend(RetrievalBackend):
         return [Chunk.from_raw(r) for r in raw]
 
     def available(self, kb_id):
+        """库存在且 chunks.jsonl 已生成才算可用。
+
+        以前写成 `kb.get_index(...) if hasattr(...) else True`：kb 模块根本没有
+        get_index，hasattr 永远为 False，于是永远返回 True，是个静默的假阳性。
+        """
         try:
-            import kb
-            return kb.get_index(kb_id) is not None if hasattr(kb, "get_index") else True
+            import indexer
+            if not indexer.get_kb(kb_id):
+                return False
+            return (indexer._kb_dir(kb_id) / "chunks.jsonl").exists()
         except Exception:
-            return True
+            return False
 
     def describe(self):
         import rerank
@@ -203,6 +230,41 @@ class MockBackend(RetrievalBackend):
 
     def describe(self):
         return {"backend": self.name, "note": "返回假数据，勿用于真实问答"}
+
+
+class RagflowBackend(RetrievalBackend):
+    """RAGFlow 检索内核（骨架，暂未接入）。
+
+    目标：按 RAGFlow 的 retrieval API 返回结果，映射成 Chunk。
+    需要服务地址与 API Key；本机没有服务器，所以 retrieve() 直接抛
+    NotImplementedError，**不要**把它设为 default。
+
+    接入时只需要：
+      1. 在 __init__ 里接收 base_url / api_key / dataset 映射；
+      2. 实现 retrieve()，把 RAGFlow 的 chunk 映射成
+         Chunk(id, path, text, score, doc_id=..., chunk_index=..., metadata=...)；
+      3. 把 "ragflow": RagflowBackend 加进 _BACKENDS。
+    业务层（server.py）不需要改。
+    """
+
+    name = "ragflow"
+
+    def __init__(self, base_url: str = "", api_key: str = "",
+                 dataset_map: Optional[Dict[str, str]] = None):
+        self.base_url = (base_url or "").rstrip("/")
+        self.api_key = api_key or ""
+        self.dataset_map = dataset_map or {}
+
+    def retrieve(self, kb_id, query, top_k=8, enable_vector=True, enable_rerank=True):
+        raise NotImplementedError(
+            "RagflowBackend 尚未接入：需要 RAGFlow 服务地址/API Key；"
+            "实现 retrieve() 并加入 _BACKENDS 后再启用")
+
+    def available(self, kb_id):
+        return bool(self.base_url)
+
+    def describe(self):
+        return {"backend": self.name, "configured": bool(self.base_url)}
 
 
 # ---------------- feature flag ----------------
@@ -263,13 +325,80 @@ def get_backend(kb_id: str = "") -> RetrievalBackend:
     return be
 
 
+_RESOLVED: Dict[str, str] = {}
+_DESCRIBE: Dict[str, Any] = {}
+_REFRESH_LOCK = threading.Lock()
+_REFRESHER: Optional[threading.Thread] = None
+
+
+def refresh_resolved() -> Dict[str, Any]:
+    """读注册表算出每个库实际用的后端，更新内存快照。
+
+    只能在后台线程/启动阶段调用——health 是热路径，不能在这里读文件。
+    """
+    import indexer
+    try:
+        reg = indexer.load_registry()
+        kb_ids = [str(k.get("id")) for k in reg if k.get("id")]
+    except Exception:
+        kb_ids = []
+    cfg = _cfg()
+    resolved = {kid: backend_name_for(kid) for kid in kb_ids}
+    with _REFRESH_LOCK:
+        _RESOLVED.clear()
+        _RESOLVED.update(resolved)
+        _DESCRIBE.clear()
+        _DESCRIBE.update({
+            "default": cfg["default"],
+            "per_kb": dict(cfg["per_kb"]),
+            "available": sorted(_BACKENDS),
+            "resolved": dict(resolved),
+        })
+    return dict(_DESCRIBE)
+
+
+def describe_cached() -> Dict[str, Any]:
+    """给 /api/health 用：只读内存快照，不做任何文件 I/O。
+
+    快照由 start_refresher() 的后台线程维护，最多滞后一个刷新周期。
+    """
+    with _REFRESH_LOCK:
+        if _DESCRIBE:
+            return dict(_DESCRIBE)
+    return {"default": "local_bm25", "per_kb": {}, "available": sorted(_BACKENDS),
+            "resolved": {}}
+
+
+def start_refresher(interval: float = 30.0):
+    """启动后台刷新线程（幂等）。health 的 resolved 由它维护。"""
+    global _REFRESHER
+    with _REFRESH_LOCK:
+        if _REFRESHER and _REFRESHER.is_alive():
+            return
+
+        def run():
+            while True:
+                try:
+                    refresh_resolved()
+                except Exception as e:
+                    print(f"[backend] 刷新 resolved 失败: {type(e).__name__}: {e}",
+                          file=sys.stderr)
+                time.sleep(interval)
+
+        t = threading.Thread(target=run, daemon=True, name="backend-refresher")
+        _REFRESHER = t
+        t.start()
+
+
 def invalidate_cache():
     """配置改完后强制重读（测试用；正常靠 mtime 自动失效）。"""
     _CACHE["sig"] = None
+    with _REFRESH_LOCK:
+        _DESCRIBE.clear()
 
 
 def describe_all(kb_ids=None) -> Dict[str, Any]:
-    """给 /api/health 看的全局自述。"""
+    """给排障/测试用的全局自述（会读配置；health 请用 describe_cached）。"""
     cfg = _cfg()
     out = {
         "default": cfg["default"],
@@ -278,6 +407,8 @@ def describe_all(kb_ids=None) -> Dict[str, Any]:
     }
     if kb_ids:
         out["resolved"] = {k: backend_name_for(k) for k in kb_ids}
+    elif _RESOLVED:
+        out["resolved"] = dict(_RESOLVED)
     return out
 
 

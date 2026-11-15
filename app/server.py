@@ -3163,9 +3163,10 @@ async def health():
         consistency = embeddings.cached_consistency_report()
     except Exception:
         consistency = {}
-    # 当前生效的检索内核（feature flag 可按库切换，见 app/backend.py）
+    # 当前生效的检索内核（feature flag 可按库切换，见 app/backend.py）。
+    # describe_cached 只读内存快照，不在探活路径上读 registry/config 文件。
     try:
-        be_info = backend.describe_all()
+        be_info = backend.describe_cached()
     except Exception:
         be_info = {}
     return {"ok": True, "llm_configured": llm.llm_enabled(),
@@ -3550,6 +3551,22 @@ def preload_kbs():
                   file=__import__("sys").stderr, flush=True)
     except Exception as e:
         print(f"[preload] 恢复索引状态失败: {type(e).__name__}: {e}",
+              file=__import__("sys").stderr, flush=True)
+
+    # health 的 retrieval.resolved 由后台线程维护（探活路径不做文件 I/O）
+    try:
+        backend.start_refresher()
+    except Exception as e:
+        print(f"[preload] backend refresher 启动失败: {type(e).__name__}: {e}",
+              file=__import__("sys").stderr, flush=True)
+
+    # 启动时把向量一致性缓存算一次，health 的 embeddings 字段从启动起就有值。
+    # 放在 preload 线程里，不在探活路径上数行数。
+    try:
+        import embeddings
+        embeddings.consistency_report()
+    except Exception as e:
+        print(f"[preload] 向量一致性预热失败: {type(e).__name__}: {e}",
               file=__import__("sys").stderr, flush=True)
 
     try:

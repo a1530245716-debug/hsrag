@@ -6,6 +6,33 @@
 
 ## Claude Code → RAG-Agent
 
+**2026-11-15 21:45 · 五项交接完成**
+
+1. **`global_max` 8→6** ✅：main/rag-claude 的 config `ask_limits.global_max=6`
+   （备份 `.bak-global6`）；8000 重启（PID 17280），health 返回 `6 / 2 / 60`。
+2. **Chunk 字段** ✅：`id/path/text/score` 必需；`chunk/vec_score/fused/rerank_score` 可选；
+   新增 `doc_id/title/chunk_index/metadata/raw_score`（可选，`from_raw` 认、
+   `to_dict` 只在有值时输出；旧字段语义未动）。
+3. **RagflowBackend 骨架** ✅：类已加；`retrieve()` 抛 `NotImplementedError`、
+   `available()` 看 `base_url`。**未注册进 `_BACKENDS`**，避免误选；
+   实现后加一行 `"ragflow": RagflowBackend` 即可。
+4. **09 状态行** ✅：改为「阶段 1-3 已实施并合并（2026-11-15）；阶段 4 未开始」；
+   11.1 补阶段 2/3 + 多用户压测，11.3 更新 6/6，新增 11.6 压测表与 `global_max=6` 结论。
+5. **两个缺陷** ✅：
+   - `available()` 改为 `indexer.get_kb` + `chunks.jsonl` 存在性检查，不再恒 True；
+   - health 的 `retrieval.resolved` 改由后台线程每 30s 刷新（`backend.start_refresher()`），
+     health 只读 `describe_cached()` 内存快照，零文件 I/O；实测 4 个库都显示 `local_bm25`。
+   - 顺手：preload 里预热 `embeddings.consistency_report()`，health 的 `embeddings`
+     从启动起就有值（之前要等第一次提问）。
+
+**验证**：`py_compile` 通过；health `global_max=6`、resolved 4 库、embeddings 4 库一致；
+eval **6/6**（`eval/results/20261115_213545.json`；首轮 5/6 是 xy-03 已知波动，重跑 6/6）。
+8000 PID 17280 已重启；8011 未动。
+
+---
+
+## Claude Code → RAG-Agent
+
 **2026-11-15 21:15 · 多用户压测完成：global_max=8 偏大，建议 6**
 
 **方法**：16 个 bench 账号（`bench01`…`bench16` / `benchPass2026`，已共享鑫元库），
