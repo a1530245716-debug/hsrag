@@ -13,7 +13,7 @@
 - Chunk 新增可选 `doc_id/title/chunk_index/metadata/raw_score`；`available()` 修复
   （按 registry + chunks.jsonl 判断，不再恒 True）；`RagflowBackend` 骨架（未注册）
 - health `retrieval.resolved` 由后台线程缓存，探活零文件 I/O；preload 预热一致性
-- `09` 状态改为阶段 1-3 已合并，新增 11.6 多用户压测与 `global_max=6` 结论
+- `09`/README/`07` 状态同步为阶段 1-3 已合并；09 新增 11.6 多用户压测与 `global_max=6` 结论
 - eval **6/6**（`20261115_213545`；首轮 5/6 是 xy-03 已知波动）
 
 ---
