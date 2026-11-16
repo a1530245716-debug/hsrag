@@ -15,8 +15,8 @@
 - 端口：8000 应用 + 8080/8443 Nginx；按要求不使用 8123；80 已被 learn-center 占用
 - 结论：可上当前单进程应用（离线 wheel + Python 3.11 + ORT 1.16.3）；
   **不建议 RAGFlow / 多 worker**（内存、EOL、无 Docker）；正式生产建议新 VM/OS
-- Docker：服务器只有 docker 1.13 / podman 1.6，无 Compose v2；第一阶段不用，
-  RAGFlow 需新 VM + Docker 24+
+- Docker：服务器无运行时；overlay 模块可用，可离线装 Docker 20.10 跑当前应用（A2，
+  镜像内解决 Python/ORT/glibc）；Docker 1.13 不可用；RAGFlow 需新 VM + Docker 24+
 - 只做只读采集，未安装、未改配置、未重启服务器；文档不含密码
 
 ---
