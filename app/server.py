@@ -1571,8 +1571,10 @@ async def kb_upload(kb_id: str, request: Request, index: bool = False):
         # 防止路径穿越到上传目录外
         if not str(dest).startswith(str(up.resolve())):
             skipped.append(rel); continue
-        # 先写临时文件再原子改名, 避免传输中断留下半截文件被当成正常文档索引
-        tmp = dest.with_name(dest.name + ".tmp")
+        # 先写临时文件再原子改名, 避免传输中断留下半截文件被当成正常文档索引。
+        # 临时名必须每请求唯一：两个用户同时传同名文件时，固定 .tmp 会互相覆盖。
+        tmp = dest.with_name(
+            f"{dest.name}.{os.getpid()}_{threading.get_ident()}_{time.time_ns()}.tmp")
         try:
             dest.parent.mkdir(parents=True, exist_ok=True)
             written = 0

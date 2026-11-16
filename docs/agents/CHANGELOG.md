@@ -6,6 +6,25 @@
 
 ---
 
+### 17:01（11-16） | Claude Code | `app/static/index.html`、`app/indexer.py`、`app/server.py`、`app/config.example.json` | 修“选择文件夹没弹窗”+ 并发审计 | 人反馈新建库点选择文件夹无窗口，怀疑多人使用互相阻塞
+
+- 弹窗问题不是服务端并发：`uploadBusy` 只是当前标签页变量，不会跨用户；
+  服务端上传接口也无全局锁。实测（Edge 无头）文件/文件夹/点击虚线框都能弹选择器
+- 加固：选择按钮改成真正的 `<button>`，整个虚线框可点（原来是两个小 `<a>`，
+  点空白区域没反应）；`<input type=file>` 先挂到 DOM 再 click（部分浏览器
+  会忽略游离 input）；服务器端“目录浏览”改名并保留 `allow_fs_browse=false` 的提示
+- **并发修复**：
+  - `registry.json` 读-改-写加 `_REGISTRY_LOCK`，保存改原子写；
+    并发建库/改名/索引完成不会再互相覆盖（40 路并发建库测试 40/40 保留）
+  - 上传临时文件、索引状态、chunks 临时文件都改成唯一名，同名文件并发上传不互相踩
+  - 索引 worker 从 1 个改为默认 **2 个**（`indexing.workers`，上限 4）：
+    不同知识库可并行建索引，同一个库仍只跑一个；实测两个各 1.5s 的索引
+    总耗时 1.83s。并行索引时不采样 tracemalloc，避免峰值串台
+- 仍保留的有意串行：rerank 并发 1、LLM 全局并发 6/单用户 2（按之前压测的平衡点）；
+  这些是限流/资源保护，不是死锁，超限会返回 429 + Retry-After
+
+---
+
 ### 16:25（11-16） | Claude Code | `app/server.py`、`deploy/Dockerfile`、`deploy/docker-compose.yml`、`.gitignore`、deploy/README | 持久化日志目录 `/opt/rag/logs` | 人要求“加个 logs 文件夹，把日志保持到这里”
 
 - `server.py` 启动时把 stdout/stderr 同时写一份到 `RAG_LOG_DIR`

@@ -10,6 +10,10 @@
     "retry_after": 5
   },
   "data_dir": "app/data",
+  "indexing": {
+    "workers": 2,
+    "memory_profile": true
+  },
   "auth": {
     "enabled": true,
     "password": "",

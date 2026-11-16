@@ -20,6 +20,10 @@ import index_docs
 EXTRACTORS = index_docs.EXTRACTORS
 CHUNKS_PER_KB = 100000
 
+# registry.json 的读-改-写必须串行，否则两个用户同时建库/改名/索引完成时
+# 会互相覆盖（后写的把前一个新建的库整条丢掉）。RLock 允许嵌套调用。
+_REGISTRY_LOCK = threading.RLock()
+
 # ---------------- 路径/注册表 ----------------
 
 def _cfg():
@@ -31,17 +35,25 @@ def _cfg():
 def load_registry():
     cfg = _cfg()
     reg_path = cfg / "registry.json"
-    if not reg_path.exists():
-        return []
-    with open(reg_path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    with _REGISTRY_LOCK:
+        if not reg_path.exists():
+            return []
+        with open(reg_path, "r", encoding="utf-8") as f:
+            return json.load(f)
 
 
 def save_registry(reg):
     cfg = _cfg()
     cfg.mkdir(parents=True, exist_ok=True)
-    with open(cfg / "registry.json", "w", encoding="utf-8") as f:
-        json.dump(reg, f, ensure_ascii=False, indent=2)
+    reg_path = cfg / "registry.json"
+    tmp = cfg / "registry.json.tmp"
+    with _REGISTRY_LOCK:
+        # 原子写：并发读的人要么看到旧文件，要么看到完整新文件，不会读到半截
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(reg, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, reg_path)
 
 
 def _new_id():
@@ -100,30 +112,32 @@ def resolve_kb_file(kb_id, rel):
 
 def create_kb(name, folder):
     """新增一个知识库记录。folder 为源文件夹;可传空串 => 纯上传式(拖拽建库)知识库。"""
-    reg = load_registry()
-    _fold = str(folder or "").strip()
-    _name = (name or "").strip()
-    if not _name:
-        _name = (Path(_fold).name if _fold else f"项目{len(reg) + 1}")
-    kb = {
-        "id": _new_id(),
-        "name": _name,
-        "folder": _fold,
-        "created": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "updated": "",
-        "file_count": 0,
-        "chunk_count": 0,
-        "status": "created",
-    }
-    reg.insert(0, kb)
-    save_registry(reg)
-    return kb
+    with _REGISTRY_LOCK:
+        reg = load_registry()
+        _fold = str(folder or "").strip()
+        _name = (name or "").strip()
+        if not _name:
+            _name = (Path(_fold).name if _fold else f"项目{len(reg) + 1}")
+        kb = {
+            "id": _new_id(),
+            "name": _name,
+            "folder": _fold,
+            "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "updated": "",
+            "file_count": 0,
+            "chunk_count": 0,
+            "status": "created",
+        }
+        reg.insert(0, kb)
+        save_registry(reg)
+        return kb
 
 
 def delete_kb(kb_id):
-    reg = load_registry()
-    reg = [kb for kb in reg if kb["id"] != kb_id]
-    save_registry(reg)
+    with _REGISTRY_LOCK:
+        reg = load_registry()
+        reg = [kb for kb in reg if kb["id"] != kb_id]
+        save_registry(reg)
     d = _kb_dir(kb_id)
     if d.exists():
         import shutil
@@ -136,13 +150,14 @@ def rename_kb(kb_id, name):
     name = str(name or "").strip()
     if not name:
         return None
-    reg = load_registry()
-    for kb in reg:
-        if kb["id"] == kb_id:
-            kb["name"] = name
-            kb["updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
-            save_registry(reg)
-            return kb
+    with _REGISTRY_LOCK:
+        reg = load_registry()
+        for kb in reg:
+            if kb["id"] == kb_id:
+                kb["name"] = name
+                kb["updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
+                save_registry(reg)
+                return kb
     return None
 
 
@@ -213,7 +228,7 @@ _INDEX_LOCK = threading.Lock()
 _INDEX_STATE = {}               # kb_id -> 状态 dict (内存镜像)
 _INDEX_RUNNING = set()
 _INDEX_PENDING = set()
-_INDEX_WORKER = None
+_INDEX_WORKERS = []             # 多个独立知识库可以并行索引；同一个库仍只跑一个
 
 
 def _now_str():
@@ -228,7 +243,9 @@ def _write_status(kb_id, st):
     try:
         p = _status_path(kb_id)
         p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_name(p.name + ".tmp")
+        # 入队/worker/前端轮询可能同时写状态；临时名必须唯一
+        tmp = p.with_name(
+            f"{p.name}.{os.getpid()}_{threading.get_ident()}_{time.time_ns()}.tmp")
         tmp.write_text(json.dumps(st, ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(tmp, p)
     except Exception as e:
@@ -272,19 +289,31 @@ def recover_index_statuses():
     return n
 
 
+def _index_worker_count():
+    """同时索引几个库。默认 2：不同用户建库不会互相排队，但不超过 4 个。"""
+    try:
+        import llm
+        n = int(llm.load_config().get("indexing", {}).get("workers", 2))
+    except Exception:
+        n = 2
+    return max(1, min(4, n))
+
+
 def _ensure_worker():
-    global _INDEX_WORKER
+    want = _index_worker_count()
     with _INDEX_LOCK:
-        if _INDEX_WORKER and _INDEX_WORKER.is_alive():
+        _INDEX_WORKERS[:] = [t for t in _INDEX_WORKERS if t.is_alive()]
+        if len(_INDEX_WORKERS) >= want:
             return
     # recover 内部会拿 _INDEX_LOCK, 必须在锁外调用(同一把非重入锁, 否则死锁)
     recover_index_statuses()
     with _INDEX_LOCK:
-        if _INDEX_WORKER and _INDEX_WORKER.is_alive():
-            return
-        t = threading.Thread(target=_index_worker, daemon=True, name="index-worker")
-        _INDEX_WORKER = t
-        t.start()
+        _INDEX_WORKERS[:] = [t for t in _INDEX_WORKERS if t.is_alive()]
+        while len(_INDEX_WORKERS) < want:
+            t = threading.Thread(target=_index_worker, daemon=True,
+                                 name=f"index-worker-{len(_INDEX_WORKERS) + 1}")
+            _INDEX_WORKERS.append(t)
+            t.start()
 
 
 def enqueue_index(kb_id, reason="manual"):
@@ -367,7 +396,9 @@ def _run_index_job(kb_id):
             last_write[0] = now
             _write_status(kb_id, st)
 
-    trace = _memory_profile_enabled()
+    # tracemalloc 是进程级全局，多个 worker 同时开会把彼此的峰值混在一起，
+    # 所以只在单 worker 时采样内存；并行索引时 peak_mb 为 None。
+    trace = _memory_profile_enabled() and _index_worker_count() == 1
     started_here = False
     if trace and not tracemalloc.is_tracing():
         tracemalloc.start()
@@ -539,7 +570,8 @@ def index_kb(kb, progress=None):
 
     # 3) 已删除文件:旧块自然不在 out_lines 中(未变会用 pop 保留,变更会替换) —— 需确认删除的块已剔除
     # 原子写: 先写临时文件再替换, 保证索引过程中正在提问的用户不会读到半截 JSON
-    tmp_chunk = chunk_path.with_name(chunk_path.name + ".tmp")
+    tmp_chunk = chunk_path.with_name(
+        f"{chunk_path.name}.{os.getpid()}_{threading.get_ident()}_{time.time_ns()}.tmp")
     with open(tmp_chunk, "w", encoding="utf-8") as f:
         f.writelines(out_lines)
         f.flush()
@@ -567,12 +599,13 @@ def index_kb(kb, progress=None):
 
 
 def _update_registry(kb):
-    reg = load_registry()
-    for i, k in enumerate(reg):
-        if k["id"] == kb["id"]:
-            reg[i] = kb
-            break
-    save_registry(reg)
+    with _REGISTRY_LOCK:
+        reg = load_registry()
+        for i, k in enumerate(reg):
+            if k["id"] == kb["id"]:
+                reg[i] = kb
+                break
+        save_registry(reg)
 
 
 # ---------------- 向量库自动维护 ----------------
@@ -582,7 +615,6 @@ def _update_registry(kb):
 _VEC_LOCK = threading.Lock()
 _VEC_RUNNING = {}
 _VEC_PENDING = set()
-_REG_LOCK = threading.Lock()
 
 
 def _auto_vectors_enabled():
@@ -594,7 +626,7 @@ def _auto_vectors_enabled():
 
 
 def _set_vector_fields(kb_id, **fields):
-    with _REG_LOCK:
+    with _REGISTRY_LOCK:
         reg = load_registry()
         for kb in reg:
             if kb["id"] == kb_id:

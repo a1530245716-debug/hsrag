@@ -487,9 +487,14 @@
       <summary>+ 新建知识库</summary>
       <div class="field"><label>名称(可留空)</label><input id="nb_name" type="text" placeholder="可留空,默认取文件夹名"></div>
       <div class="field"><label>源文件夹路径</label><input id="nb_folder" type="text" placeholder="E:\\路径\\到\\文档"></div>
-      <div class="btn goto" id="fsBrowseBtn"><a onclick="openPicker()">📁 目录浏览…</a></div>
-      <div class="dz">或直接<a onclick="event.stopPropagation();openCreatePicker('files')">选择文件</a>
-        / <a onclick="event.stopPropagation();openCreatePicker('folder')">选择文件夹</a>，把文档拖进来建库</div>
+      <div class="btn goto" id="fsBrowseBtn"><a onclick="openPicker()" title="浏览服务器本机目录；容器/外网模式通常禁用">📁 服务器目录浏览…</a></div>
+      <div class="dz" onclick="openCreatePicker('files')"
+           title="从你的电脑选择文件或整个文件夹上传；也可以直接拖进来">
+        <div style="font-size:12px;color:var(--muted);margin-bottom:8px">从你的电脑上传资料：</div>
+        <button type="button" class="btn" onclick="event.stopPropagation();openCreatePicker('files')">📄 选择文件</button>
+        <button type="button" class="btn" onclick="event.stopPropagation();openCreatePicker('folder')">📁 选择文件夹</button>
+        <div style="font-size:12px;margin-top:8px">也可以把文件/文件夹直接拖到这里</div>
+      </div>
       <div class="field"><button class="btn primary" style="width:100%" onclick="createKb()">创建并建索引</button></div>
       <div style="font-size:11px;color:var(--muted);margin-top:6px">不填路径也行：把文档/文件夹直接拖到右侧区域，松手即自动建库。</div>
     </details>
@@ -2856,6 +2861,13 @@ function makeFileInput(kind){
   const inp = document.createElement('input');
   inp.type = 'file'; inp.multiple = true;
   if (kind === 'folder'){ try { inp.webkitdirectory = true; } catch(e) {} }
+  // 必须挂到 DOM 再 click：部分浏览器（Safari/Firefox）会忽略游离 input 的选择框，
+  // 表现就是“点了没反应”。选完/取消后延迟移除，避免页面上堆积隐藏 input。
+  inp.style.display = 'none';
+  document.body.appendChild(inp);
+  const cleanup = () => setTimeout(() => { try { inp.remove(); } catch(e) {} }, 1000);
+  inp.addEventListener('change', cleanup, {once: true});
+  inp.addEventListener('cancel', cleanup, {once: true});
   return inp;
 }
 function pickedFiles(inp){
