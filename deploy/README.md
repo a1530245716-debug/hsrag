@@ -143,9 +143,23 @@ python eval/run_eval.py
 | 验证 | `/api/health` 200；admin 登录 200；SJSMXn 问题 23.1s 返回引用；warmup ready |
 | 端口 | 8000（未用 8123；80 仍是 learn-center，未受影响） |
 | 15:58 更新 | `rag-bff:20261116-a27b725`：索引进度/文件选择/答辩预生成；`/opt/rag/.env` 固定 `RAG_TAG`；容器 healthy |
+| 16:12 修复 | `rag-bff:20261116-fc10c8b`：参考答案截断自动重试、手册检索跳过精排、一次只预生成一题 |
 
-回滚：把 `/opt/rag/.env` 的 `RAG_TAG` 改回 `20261116-o32`，
-`docker-compose -f compose.yml up -d`；数据卷不动。
+回滚：把 `/opt/rag/.env` 的 `RAG_TAG` 改回上一版 `20261116-a27b725`
+（或最初的 `20261116-o32`），`docker-compose -f compose.yml up -d`；数据卷不动。
+
+## 10. 日志
+
+- 应用日志走容器 stdout/stderr，Docker `json-file`：
+  `/var/lib/docker/containers/<container-id>/<container-id>-json.log`，
+  单个 20MB、保留 5 个（compose 已配）。
+- 查看：`docker logs -t rag-bff | grep -E '\\[coach\\]|\\[llm\\]|ERROR'`；
+  `docker logs --since 1h rag-bff`。
+- `[coach]` 行是答辩拆解耗时（检索/模型/输出长度/stop_reason）；
+  `[llm]` 行是重试后仍失败；解析失败现在会打 `parse_failed ... raw=...`。
+- `/opt/rag/data/qa_log.jsonl` 只记录主问答，**不记录答辩内容和模型原文**。
+- 注意：容器 recreate 后旧容器的 `json.log` 会随旧容器删除；
+  需要长期审计时应另接日志卷或集中日志。
 
 未做/后续：Nginx 8080/8443 + TLS/ACL、admin 密码轮换、每日备份、
 `docker save` 镜像备份、数据卷扩容；RAGFlow 等新 VM。
