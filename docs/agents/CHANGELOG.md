@@ -6,6 +6,19 @@
 
 ---
 
+### 10:44（11-16） | Claude Code | `docs/ai-fde/10-上线方案-目标服务器.md`、README | 目标服务器只读评估 + 两套上线方案 | 人给了一台服务器，先评估、先不动手
+
+- 服务器：RHEL 7.5、16 vCPU、62GB（**11GB 可用**）、50GB 可用；
+  无 python3 / docker / redis / postgres / nginx；外网 PyPI 不通；LLM 网关 8080 可达
+- 关键卡点：RHEL7 glibc 2.17 只有 **onnxruntime 1.16.3**（cp311）有 manylinux2014 wheel；
+  代码 `Path.walk` 需改 `os.walk`；Python 用 3.11.18 standalone
+- 端口：8000 应用 + 8080/8443 Nginx；按要求不使用 8123；80 已被 learn-center 占用
+- 结论：可上当前单进程应用（离线 wheel + Python 3.11 + ORT 1.16.3）；
+  **不建议 RAGFlow / 多 worker**（内存、EOL、无 Docker）；正式生产建议新 VM/OS
+- 只做只读采集，未安装、未改配置、未重启服务器；文档不含密码
+
+---
+
 ### 10:26（11-16） | Claude Code | `app/config.json`、docs | 按人决定关闭配图展示，保留图片文本知识 | 暂不需要看图，文本已够用
 
 - `figures.enabled=false`（main + rag-claude）；`index.image_caption` 保持默认开启
