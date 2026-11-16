@@ -6,6 +6,18 @@
 
 ---
 
+### 15:58（11-16） | Claude Code | 服务器 `/opt/rag/src`、`deploy/README.md` | 部署 `rag-bff:20261116-a27b725` 到 10.20.154.26:8000 | 人确认“好了之后同步服务器更新”
+
+- 上传 6 个 app 文件（server/indexer/defense_api/defense_coach/index.html/defense.html）；
+  原文件已备份 `/opt/rag/src-backup-20261116-155552.tar.gz`
+- 离线构建新镜像 592MB；`/opt/rag/.env` 固定 `RAG_TAG=20261116-a27b725`；
+  `docker-compose -f compose.yml up -d` 后约 30s healthy
+- 验证：`/api/health` 200；注册域名仍 `hundsun.com`；首页含 `indexBanner`；
+  defense 页含 `waitHtml`；旧镜像 `20261116-o32` 保留
+- 回滚：`.env` 改回 `RAG_TAG=20261116-o32`，`docker-compose up -d`
+
+---
+
 ### 15:42（11-16） | Claude Code | `app/server.py`、`app/indexer.py`、`app/static/index.html`、`app/defense_api.py`、`app/defense_coach.py` | 索引进度可视化 + 文件/文件夹选择 + 答辩预生成 | 人反馈：建库后不知道没建完、添加文件只能选文件夹、首题 30s/逐题解析 2min
 
 - **索引状态**：`/api/kb` 合并 `indexer.get_index_status`（queued/running/done/failed），

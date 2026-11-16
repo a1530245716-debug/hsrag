@@ -83,11 +83,15 @@ chmod 600 /opt/rag/config.json
 
 ```bash
 cd /opt/rag
-RAG_TAG=20261116-<gitsha> docker compose -f compose.yml up -d
-docker compose -f compose.yml ps
+printf 'RAG_TAG=20261116-<gitsha>\n' > .env
+docker-compose -f compose.yml up -d
+docker-compose -f compose.yml ps
 curl -s http://127.0.0.1:8000/api/health
 curl -s http://127.0.0.1:8000/api/warmup
 ```
+
+> 这台服务器只装了独立的 `docker-compose`（v2.24.6），没有 `docker compose`
+> 插件；命令一律用 `docker-compose`。版本钉在 `/opt/rag/.env` 的 `RAG_TAG`。
 
 从开发机跑 eval（脚本支持 `RAG_EVAL_BASE`）：
 
@@ -138,6 +142,10 @@ python eval/run_eval.py
 | 容器 | `rag-bff`，healthy，host network，`0.0.0.0:8000` |
 | 验证 | `/api/health` 200；admin 登录 200；SJSMXn 问题 23.1s 返回引用；warmup ready |
 | 端口 | 8000（未用 8123；80 仍是 learn-center，未受影响） |
+| 15:58 更新 | `rag-bff:20261116-a27b725`：索引进度/文件选择/答辩预生成；`/opt/rag/.env` 固定 `RAG_TAG`；容器 healthy |
+
+回滚：把 `/opt/rag/.env` 的 `RAG_TAG` 改回 `20261116-o32`，
+`docker-compose -f compose.yml up -d`；数据卷不动。
 
 未做/后续：Nginx 8080/8443 + TLS/ACL、admin 密码轮换、每日备份、
 `docker save` 镜像备份、数据卷扩容；RAGFlow 等新 VM。
