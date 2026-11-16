@@ -6,6 +6,22 @@
 
 ---
 
+### 16:11（11-16） | Claude Code | `app/defense_coach.py`、`app/defense_api.py` | 修复“查看参考答案”失败/慢 | 人反馈服务器一次失败且很慢，要求看日志
+
+- 日志证据：4 次 `[coach] reveal` 分别 70.5s / 64.0s / 38.0s / 78.2s；
+  其中 64.0s 的 `out=873 stop=max_tokens`、78.2s 的 `out=153 stop=max_tokens`，
+  即模型思考链吃光 3,500 token，只吐出半截 JSON，`_parse_json` 失败 → 界面报失败
+- 慢的主因：reveal 走手册精排，4 核容器上 `manual_s=23.5~35.1s`；
+  同时上一题的参考答案预生成还没结束，新题又起一个，互相抢 CPU/模型额度
+- 修复：reveal/analyze/score 手册检索改 `fast=True`（跳过 rerank）；
+  `_REVEAL_SYSTEM` 限制 400 字 / 2 条依据 / 3 个要点；
+  reveal/analyze 解析失败或 `stop=max_tokens` 时放大到 6,000 token 重试一次；
+  score 重试同样放大；解析失败打印 `stop/out/raw`
+- `prefetch_explain` 每会话一次只预生成一题，避免两个参考答案并发生成
+- 单测验证：截断输出第一次 `stop=max_tokens`、第二次正常，reveal/analyze 都返回 ok
+
+---
+
 ### 15:58（11-16） | Claude Code | 服务器 `/opt/rag/src`、`deploy/README.md` | 部署 `rag-bff:20261116-a27b725` 到 10.20.154.26:8000 | 人确认“好了之后同步服务器更新”
 
 - 上传 6 个 app 文件（server/indexer/defense_api/defense_coach/index.html/defense.html）；

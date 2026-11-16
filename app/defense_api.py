@@ -375,8 +375,13 @@ def prefetch_explain(sess, index, question, cfg=None, user_key="", timeout=180):
         jobs = sess.setdefault("explain_jobs", {})
         if key in jobs:
             return
+        # 一次只预生成一题：上一题还没跑完就继续出题时，再起一个只会抢模型额度
+        # 和 CPU（服务端实测两个参考答案并发生成时，检索要 23-35s）。
+        if sess.get("explain_busy"):
+            return
         ev = threading.Event()
         jobs[key] = ev
+        sess["explain_busy"] = True
 
     def run():
         try:
@@ -396,6 +401,7 @@ def prefetch_explain(sess, index, question, cfg=None, user_key="", timeout=180):
         finally:
             with _LOCK:
                 (sess.get("explain_jobs") or {}).pop(key, None)
+                sess["explain_busy"] = False
             ev.set()
 
     threading.Thread(target=run, daemon=True, name=f"def-explain-{key}").start()

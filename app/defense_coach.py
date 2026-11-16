@@ -40,6 +40,19 @@ def _log_timing(tag, t0, **kw):
     bits = " ".join(f"{k}={v}" for k, v in kw.items() if v is not None)
     print(f"[coach] {tag} elapsed={time.time() - t0:.1f}s {bits}", file=sys.stderr)
 
+
+def _cfg_more_tokens(cfg, at_least):
+    """复制一份配置并放大 max_tokens。输出被截断时重试用。"""
+    import copy
+    import llm
+    c = copy.deepcopy(cfg) if cfg else llm.load_config()
+    d = c.get("llm")
+    if isinstance(d, dict):
+        d["max_tokens"] = max(int(d.get("max_tokens") or 3500), int(at_least))
+    else:
+        c["max_tokens"] = max(int(c.get("max_tokens") or 3500), int(at_least))
+    return c
+
 # ---------------- 提示词 ----------------
 
 _ASK_SYSTEM = """你是一场新人答辩会的评委，正在面试一位即将独立承担交付任务的工程师。
@@ -301,7 +314,7 @@ _REVEAL_SYSTEM = """你是答辩辅导老师。现在要给学员讲清楚这道
 你要给出两部分（不要点评学员刚才的回答，省掉这段）：
 
 **1. 标准答案**
-把这个问题该怎么答，用 3-5 句话讲清楚。要求：
+把这个问题该怎么答，用 2-4 句话讲清楚，**总字数不超过 400 字**。要求：
 - 落到具体动作、菜单、表名、字段名上，不要泛泛而谈
 - 如果【业务手册原文】里有标准说法，以它为准
 - 讲"为什么"：为什么这么做、不这么做会出什么问题
@@ -310,14 +323,16 @@ _REVEAL_SYSTEM = """你是答辩辅导老师。现在要给学员讲清楚这道
 指出上面答案出自哪里，**必须具体**：
 - 优先引用【业务手册原文】里的内容，写出文件名和那一小段原文
 - **绝对不要编造文件名、页码、章节号**。手册原文里没有的，就不要编"依据"
-- 依据只写 1-3 条，每条附上能对上的原文片段（20-60 字）
+- 依据只写 1-2 条，每条附上能对上的原文片段（20-60 字）
 
 输出 JSON（不要代码块）：
 {
   "answer": "标准答案正文",
   "basis": [{"source": "文件名", "quote": "原文片段", "point": "这段说明了什么"}],
-  "key_points": ["关键得分点，2-4 条"]
+  "key_points": ["关键得分点，2-3 条"]
 }
+
+**控制总字数在 500 字以内**：输出太长会被截断，导致整份作废（踩过）。
 """
 
 
@@ -354,8 +369,10 @@ def reveal(question, user_answer=None, material="", ppt=None, history=None,
     import llm
     t0 = time.time()
 
-    # 用问题去知识库里找依据——这是"依据"的主要来源，必须给真文件名
-    manual = pick_manual(question, topk=4, kb_id=kb_id)
+    # 用问题去知识库里找依据——这是"依据"的主要来源，必须给真文件名。
+    # fast=True 跳过 rerank：4 核容器上精排实测 23-35 秒，参考答案等不起；
+    # BM25+向量融合的 top4 已经够模型引用，且引用会再做原文核对。
+    manual = pick_manual(question, topk=4, kb_id=kb_id, fast=True)
     manual_text = _fmt_manual_cite(manual)
     manual_files = []
     for h in manual:
@@ -376,19 +393,38 @@ def reveal(question, user_answer=None, material="", ppt=None, history=None,
              "【历史答辩里的类似情形】", ref_text, "",
              "请按上面的要求，给出标准答案、依据、关键得分点。"]
     body = "\n".join(parts)
-    md = {}
-    ans = llm.chat([{"role": "user", "content": body}],
-                   cfg=cfg, system=_REVEAL_SYSTEM, timeout=timeout,
-                   user_key=user_key, meta=md)
-    t_llm = time.time()
-    _log_timing("reveal", t0, manual_s=f"{t_manual - t0:.1f}",
-                history_s=f"{t_hist - t_manual:.1f}",
-                llm_s=f"{t_llm - t_hist:.1f}", prompt=len(body),
-                out=len(ans or ""), stop=md.get("stop_reason"))
-    data = _parse_json(ans or "")
+    data = None
+    ans = ""
+    last_md = {}
+    # 模型思考链可能把 max_tokens 吃光，只吐出半截 JSON。日志里实际出现过
+    # out=153 stop=max_tokens → 解析失败。这里解析失败/被截断时放大额度重试一次。
+    for attempt in range(2):
+        use_cfg = cfg if attempt == 0 else _cfg_more_tokens(cfg, 6000)
+        req = body
+        if attempt:
+            req += ("\n\n注意：上一次输出被截断或不是合法 JSON。这次务必更短："
+                    "标准答案不超过 250 字，依据最多 2 条，关键点最多 3 条；只输出 JSON。")
+        last_md = {}
+        t_llm0 = time.time()
+        ans = llm.chat([{"role": "user", "content": req}],
+                       cfg=use_cfg, system=_REVEAL_SYSTEM,
+                       timeout=(timeout if attempt == 0 else min(timeout or 120, 120)),
+                       user_key=user_key, meta=last_md) or ""
+        _log_timing("reveal" if attempt == 0 else "reveal retry", t0,
+                    manual_s=f"{t_manual - t0:.1f}",
+                    history_s=f"{t_hist - t_manual:.1f}",
+                    llm_s=f"{time.time() - t_llm0:.1f}", prompt=len(req),
+                    out=len(ans), stop=last_md.get("stop_reason"),
+                    attempt=attempt + 1)
+        data = _parse_json(ans)
+        if isinstance(data, dict):
+            break
+        print(f"[coach] reveal parse_failed attempt={attempt + 1} "
+              f"stop={last_md.get('stop_reason')} out={len(ans)} raw={ans[:160]!r}",
+              file=sys.stderr)
     if not isinstance(data, dict):
         return {"ok": False, "msg": "生成参考答案失败，请重试",
-                "raw": (ans or "")[:300]}
+                "raw": ans[:300], "stop": last_md.get("stop_reason")}
 
     basis = []
     for b in (data.get("basis") or []):
@@ -483,7 +519,7 @@ def analyze(material, history, cfg=None, user_key="", timeout=180, kb_id="",
     for i, h in enumerate(history, 1):
         qa.append(f"第{i}题：{h.get('q', '')}\n学员答：{(h.get('a') or '（未回答）')[:1500]}")
     probe = " ".join(h.get("q", "") for h in history)[:500]
-    manual = pick_manual(probe, topk=4, kb_id=kb_id)
+    manual = pick_manual(probe, topk=4, kb_id=kb_id, fast=True)
     manual_text = _fmt_manual_cite(manual)
     t_manual = time.time()
     refs = defense_search.search(probe, topk=3) if probe.strip() else []
@@ -526,19 +562,37 @@ def analyze(material, history, cfg=None, user_key="", timeout=180, kb_id="",
             "请逐题给出诊断，并给总体评价和补强建议。",
         ]
     body = "\n".join(parts)
-    md = {}
-    ans = llm.chat([{"role": "user", "content": body}],
-                   cfg=cfg, system=_ANALYSIS_SYSTEM, timeout=timeout,
-                   user_key=user_key, meta=md)
-    t_llm = time.time()
-    _log_timing("analyze", t0, preset=len(preset), total=len(history),
-                manual_s=f"{t_manual - t0:.1f}",
-                history_s=f"{t_hist - t_manual:.1f}",
-                llm_s=f"{t_llm - t_hist:.1f}", prompt=len(body),
-                out=len(ans or ""), stop=md.get("stop_reason"))
-    data = _parse_json(ans or "")
+    data = None
+    ans = ""
+    last_md = {}
+    for attempt in range(2):
+        use_cfg = cfg if attempt == 0 else _cfg_more_tokens(cfg, 6000)
+        req = body
+        if attempt:
+            req += ("\n\n注意：上一次输出被截断或不是合法 JSON。"
+                    "这次只输出 JSON，总体评价不超过 300 字。")
+        last_md = {}
+        t_llm0 = time.time()
+        ans = llm.chat([{"role": "user", "content": req}],
+                       cfg=use_cfg, system=_ANALYSIS_SYSTEM,
+                       timeout=(timeout if attempt == 0 else min(timeout or 120, 120)),
+                       user_key=user_key, meta=last_md) or ""
+        _log_timing("analyze" if attempt == 0 else "analyze retry", t0,
+                    preset=len(preset), total=len(history),
+                    manual_s=f"{t_manual - t0:.1f}",
+                    history_s=f"{t_hist - t_manual:.1f}",
+                    llm_s=f"{time.time() - t_llm0:.1f}", prompt=len(req),
+                    out=len(ans), stop=last_md.get("stop_reason"),
+                    attempt=attempt + 1)
+        data = _parse_json(ans)
+        if isinstance(data, dict) and isinstance(data.get("items"), list):
+            break
+        print(f"[coach] analyze parse_failed attempt={attempt + 1} "
+              f"stop={last_md.get('stop_reason')} out={len(ans)} raw={ans[:160]!r}",
+              file=sys.stderr)
     if not isinstance(data, dict) or not isinstance(data.get("items"), list):
-        return {"ok": False, "msg": "生成解析报告失败，请重试", "raw": (ans or "")[:300]}
+        return {"ok": False, "msg": "生成解析报告失败，请重试",
+                "raw": ans[:300], "stop": last_md.get("stop_reason")}
 
     by_no = dict(preset)
     for it in data.get("items") or []:
@@ -1073,8 +1127,8 @@ def score(material, history, cfg=None, user_key="", timeout=180, kb_id=""):
     probe = " ".join(h.get("q", "") for h in history)[:500]
     refs = defense_search.search(probe, topk=4) if probe.strip() else []
     ref_text = _fmt_history(refs, limit=4)
-    # 知识库知识点：判断学员讲的业务对不对
-    manual = pick_manual(probe, topk=3, kb_id=kb_id)
+    # 知识库知识点：判断学员讲的业务对不对；评分同样跳过精排避免 20-35s 等待
+    manual = pick_manual(probe, topk=3, kb_id=kb_id, fast=True)
     manual_text = _fmt_manual(manual)
 
     parts = [
@@ -1088,24 +1142,32 @@ def score(material, history, cfg=None, user_key="", timeout=180, kb_id=""):
     # 这里单独给一份放大上限的配置，不影响其他调用。
     try:
         import copy
-        base = dict(cfg or llm.load_config())
-        base["max_tokens"] = max(int(base.get("max_tokens") or 1024), 3000)
+        base = copy.deepcopy(cfg) if cfg else llm.load_config()
+        d = base.get("llm")
+        if isinstance(d, dict):
+            d["max_tokens"] = max(int(d.get("max_tokens") or 1024), 4000)
+        else:
+            base["max_tokens"] = max(int(base.get("max_tokens") or 1024), 4000)
         cfg = base
     except Exception:
         pass
 
-    data, ans = None, ""
+    data, ans, last_md = None, "", {}
     for attempt in range(2):
         body = "\n".join(parts)
         if attempt:
-            body += "\n\n注意：上一次输出被截断了。这次务必简短，每条 comment 不超过 40 字。"
+            body += ("\n\n注意：上一次输出被截断了或不是合法 JSON。"
+                     "这次务必简短，每条 comment 不超过 40 字；只输出 JSON。")
+        last_md = {}
         ans = llm.chat([{"role": "user", "content": body}],
-                       cfg=cfg, system=_SCORE_SYSTEM, timeout=timeout, user_key=user_key) or ""
+                       cfg=(cfg if attempt == 0 else _cfg_more_tokens(cfg, 6000)),
+                       system=_SCORE_SYSTEM, timeout=timeout, user_key=user_key,
+                       meta=last_md) or ""
         data = _parse_json(ans)
         if isinstance(data, dict):
             break
-        print(f"[coach] 评分输出无法解析（第{attempt+1}次），长度 {len(ans)}，重试",
-              file=__import__("sys").stderr)
+        print(f"[coach] 评分输出无法解析（第{attempt+1}次），长度 {len(ans)} "
+              f"stop={last_md.get('stop_reason')}，重试", file=sys.stderr)
 
     if not isinstance(data, dict):
         return {"ok": False, "reason": "bad_output",
