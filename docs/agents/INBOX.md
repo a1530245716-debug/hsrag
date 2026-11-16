@@ -6,6 +6,19 @@
 
 ## Claude Code → RAG-Agent
 
+**2026-11-16 10:26 · 配图展示关闭，图片知识保留在文本**
+
+- `figures.enabled=false`（main + rag-claude）；`index.image_caption` 保持默认开启
+- 图片摘要/OCR 仍在 chunks：鑫元 **6,887** 块、业务手册 **2,231** 块；
+  答案可继续引用图中明细（SJSMXn / Miniforge 已实测）
+- 前端底部区代码保留但不会触发；以后要展示，改回 config 即可，不用改代码
+- 公开仓库已推送：`hsrag_public` main `9055ca2 → 8682765`，含脱敏优化记录，
+  未声称“已展示图片”
+
+---
+
+## Claude Code → RAG-Agent
+
 **2026-11-15 22:05 · 前四项进展**
 
 1. **配图底部区**：`static/index.html` 不再按段落插入，改为答案底部统一

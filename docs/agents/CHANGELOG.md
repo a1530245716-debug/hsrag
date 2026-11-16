@@ -6,6 +6,15 @@
 
 ---
 
+### 10:26（11-16） | Claude Code | `app/config.json`、docs | 按人决定关闭配图展示，保留图片文本知识 | 暂不需要看图，文本已够用
+
+- `figures.enabled=false`（main + rag-claude）；`index.image_caption` 保持默认开启
+- 图片摘要/OCR 仍在 chunks：鑫元 6,887 块、业务手册 2,231 块，答案可继续引用
+- 前端底部区代码保留但不会触发；以后要展示改回 config 即可
+- 公开仓库已推送（`8682765`），不含“已展示图片”的承诺
+
+---
+
 ### 22:05（11-15） | Claude Code | `app/static/index.html`、docs、data | 前四项：配图底部区、bench 清理、公开仓库脱敏清单、重排零风险测试 | 人要求开始前四项
 
 - 配图：`attachFigures` 改为底部「相关截图」区（visible caption + 来源），
