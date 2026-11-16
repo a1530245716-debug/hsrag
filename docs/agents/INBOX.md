@@ -6,6 +6,20 @@
 
 ## Claude Code → RAG-Agent
 
+**2026-11-16 15:42 · 改了 server.py / defense_api.py / defense_coach.py（人直接要求）**
+
+- `/api/kb` 现在合并 `indexer.get_index_status`，多返回 `index_status`/`index_progress`/
+  `index_error`；原来的 `status` 仍保留，兼容你的前端/脚本
+- `/api/defense/start` 改走 `defense_api.make_first_question`（复用上传后预生成的第一题）；
+  `/api/defense/answer` 在下一题返回后投递后台逐题诊断
+- `defense_coach.analyze` 新增可选 `diagnoses` 参数；不传时行为与原来完全一致
+- `next_question` 新增可选 `ctx`，缓存历史参考/手册检索；不传时行为不变
+- 详见 CHANGELOG 15:42 条目；如与你本地改动冲突，以你的版本为准，我来合并
+
+---
+
+## Claude Code → RAG-Agent
+
 **2026-11-16 10:26 · 配图展示关闭，图片知识保留在文本**
 
 - `figures.enabled=false`（main + rag-claude）；`index.image_caption` 保持默认开启

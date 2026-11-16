@@ -19,10 +19,21 @@ import re
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 # ---------------- 会话 ----------------
 _SESS = {}
 _LOCK = threading.RLock()
+
+# 逐题诊断在答题过程中后台生成。只给 1 个 worker：网关每把 key 约 2 路并发，
+# 前台出题/追问要占 1 路，后台再占 1 路刚好；不能为了预取而把出题挤慢。
+_DIAG_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="def-diag")
+
+# 上传 PPT 后先预生成第一题（此时用户还在选模式/题数/知识库），
+# 真正点“开始”时大概率已经好了。进度依赖全部材料，与模式无关。
+_FIRST_LOCK = threading.Lock()
+_FIRST = {}                 # ppt_id -> {"event", "q", "err", "ts"}
+_FIRST_MAX = 20
 MAX_SESSIONS = 200
 SESSION_TTL = 6 * 3600          # 6 小时不动作就清理
 
@@ -152,6 +163,94 @@ def parse_images(images):
 
 # ---------------- 出题 ----------------
 
+def _record_question(sess, q):
+    """记下问过的 PPT 页，报告里统计覆盖面。"""
+    m = re.search(r"第\s*(\d{1,3})\s*页", q)
+    if m:
+        pno = int(m.group(1))
+        if pno not in sess["asked_pages"]:
+            sess["asked_pages"].append(pno)
+
+
+def prefetch_first_question(meta, cfg=None, user_key="", timeout=120):
+    """PPT 解析完就开始想第一题，用户选模式/题数时这段时间不浪费。"""
+    import defense_coach
+    pid = str((meta or {}).get("id") or "")
+    if not pid:
+        return None
+    with _FIRST_LOCK:
+        job = _FIRST.get(pid)
+        if job and not job["event"].is_set():
+            return job
+        if job and job.get("q"):
+            return job
+        ev = threading.Event()
+        job = {"event": ev, "q": "", "err": "", "ts": time.time()}
+        _FIRST[pid] = job
+        if len(_FIRST) > _FIRST_MAX:
+            for k in sorted(_FIRST, key=lambda x: _FIRST[x].get("ts", 0))[:len(_FIRST) - _FIRST_MAX]:
+                _FIRST.pop(k, None)
+
+    def run():
+        try:
+            material = defense_coach.material_from_ppt(meta)
+            withimg = [s for s in (meta.get("slides") or []) if s.get("images")]
+            focus = withimg[min(1, len(withimg) - 1)].get("no") if withimg else None
+            ctx = {}
+            q = defense_coach.next_question(
+                material, [], user_answer=None, cfg=cfg, user_key=user_key,
+                timeout=timeout, ppt=meta, focus_page=focus,
+                kb_id=defense_coach.manual_kb_id(), ctx=ctx)
+            job["q"] = q or ""
+            # 把出题时算好的历史参考/手册检索带进会话，第一次追问直接复用
+            job["ctx"] = ctx
+            if not q:
+                job["err"] = "empty"
+        except Exception as e:
+            job["err"] = f"{type(e).__name__}: {e}"
+        finally:
+            ev.set()
+
+    threading.Thread(target=run, daemon=True, name=f"def-first-{pid}").start()
+    return job
+
+
+def take_first_job(ppt_id, kb_id="", timeout=120):
+    """取预生成第一题的任务（含复用上下文）。只有默认业务手册库才用缓存。"""
+    import defense_coach
+    pid = str(ppt_id or "")
+    if not pid:
+        return None
+    if (kb_id or "") != defense_coach.manual_kb_id():
+        return None
+    with _FIRST_LOCK:
+        job = _FIRST.get(pid)
+    if not job:
+        return None
+    job["event"].wait(timeout=timeout)
+    return job
+
+
+def take_first_question(ppt_id, kb_id="", timeout=120):
+    job = take_first_job(ppt_id, kb_id, timeout=timeout)
+    return (job or {}).get("q") or ""
+
+
+def make_first_question(sess, cfg=None, user_key="", timeout=120):
+    """开始演练的第一题：优先复用上传后预生成的结果。"""
+    ppt = sess.get("ppt") or {}
+    job = take_first_job(ppt.get("id"), sess.get("kb_id") or "", timeout=timeout)
+    q = (job or {}).get("q") or ""
+    if q:
+        if isinstance(job.get("ctx"), dict):
+            sess["ctx"] = job["ctx"]
+        _record_question(sess, q)
+        prefetch_explain(sess, 0, q, cfg=cfg, user_key=user_key,
+                         timeout=max(180, timeout))
+        return q, ""
+    return make_question(sess, None, cfg=cfg, user_key=user_key, timeout=timeout)
+
+
 def make_question(sess, user_answer=None, images=None,
                   cfg=None, user_key="", timeout=120):
     """按当前会话状态出下一题。返回 (question, err)。"""
@@ -176,22 +275,18 @@ def make_question(sess, user_answer=None, images=None,
         # 追问时优先盯着刚刚那道题涉及的页，而不是 PPT 前几页的图
         focus = sess["asked_pages"][-1]
 
+    ctx = sess.setdefault("ctx", {})
     q = defense_coach.next_question(
         material, history, user_answer=user_answer, cfg=cfg,
         user_key=user_key, timeout=timeout, ppt=ppt, focus_page=focus,
-        kb_id=sess.get("kb_id") or "")
+        kb_id=sess.get("kb_id") or "", ctx=ctx)
 
     if not q:
         return "", ("生成问题失败：大模型这次没有返回内容"
                     "（可能是模型思考超时或网关波动）。请重试；"
                     "多次出现可以在右上角填写自己的 Key。")
 
-    # 记下问过的页，报告里统计覆盖面
-    m = re.search(r"第\s*(\d{1,3})\s*页", q)
-    if m:
-        pno = int(m.group(1))
-        if pno not in sess["asked_pages"]:
-            sess["asked_pages"].append(pno)
+    _record_question(sess, q)
 
     # 题目已生成，后台预生成参考答案；用户点「看参考答案」时大概率已经好了
     prefetch_explain(sess, len(history), q, cfg=cfg, user_key=user_key,
@@ -208,6 +303,62 @@ def add_answer(sess, question, answer):
     sess["ts"] = time.time()
     if len(sess["history"]) >= total_of(sess):
         sess["done"] = True
+
+
+def prefetch_diagnosis(sess, index, cfg=None, user_key="", timeout=90):
+    """答题后后台诊断这一题；最后生成解析时直接复用，不再一次性等 2 分钟。
+
+    只投递一次；线程池只有 1 个 worker，避免抢前台出题/追问的模型并发。
+    """
+    import defense_coach
+    key = str(index)
+    with _LOCK:
+        if key in (sess.get("diagnosis") or {}):
+            return False
+        jobs = sess.setdefault("diag_jobs", {})
+        if key in jobs:
+            return False
+        history = sess.get("history") or []
+        if index < 0 or index >= len(history):
+            return False
+        item = dict(history[index])
+        material = defense_coach.material_from_ppt(sess.get("ppt") or {})
+        fut = _DIAG_POOL.submit(
+            defense_coach.diagnose_one, item.get("q", ""), item.get("a", ""),
+            material, cfg=cfg, user_key=user_key, timeout=timeout,
+            kb_id=sess.get("kb_id") or "")
+        jobs[key] = fut
+
+    def done(f):
+        try:
+            d = f.result()
+        except Exception:
+            d = ""
+        with _LOCK:
+            if d:
+                sess.setdefault("diagnosis", {})[key] = d
+            (sess.get("diag_jobs") or {}).pop(key, None)
+
+    fut.add_done_callback(done)
+    return True
+
+
+def wait_diagnoses(sess, count, timeout=90):
+    """等已投递的逐题诊断完成（最多 timeout 秒），返回按题号排列的列表。"""
+    deadline = time.time() + timeout
+    with _LOCK:
+        jobs = dict(sess.get("diag_jobs") or {})
+    for _key, fut in jobs.items():
+        left = deadline - time.time()
+        if left <= 0:
+            break
+        try:
+            fut.result(timeout=left)
+        except Exception:
+            pass
+    with _LOCK:
+        got = dict(sess.get("diagnosis") or {})
+    return [got.get(str(i), "") for i in range(count)]
 
 
 # ---------------- 报告 ----------------
@@ -324,16 +475,27 @@ def make_report(sess, cfg=None, user_key="", timeout=180):
 
 
 def make_analysis(sess, cfg=None, user_key="", timeout=180):
-    """整场答完后生成逐题解析；同一场只生成一次，结果缓存在会话里。"""
-    if sess.get("analysis"):
-        return sess["analysis"]
+    """整场答完后生成逐题解析；同一场只生成一次，结果缓存在会话里。
+
+    答题过程中已经把每题诊断投到后台，这里先等它们收尾；通常只剩最后一题
+    还没完成。模型只补缺的题 + 写总体评价，避免整场一次性生成等 1-2 分钟。
+    """
+    with _LOCK:
+        if sess.get("analysis"):
+            return sess["analysis"]
     import defense_coach
     ppt = sess.get("ppt") or {}
+    history = sess.get("history") or []
+    for i in range(len(history)):
+        prefetch_diagnosis(sess, i, cfg=cfg, user_key=user_key,
+                           timeout=min(90, timeout))
+    diagnoses = wait_diagnoses(sess, len(history), timeout=90)
     r = defense_coach.analyze(
         defense_coach.material_from_ppt(ppt),
-        sess.get("history") or [],
+        history,
         cfg=cfg, user_key=user_key, timeout=timeout,
-        kb_id=sess.get("kb_id") or "")
+        kb_id=sess.get("kb_id") or "", diagnoses=diagnoses)
     if r.get("ok"):
-        sess["analysis"] = r
+        with _LOCK:
+            sess["analysis"] = r
     return r

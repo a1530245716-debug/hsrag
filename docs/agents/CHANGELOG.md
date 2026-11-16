@@ -6,6 +6,29 @@
 
 ---
 
+### 15:42（11-16） | Claude Code | `app/server.py`、`app/indexer.py`、`app/static/index.html`、`app/defense_api.py`、`app/defense_coach.py` | 索引进度可视化 + 文件/文件夹选择 + 答辩预生成 | 人反馈：建库后不知道没建完、添加文件只能选文件夹、首题 30s/逐题解析 2min
+
+- **索引状态**：`/api/kb` 合并 `indexer.get_index_status`（queued/running/done/failed），
+  前端新增常驻进度横幅；新建库无 chunk 时禁用提问并提示“完成后才能提问”；
+  完成/失败在对话里明确提示；上传和重建都改轮询 `/index/{id}/status`。
+  `index_kb` 进度改成 `解析 3/10: 文件名`。之前前端轮询的是旧 `STATUS`，
+  异步队列的 queued/running 根本看不到，进度条会直接消失。
+- **文件选择**：新建库和右上角「＋ 添加」都拆成“选择文件（可多选，能看到文件名）/
+  选择文件夹”；选完先在对话里列出文件名，再上传。之前两个入口硬编码
+  `webkitdirectory=true`，系统框只能选文件夹。
+- **答辩提速**：上传 PPT 后后台预生成第一题；答题返回后把本题诊断投到
+  1 个 worker 的后台队列；整场解析复用已完成诊断，只补缺题 + 写总体评价。
+  出题/诊断的手册检索用 `fast=True` 跳过 rerank（4k 块业务手册实测 6.8s→0.6s），
+  看参考答案/整场解析仍走精排。预生成的检索上下文写进 `sess["ctx"]`，
+  第一次追问也不再重复检索。
+- **实测**（本机 8013，无图 PPT）：首题预生成 5.2s（检索 0.5s + 模型 4.3s），
+  追问 3.1s（检索 0.0s）；单题后台诊断 10-13s；3 题汇总解析 14.9s。
+  原实现一次性生成 10 题诊断，按同速率约 105-130s，和“2 分钟”吻合。
+  带图 PPT 的模型耗时另计。出题/解析/诊断都加了 `[coach]` 耗时日志，
+  区分检索 vs 大模型耗时。
+
+---
+
 ### 15:10（11-16） | Claude Code | `deploy/prepare_o32_bundle.py`、`app/data/email_domains.txt`、deploy/README | 注册邮箱白名单限定 @hundsun.com | 人补充：注册邮箱格式为 @hundsun.com
 
 - 服务器 `/opt/rag/data/email_domains.txt` 写入 `hundsun.com`，已 chown 1000；

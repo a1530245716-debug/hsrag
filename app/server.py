@@ -1223,7 +1223,27 @@ def kb_list(request: Request):
         # 管理员看全部；普通用户看自己的 + 别人分享给他的
         if not admin and not users.can_read_kb(kb_, u):
             continue
-        kb_["status"] = STATUS.get(kb_["id"], {}).get("running", False) and "indexing" or kb_.get("status", "")
+        # 异步索引队列的真实状态在 index_status.json（indexer.get_index_status），
+        # 旧的 STATUS 只覆盖 sync=True 的排障路径。不合并的话前端轮询 /api/kb
+        # 永远看不到 queued/running，上传后进度条会立刻消失。
+        kid = kb_.get("id") or ""
+        try:
+            ist = indexer.get_index_status(kid) if kid else {}
+        except Exception:
+            ist = {}
+        istatus = str(ist.get("status") or "")
+        if STATUS.get(kid, {}).get("running") and istatus not in (
+                "queued", "running", "done", "failed"):
+            istatus = "running"
+            ist = {"status": "running", "progress": "同步索引中"}
+        if istatus in ("queued", "running"):
+            kb_["status"] = "indexing"
+        else:
+            kb_["status"] = kb_.get("status", "")
+        kb_["index_status"] = istatus
+        kb_["index_progress"] = str(ist.get("progress") or "")
+        kb_["index_error"] = str(ist.get("error") or "")
+        kb_["index_attempt"] = ist.get("attempt") or 0
         kb_["owner_name"] = owner_names.get(kb_.get("owner"), "")
         kb_["mine"] = (kb_.get("owner") == u.get("id"))
         # 不是自己的、又能看到 → 是别人分享的。前端据此显示"只读"标记、隐藏改名/删除
@@ -3361,6 +3381,12 @@ async def defense_upload(request: Request, file: UploadFile = File(...)):
     meta, err = defense_api.parse_upload(file.filename or "答辩.pptx", raw)
     if err:
         return {"ok": False, "msg": err}
+    # 解析完就后台预生成第一题；用户选模式/题数的时间正好覆盖模型耗时
+    try:
+        defense_api.prefetch_first_question(
+            meta, cfg=_cfg_with_user_key(request), user_key=_user_llm_key(request))
+    except Exception as e:
+        print(f"[defense] 预生成第一题失败: {type(e).__name__}: {e}", file=sys.stderr)
     # 只回前端需要的字段，slides 里的 url 要能直接访问
     return {
         "ok": True,
@@ -3420,7 +3446,7 @@ async def defense_start(request: Request):
         import defense_coach
         kb_id = defense_coach.manual_kb_id()
     sess = defense_api.new_session("anon", meta, mode=mode, total=total, kb_id=kb_id)
-    q, err = await _run_blocking(defense_api.make_question, sess,
+    q, err = await _run_blocking(defense_api.make_first_question, sess,
                                  cfg=_cfg_with_user_key(request), user_key=ukey)
     if err:
         defense_api.drop_session(sess["id"])
@@ -3446,14 +3472,20 @@ async def defense_answer(request: Request):
     a = str(body.get("answer") or "")
     defense_api.add_answer(sess, q, a)
     total = defense_api.total_of(sess)
+    answered = len(sess["history"]) - 1
+    cfg = _cfg_with_user_key(request)
+    ukey = _user_llm_key(request)
 
     if len(sess["history"]) >= total:
+        # 最后一题也后台诊断；用户看报告时逐题解析已基本就绪
+        defense_api.prefetch_diagnosis(sess, answered, cfg=cfg, user_key=ukey)
         return {"ok": True, "done": True, "no": len(sess["history"]),
                 "total": total, "mode": sess.get("mode", "practice")}
 
     nq, err = await _run_blocking(defense_api.make_question, sess, user_answer=a,
-                                  cfg=_cfg_with_user_key(request),
-                                  user_key=_user_llm_key(request))
+                                  cfg=cfg, user_key=ukey)
+    # 下一题已经返回，再投后台诊断：不占用前台出题的模型并发
+    defense_api.prefetch_diagnosis(sess, answered, cfg=cfg, user_key=ukey)
     if err:
         return {"ok": True, "done": True, "no": len(sess["history"]), "total": total}
     return {"ok": True, "done": False, "question": nq,

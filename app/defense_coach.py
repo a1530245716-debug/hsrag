@@ -24,9 +24,21 @@
 """
 import json
 import re
+import sys
+import time
 
 import defense
 import defense_search
+
+
+def _log_timing(tag, t0, **kw):
+    """把一次出题/解析拆成 检索 vs 大模型 的耗时，打到 stderr。
+
+    没有这行日志时只能看到“30 秒/2 分钟”，分不清是 BM25 加载、手册检索，
+    还是模型生成慢。以后排查直接看 `[coach]` 前缀。
+    """
+    bits = " ".join(f"{k}={v}" for k, v in kw.items() if v is not None)
+    print(f"[coach] {tag} elapsed={time.time() - t0:.1f}s {bits}", file=sys.stderr)
 
 # ---------------- 提示词 ----------------
 
@@ -247,18 +259,21 @@ def manual_kb_id():
     return kb_id
 
 
-def pick_manual(query, topk=4, kb_id=""):
+def pick_manual(query, topk=4, kb_id="", fast=False):
     """从知识库里找和材料相关的知识点。失败返回空列表，不影响出题。
 
     kb_id 为空时用业务手册（默认）；传了别的库就用那个库——
     新人可能想拿自己项目的资料当依据。
+    fast=True 跳过 rerank：出题/逐题诊断只需要“业务范围和术语”，不需要精排；
+    这一步实测能省 6-7 秒（业务手册 4k 块）。看参考答案/整场解析仍走精排。
     """
     kb_id = kb_id or manual_kb_id()
     if not kb_id or not (query or "").strip():
         return []
     try:
         import kb as kbmod
-        hits = kbmod.hybrid_search(kb_id, query[:300], topk=topk) or []
+        hits = kbmod.hybrid_search(kb_id, query[:300], topk=topk,
+                                   enable_rerank=not fast) or []
     except Exception as e:
         print(f"[coach] 手册检索失败: {type(e).__name__}", file=__import__("sys").stderr)
         return []
@@ -337,6 +352,7 @@ def reveal(question, user_answer=None, material="", ppt=None, history=None,
     返回 {"ok": True, "answer":..., "basis":[{source,quote,point,verified}], ...}
     """
     import llm
+    t0 = time.time()
 
     # 用问题去知识库里找依据——这是"依据"的主要来源，必须给真文件名
     manual = pick_manual(question, topk=4, kb_id=kb_id)
@@ -346,19 +362,29 @@ def reveal(question, user_answer=None, material="", ppt=None, history=None,
         p = (h.get("path") or "").replace("\\", "/")
         if p and p not in manual_files:
             manual_files.append(p)
+    t_manual = time.time()
 
     # 历史答辩里有没有类似的问题——别人的答法和导师点评是很强的参照
     hits = defense_search.search(question, topk=3)
     if hits and hits[0].get("_score", 0) < 1.5:
         hits = []
     ref_text = _fmt_history(hits, limit=3)
+    t_hist = time.time()
 
     parts = ["【评委的问题】", question or "", "",
              "【业务手册原文（依据来源）】", manual_text, "",
              "【历史答辩里的类似情形】", ref_text, "",
              "请按上面的要求，给出标准答案、依据、关键得分点。"]
-    ans = llm.chat([{"role": "user", "content": "\n".join(parts)}],
-                   cfg=cfg, system=_REVEAL_SYSTEM, timeout=timeout, user_key=user_key)
+    body = "\n".join(parts)
+    md = {}
+    ans = llm.chat([{"role": "user", "content": body}],
+                   cfg=cfg, system=_REVEAL_SYSTEM, timeout=timeout,
+                   user_key=user_key, meta=md)
+    t_llm = time.time()
+    _log_timing("reveal", t0, manual_s=f"{t_manual - t0:.1f}",
+                history_s=f"{t_hist - t_manual:.1f}",
+                llm_s=f"{t_llm - t_hist:.1f}", prompt=len(body),
+                out=len(ans or ""), stop=md.get("stop_reason"))
     data = _parse_json(ans or "")
     if not isinstance(data, dict):
         return {"ok": False, "msg": "生成参考答案失败，请重试",
@@ -398,7 +424,52 @@ def reveal(question, user_answer=None, material="", ppt=None, history=None,
     }
 
 
-def analyze(material, history, cfg=None, user_key="", timeout=180, kb_id=""):
+_DIAG_SYSTEM = """你是答辩辅导老师。只诊断这一道题，**不要打分**。
+要求：
+- 指出哪里对、哪里错或漏了、有没有概念混淆
+- 落到具体动作、菜单、表名、字段名；手册里没有的不要编
+- 2-4 句话，直接说结论，不要复述题目
+输出 JSON（不要代码块）：
+{"diagnosis": "这一题的诊断"}
+"""
+
+
+def diagnose_one(question, answer, material="", cfg=None, user_key="",
+                 timeout=90, kb_id=""):
+    """只诊断一道题。用于答题过程中后台预生成，最后汇总时直接复用。
+
+    单独一题的输出很短（2-4 句），比整场一次性写 10 题快得多；
+    并发由 defense_api 的线程池控制，避免抢正在出题的模型额度。
+    """
+    import llm
+    t0 = time.time()
+    manual = pick_manual(question, topk=3, kb_id=kb_id, fast=True)
+    manual_text = _fmt_manual_cite(manual)
+    t_manual = time.time()
+    parts = [
+        "【答辩材料】", (material or "")[:1200], "",
+        "【评委的问题】", question or "", "",
+        "【学员的回答】", (answer or "（未回答）")[:1500], "",
+        "【业务手册原文】", manual_text, "",
+        "请只诊断这一题。",
+    ]
+    body = "\n".join(parts)
+    md = {}
+    ans = llm.chat([{"role": "user", "content": body}], cfg=cfg,
+                   system=_DIAG_SYSTEM, timeout=timeout, user_key=user_key, meta=md)
+    t_llm = time.time()
+    data = _parse_json(ans or "")
+    diag = ""
+    if isinstance(data, dict):
+        diag = str(data.get("diagnosis") or "").strip()
+    _log_timing("diagnose", t0, manual_s=f"{t_manual - t0:.1f}",
+                llm_s=f"{t_llm - t_manual:.1f}", prompt=len(body),
+                out=len(ans or ""), stop=md.get("stop_reason"))
+    return diag
+
+
+def analyze(material, history, cfg=None, user_key="", timeout=180, kb_id="",
+            diagnoses=None):
     """整场答辩结束后，复用全部问答生成逐题解析 + 总体评价。
 
     单题「看参考答案」不再点评学员回答；诊断统一放到这里，只调用一次模型。
@@ -406,6 +477,7 @@ def analyze(material, history, cfg=None, user_key="", timeout=180, kb_id=""):
     import llm
     if not history:
         return {"ok": False, "msg": "还没有问答记录，无法生成解析"}
+    t0 = time.time()
 
     qa = []
     for i, h in enumerate(history, 1):
@@ -413,23 +485,62 @@ def analyze(material, history, cfg=None, user_key="", timeout=180, kb_id=""):
     probe = " ".join(h.get("q", "") for h in history)[:500]
     manual = pick_manual(probe, topk=4, kb_id=kb_id)
     manual_text = _fmt_manual_cite(manual)
+    t_manual = time.time()
     refs = defense_search.search(probe, topk=3) if probe.strip() else []
     ref_text = _fmt_history(refs, limit=3)
+    t_hist = time.time()
 
-    parts = [
-        "【答辩材料】", (material or "")[:2000], "",
-        "【全部问答】", "\n\n".join(qa), "",
-        "【业务手册原文】", manual_text, "",
-        "【历史答辩参考】", ref_text, "",
-        "请逐题给出诊断，并给总体评价和补强建议。",
-    ]
-    ans = llm.chat([{"role": "user", "content": "\n".join(parts)}],
-                   cfg=cfg, system=_ANALYSIS_SYSTEM, timeout=timeout, user_key=user_key)
+    # 答题过程中后台生成的逐题诊断：有就直接复用，模型只补缺的题 + 写总体评价。
+    # 这样最后一步不再是“一次性写 10 题”，避免 1-2 分钟的等待。
+    preset = {}
+    if isinstance(diagnoses, dict):
+        for k, v in diagnoses.items():
+            try:
+                n = int(k)
+            except Exception:
+                continue
+            if 1 <= n <= len(history) and str(v or "").strip():
+                preset[n] = str(v).strip()
+    elif isinstance(diagnoses, (list, tuple)):
+        for i, v in enumerate(diagnoses, 1):
+            if i <= len(history) and str(v or "").strip():
+                preset[i] = str(v).strip()
+
+    if preset:
+        diag_text = "\n".join(
+            f"第{i}题：{preset.get(i) or '（未生成）'}" for i in range(1, len(history) + 1))
+        parts = [
+            "【答辩材料】", (material or "")[:2000], "",
+            "【全部问答】", "\n\n".join(qa), "",
+            "【业务手册原文】", manual_text, "",
+            "【已经生成的逐题诊断】", diag_text, "",
+            "上面已有的诊断不要重写。请只对标注“（未生成）”的题补充诊断"
+            "（如果没有就不用补），然后给总体评价和补强建议。",
+        ]
+    else:
+        parts = [
+            "【答辩材料】", (material or "")[:2000], "",
+            "【全部问答】", "\n\n".join(qa), "",
+            "【业务手册原文】", manual_text, "",
+            "【历史答辩参考】", ref_text, "",
+            "请逐题给出诊断，并给总体评价和补强建议。",
+        ]
+    body = "\n".join(parts)
+    md = {}
+    ans = llm.chat([{"role": "user", "content": body}],
+                   cfg=cfg, system=_ANALYSIS_SYSTEM, timeout=timeout,
+                   user_key=user_key, meta=md)
+    t_llm = time.time()
+    _log_timing("analyze", t0, preset=len(preset), total=len(history),
+                manual_s=f"{t_manual - t0:.1f}",
+                history_s=f"{t_hist - t_manual:.1f}",
+                llm_s=f"{t_llm - t_hist:.1f}", prompt=len(body),
+                out=len(ans or ""), stop=md.get("stop_reason"))
     data = _parse_json(ans or "")
     if not isinstance(data, dict) or not isinstance(data.get("items"), list):
         return {"ok": False, "msg": "生成解析报告失败，请重试", "raw": (ans or "")[:300]}
 
-    by_no = {}
+    by_no = dict(preset)
     for it in data.get("items") or []:
         if not isinstance(it, dict):
             continue
@@ -831,7 +942,7 @@ def _ppt_image_blocks(ppt_meta, page_no=None, limit=6):
 
 def next_question(material, history, user_answer=None, rtype=None,
                   cfg=None, user_key="", timeout=90, ppt=None, focus_page=None,
-                  kb_id=""):
+                  kb_id="", ctx=None):
     """生成下一个问题。
 
     history: [{"q": 问题, "a": 学员回答}]，本轮对话已发生的往来。
@@ -842,11 +953,26 @@ def next_question(material, history, user_answer=None, rtype=None,
     返回问题文本；失败返回空串（调用方负责提示）。
     """
     import llm
-    refs = pick_reference(material, (history[0]["q"] if history else ""), rtype=rtype)
-    ref_text = _fmt_history(refs)
+    t0 = time.time()
+    # 历史参考和手册检索每轮都一样（材料不变），第一次算完缓存到会话里，
+    # 追问时直接复用，省掉重复检索的时间。
+    if isinstance(ctx, dict) and ctx.get("ref_text") is not None:
+        ref_text = ctx["ref_text"]
+    else:
+        refs = pick_reference(material, (history[0]["q"] if history else ""), rtype=rtype)
+        ref_text = _fmt_history(refs)
+        if isinstance(ctx, dict):
+            ctx["ref_text"] = ref_text
+    t_ref = time.time()
     # 知识库：用材料内容去检索知识点，出题时用来把握业务范围和术语
-    manual = pick_manual(material, topk=4, kb_id=kb_id)
-    manual_text = _fmt_manual(manual)
+    if isinstance(ctx, dict) and ctx.get("manual_text") is not None:
+        manual_text = ctx["manual_text"]
+    else:
+        manual = pick_manual(material, topk=4, kb_id=kb_id, fast=True)
+        manual_text = _fmt_manual(manual)
+        if isinstance(ctx, dict):
+            ctx["manual_text"] = manual_text
+    t_manual = time.time()
 
     parts = ["【新人的答辩材料】", (material or "（未提供材料）")[:6000], ""]
     if ppt:
@@ -909,8 +1035,18 @@ def next_question(material, history, user_answer=None, rtype=None,
     if blocks:
         content = [{"type": "text", "text": content}] + blocks
 
+    md = {}
     ans = llm.chat([{"role": "user", "content": content}],
-                   cfg=cfg, system=system, timeout=timeout, user_key=user_key)
+                   cfg=cfg, system=system, timeout=timeout, user_key=user_key,
+                   meta=md)
+    t_llm = time.time()
+    text_len = len(content) if isinstance(content, str) else len(content[0].get("text", ""))
+    img_chars = sum(len(b.get("source", {}).get("data", "")) for b in blocks)
+    _log_timing("question", t0, first=(user_answer is None),
+                refs_s=f"{t_ref - t0:.1f}", manual_s=f"{t_manual - t_ref:.1f}",
+                llm_s=f"{t_llm - t_manual:.1f}", prompt=text_len,
+                imgs=len(blocks), img_b64=img_chars,
+                out=len(ans or ""), stop=md.get("stop_reason"))
     return _clean_question(ans or "")
 
 

@@ -485,12 +485,16 @@ def index_kb(kb, progress=None):
                 stats["total_chunks"] += len(old_lines)
 
     # 2) 变更/新增文件:重解析
-    for key, (p, sig) in scan.items():
-        if key in new_sigs:
-            continue
+    todo = [(key, p, sig) for key, (p, sig) in scan.items() if key not in new_sigs]
+    if progress:
+        progress(f"扫描 {len(scan)} 个文件，未变 {stats['unchanged']}，"
+                 f"需处理 {len(todo)}")
+    for done, (key, p, sig) in enumerate(todo, 1):
         rel = key.split(":", 1)[1]
         ext = p.suffix.lower()
         new_sigs[key] = sig
+        if progress:
+            progress(f"解析 {done}/{len(todo)}: {rel}")
         if ext not in EXTRACTORS:
             continue
         try:
@@ -527,7 +531,8 @@ def index_kb(kb, progress=None):
                            "chunk": len(cs) + j, "text": line}
                     out_lines.append(json.dumps(rec, ensure_ascii=False) + "\n")
                     stats["total_chunks"] += 1
-            if progress: progress(f"已索引: {rel} ({len(cs)}+{len(cap.splitlines()) if cap else 0})")
+            if progress:
+                progress(f"解析 {done}/{len(todo)}: {rel} → {len(cs)} 块")
         except Exception as e:
             stats["failed"] += 1
             if progress: progress(f"[FAIL] {rel}: {e}")

@@ -69,6 +69,23 @@
     #warmBanner { flex-wrap:wrap; gap:5px; padding:6px 10px; }
     #warmBanner .wbTrack { width:100%; }
   }
+  /* 索引进行中/完成提示（与启动预热区分：这条针对用户刚建/刚传的库） */
+  #indexBanner { display:none; align-items:center; gap:10px; padding:7px 14px;
+                 background:#fffbeb; border-bottom:1px solid #fde68a; color:#92400e;
+                 font-size:12.5px; line-height:1.6; }
+  #indexBanner.show { display:flex; }
+  #indexBanner.done { background:#ecfdf5; border-color:#a7f3d0; color:#047857; }
+  #indexBanner.fail { background:#fef2f2; border-color:#fecaca; color:#b91c1c; }
+  #indexBanner .ibText { flex:1; min-width:0; }
+  #indexBanner .ibTrack { width:120px; height:6px; border-radius:3px; background:#fde68a;
+                          overflow:hidden; flex:none; }
+  #indexBanner .ibTrack i { display:block; height:100%; width:35%; background:#f59e0b;
+                            animation:indet 1.2s ease-in-out infinite; }
+  #indexBanner.done .ibTrack, #indexBanner.fail .ibTrack { display:none; }
+  @media (max-width:820px){
+    #indexBanner { flex-wrap:wrap; gap:5px; padding:6px 10px; }
+    #indexBanner .ibTrack { width:100%; }
+  }
   #llmBadge { font-size:12px; padding:3px 10px; border-radius:20px; background:#d1fae5; color:#047857;
               border:1px solid #a7f3d0; white-space:nowrap; }
   #llmBadge.off { background:#fee2e2; color:#b91c1c; border-color:#fecaca; }
@@ -471,7 +488,8 @@
       <div class="field"><label>名称(可留空)</label><input id="nb_name" type="text" placeholder="可留空,默认取文件夹名"></div>
       <div class="field"><label>源文件夹路径</label><input id="nb_folder" type="text" placeholder="E:\\路径\\到\\文档"></div>
       <div class="btn goto" id="fsBrowseBtn"><a onclick="openPicker()">📁 目录浏览…</a></div>
-      <div class="dz" onclick="openCreatePicker()">或直接<a>选择文件 / 文件夹</a>，把文档拖进来建库</div>
+      <div class="dz">或直接<a onclick="event.stopPropagation();openCreatePicker('files')">选择文件</a>
+        / <a onclick="event.stopPropagation();openCreatePicker('folder')">选择文件夹</a>，把文档拖进来建库</div>
       <div class="field"><button class="btn primary" style="width:100%" onclick="createKb()">创建并建索引</button></div>
       <div style="font-size:11px;color:var(--muted);margin-top:6px">不填路径也行：把文档/文件夹直接拖到右侧区域，松手即自动建库。</div>
     </details>
@@ -490,7 +508,13 @@
       <span id="llmBadge" class="off">大模型: 未配置</span>
       <span id="keyBadge" onclick="openMyKey()" style="font-size:12.5px;white-space:nowrap"></span>
       <button class="btn" onclick="openNote()" title="直接写一段文字（可粘贴图片）存进知识库">✍️ 写内容</button>
-      <button class="btn" onclick="openAddFiles()">添加文件</button>
+      <div class="menu-wrap">
+        <button class="btn" onclick="toggleAddMenu(event)">＋ 添加 ▾</button>
+        <div class="menu" id="addMenu">
+          <div onclick="closeAddMenu();pickAdd('files')">📄 选择文件（可多选）</div>
+          <div onclick="closeAddMenu();pickAdd('folder')">📁 选择文件夹</div>
+        </div>
+      </div>
       <a class="btn" id="defenseLink" href="/defense" onclick="return openDefense(event)" title="上传答辩 PPT，AI 扮演评委提问，答完看报告">🎓 答辩演练</a>
       <div class="menu-wrap">
         <button class="btn" onclick="toggleMoreMenu(event)" title="更多操作">⚙ 更多</button>
@@ -512,6 +536,10 @@
   <div id="warmBanner">
     <span class="wbText" id="wbText">正在后台加载知识库索引…</span>
     <span class="wbTrack"><i id="wbFill"></i></span>
+  </div>
+  <div id="indexBanner">
+    <span class="ibText" id="ibText">正在建立索引…</span>
+    <span class="ibTrack"><i></i></span>
   </div>
   <div id="chat">
     <div class="empty">← 在左侧选择或新建一个知识库,然后开始提问</div>
@@ -1246,7 +1274,8 @@ function renderMe(){
 // 把鼠标悬停/正在点的按钮状态弄丢。
 function kbsFingerprint(list){
   return (list || []).map(k =>
-    [k.id, k.name, k.status, k.chunk_count, k.file_count, k.owner, k.owner_name, k.mine].join('~')
+    [k.id, k.name, k.status, k.index_status, k.vector_status,
+     k.chunk_count, k.file_count, k.owner, k.owner_name, k.mine].join('~')
   ).join('|');
 }
 
@@ -1314,6 +1343,7 @@ function renderKbs(){
     const div = document.createElement('div');
     div.className = 'kb' + (cur && cur.id === k.id ? ' active' : '');
     const indexing = k.status === 'indexing';
+    const idxBad = k.index_status === 'failed' || k.index_status === 'interrupted';
     div.innerHTML = `
       <div class="row">
         <span class="name ${indexing?'dim':''}">${esc(k.name)}</span>
@@ -1323,7 +1353,7 @@ function renderKbs(){
           <button class="del" title="删除" onclick="event.stopPropagation();delKb('${k.id}')">✕</button>
         </span>
       </div>
-      <div class="meta" title="${esc(k.folder || '（未绑定目录，纯上传型）')}">${k.folder ? '' : '纯上传型 · '}文件 ${k.file_count||0} / 块 ${k.chunk_count||0}${indexing?' · 索引中…':''}${
+      <div class="meta" title="${esc(k.folder || '（未绑定目录，纯上传型）')}">${k.folder ? '' : '纯上传型 · '}文件 ${k.file_count||0} / 块 ${k.chunk_count||0}${indexing?' · 索引中…':''}${idxBad?' · <span style="color:#b91c1c">索引失败/中断</span>':''}${
         (window.__isAdmin && k.owner_name && !k.mine) ? ` · <span style="color:#b45309">👤 ${esc(k.owner_name)}</span>` : ''}</div>`;
     div.onclick = () => select(k);
     el.appendChild(div);
@@ -1360,12 +1390,16 @@ function select(k){
   $('#q').placeholder = window.innerWidth <= 820
     ? `向「${k.name}」提问`
     : `向「${k.name}」提问，可接着追问`;
+  syncIndexState(k);   // 首次建库未完成时禁用提问，并显示索引进度
   if (changed) resetChat(true);  // 换知识库 → 静默清空上下文, 避免串库
   // 清除残留的"请选择知识库"空提示
   const empty = $('#chat .empty');
   if (empty) empty.remove();
   renderKbs();
-  if (!k.chunk_count) addMsg('assistant', '该知识库还没有索引。点右上角"重建索引"，或先添加/补充文档后重建。');
+  if (!k.chunk_count && k.status !== 'indexing' && k.index_status !== 'failed'
+      && k.index_status !== 'interrupted'){
+    addMsg('assistant', '该知识库还没有索引。点右上角"重建索引"，或先添加/补充文档后重建。');
+  }
 }
 // 被限流（429）时的提示：说明原因 + 倒计时重试按钮。
 // 后端保证带 retry_after，这里倒计时结束自动把按钮变成可点的「重试」。
@@ -1770,7 +1804,9 @@ async function clearAnswerCache(){
 
 function toggleMoreMenu(e){ e.stopPropagation(); $('#moreMenu').classList.toggle('show'); }
 function closeMoreMenu(){ $('#moreMenu').classList.remove('show'); }
-document.addEventListener('click', () => closeMoreMenu());
+function toggleAddMenu(e){ e.stopPropagation(); closeMoreMenu(); $('#addMenu').classList.toggle('show'); }
+function closeAddMenu(){ $('#addMenu').classList.remove('show'); }
+document.addEventListener('click', () => { closeMoreMenu(); closeAddMenu(); });
 
 // ---- 图片大图（页内打开，不再新开标签页）----
 // 之前点缩略图是 target=_blank，用户反馈"点开就关不掉"，改成页内浮层：
@@ -2529,6 +2565,135 @@ function taskHide(){
   $('#taskbar').classList.remove('show');
   $('#taskCancel').style.display = '';
 }
+
+// ---- 索引状态提示（异步队列的真实状态） ----
+// 之前上传后轮询 /api/kb 的 status，但那个字段只反映 sync 索引路径，
+// 异步队列 queued/running 根本看不到，进度条会立刻消失。现在统一看
+// /api/kb/<id>/index/status，并把“还没建完”明确告诉用户。
+let idxBannerTimer = null, idxBannerKid = null;
+const _announcedIndex = {};      // kid -> 上次提示时间，避免 watcher 和上传轮询重复提示
+
+function setIndexBanner(text, cls){
+  const b = $('#indexBanner');
+  if (!b) return;
+  $('#ibText').textContent = text;
+  b.className = 'show' + (cls ? ' ' + cls : '');
+}
+function hideIndexBanner(){
+  const b = $('#indexBanner');
+  if (b) b.className = '';
+}
+function announceIndex(kid, html){
+  const now = Date.now();
+  if (_announcedIndex[kid] && now - _announcedIndex[kid] < 10000) return;
+  _announcedIndex[kid] = now;
+  addMsg('assistant', html);
+}
+function indexLabel(kid){
+  const k = (kbs || []).find(x => x.id === kid);
+  return (k && k.name) || '知识库';
+}
+function stopIndexBannerWatch(){
+  if (idxBannerTimer){ clearInterval(idxBannerTimer); idxBannerTimer = null; }
+  idxBannerKid = null;
+}
+function startIndexBannerWatch(kid, label, hasChunks){
+  if (idxBannerKid === kid && idxBannerTimer) return;
+  stopIndexBannerWatch();
+  idxBannerKid = kid;
+  const tick = async () => {
+    if (idxBannerKid !== kid) return;
+    let d = null;
+    try {
+      d = await (await fetch('/api/kb/' + encodeURIComponent(kid) + '/index/status',
+                             withAuth({cache:'no-store'}))).json();
+    } catch(e){ return; }
+    const j = (d && d.job) || {};
+    const st = j.status || '';
+    if (st === 'queued' || st === 'running'){
+      const prog = j.progress ? ' · ' + j.progress : '';
+      setIndexBanner(`正在建立索引：「${label}」${prog}` +
+        (hasChunks ? '（可继续提问，回答可能未包含最新文档）' : '（完成后才能提问）'), '');
+      return;
+    }
+    stopIndexBannerWatch();
+    if (st === 'done'){
+      const n = (j.stats && j.stats.total_chunks) || 0;
+      hideIndexBanner();
+      announceIndex(kid, '✅ 索引完成：「' + esc(label) + '」' +
+        (n ? '共 ' + n + ' 块' : '') + '，现在可以提问了。');
+      loadKbs().catch(()=>{});
+    } else if (st === 'failed' || st === 'interrupted'){
+      setIndexBanner(`⚠️ 索引${st === 'failed' ? '失败' : '中断'}：「${label}」` +
+        (j.error ? ' · ' + j.error : ''), 'fail');
+      announceIndex(kid, '⚠️ 索引' + (st === 'failed' ? '失败' : '被中断') +
+        '：「' + esc(label) + '」' + (j.error ? ' · ' + esc(j.error) : '') +
+        '。可以到「⚙ 更多 → 重建索引」重试。');
+      loadKbs().catch(()=>{});
+    } else {
+      hideIndexBanner();
+    }
+  };
+  tick();
+  idxBannerTimer = setInterval(tick, 1500);
+}
+// 根据当前知识库状态决定：是否能提问、要不要显示进度
+function syncIndexState(k){
+  const building = !!(k && k.status === 'indexing');
+  const hasChunks = !!(k && (k.chunk_count > 0));
+  if (building && !hasChunks){
+    $('#q').disabled = true;
+    $('#q').placeholder = '正在建立索引，完成后才能提问…';
+  } else if (k){
+    $('#q').disabled = false;
+  }
+  if (building){
+    startIndexBannerWatch(k.id, k.name || '知识库', hasChunks);
+  } else {
+    stopIndexBannerWatch();
+    const failed = !!(k && (k.index_status === 'failed' || k.index_status === 'interrupted'));
+    if (failed){
+      setIndexBanner(`⚠️ 索引${k.index_status === 'failed' ? '失败' : '中断'}：「${k.name || ''}」` +
+        (k.index_error ? ' · ' + k.index_error : '') +
+        '（可到「⚙ 更多 → 重建索引」重试）', 'fail');
+    } else {
+      hideIndexBanner();
+    }
+  }
+}
+// 等待一次索引任务结束（taskbar 用）。resolve 状态对象 {status, progress, error, stats...}
+function waitIndexJob(kid, label, opts){
+  opts = opts || {};
+  return new Promise(resolve => {
+    let timer = null, stopped = false;
+    const deadline = Date.now() + 30 * 60 * 1000;
+    const finish = j => {
+      if (stopped) return;
+      stopped = true;
+      if (timer) clearInterval(timer);
+      resolve(j || {status:'idle'});
+    };
+    const tick = async () => {
+      if (stopped) return;
+      if (opts.cancelCheck && opts.cancelCheck()){ finish({status:'canceled'}); return; }
+      if (Date.now() > deadline){ finish({status:'timeout'}); return; }
+      let d = null;
+      try {
+        d = await (await fetch('/api/kb/' + encodeURIComponent(kid) + '/index/status',
+                               withAuth({cache:'no-store'}))).json();
+      } catch(e){ return; }
+      const j = (d && d.job) || {};
+      if (j.status === 'queued' || j.status === 'running'){
+        taskShow('正在建立索引「' + label + '」… ' + (j.progress || ''), null, true);
+        return;
+      }
+      finish(j);
+    };
+    tick();
+    timer = setInterval(tick, 1500);
+  });
+}
+
 $('#taskCancel') && $('#taskCancel').addEventListener('click', () => {
   uploadCanceled = true;
   // 上传中 → 中止 XHR; 索引中 → 取消轮询等待
@@ -2579,6 +2744,7 @@ async function uploadFiles(files, kid, label){
     addMsg('assistant', '⚠️ 已跳过 ' + emptyCount + ' 个空文件(0 字节)，其余继续上传。');
   }
   if (!valid.length){ throw new Error('所选文件均为空或不可用'); }
+  addMsg('assistant', '已选择 ' + esc(describePicked(valid)) + '，开始上传到「' + esc(label) + '」。');
   uploadBusy = true;
   uploadCanceled = false;
   const fd = new FormData();
@@ -2594,32 +2760,30 @@ async function uploadFiles(files, kid, label){
   }
   if (!d.ok){ uploadBusy = false; taskHide(); throw new Error(d.msg || '上传失败'); }
   if (uploadCanceled){ uploadBusy = false; taskHide(); throw new Error('已取消'); }
-  // 上传完成 → 异步触发索引(不等待, 界面可继续用)
+  // 上传完成 → 异步触发索引(不阻塞界面)；进度/完成都看真实的 index_status
   taskShow('已上传 ' + d.saved + ' 个文件，正在后台建立索引…', null, true);
   fetch('/api/kb/' + kid + '/index', withAuth({method:'POST'})).catch(()=>{});
-  // 后台轮询索引状态, 完成后提示(最多 10 分钟)
-  const deadline = Date.now() + 10 * 60 * 1000;
-  pollTimer = setInterval(async () => {
-    if (uploadCanceled || Date.now() > deadline){
-      clearInterval(pollTimer); pollTimer = null; uploadBusy = false; taskHide(); return;
+  waitIndexJob(kid, label, {cancelCheck: () => uploadCanceled}).then(async j => {
+    uploadBusy = false;
+    taskHide();
+    if (j.status === 'done'){
+      const n = (j.stats && j.stats.total_chunks) || 0;
+      announceIndex(kid, '✅ 索引完成：「' + esc(label) + '」' +
+        (n ? '共 ' + n + ' 块' : '') + '，现在可以提问了。');
+    } else if (j.status === 'failed' || j.status === 'interrupted'){
+      announceIndex(kid, '⚠️ 索引' + (j.status === 'failed' ? '失败' : '被中断') +
+        '：「' + esc(label) + '」' + (j.error ? ' · ' + esc(j.error) : '') +
+        '。可以到「⚙ 更多 → 重建索引」重试。');
+      setIndexBanner('⚠️ 索引失败：「' + label + '」' + (j.error ? ' · ' + j.error : ''), 'fail');
+    } else if (j.status === 'canceled'){
+      addMsg('assistant', '已取消等待索引。已上传的文件会保留，稍后可在「⚙ 更多 → 重建索引」继续。');
+    } else if (j.status === 'timeout'){
+      addMsg('assistant', '⏳ 索引仍在后台进行，已等待 30 分钟。可稍后刷新页面查看结果。');
+    } else {
+      addMsg('assistant', '⚠️ 没有读取到索引任务状态，请稍后在「⚙ 更多 → 重建索引」确认。');
     }
-    try {
-      const r = await (await fetch('/api/kb', withAuth({cache:'no-store'}))).json();
-      if (!r || !Array.isArray(r.kbs)){                                    // 登录过期/异常: 停止空转
-        clearInterval(pollTimer); pollTimer = null; uploadBusy = false; taskHide(); return;
-      }
-      const kb = r.kbs.find(x => x.id === kid);
-      if (!kb){ clearInterval(pollTimer); pollTimer = null; uploadBusy = false; taskHide(); return; }  // 库被删除
-      if (kb.status !== 'indexing'){
-        clearInterval(pollTimer); pollTimer = null; uploadBusy = false;
-        taskHide();
-        if (kb.chunk_count > 0){
-          addMsg('assistant', '✅ 索引完成：「' + (kb.name||'') + '」共 ' + kb.chunk_count + ' 块，可开始提问。');
-        }
-        await loadKbs();
-      }
-    } catch(e){ /* 网络抖动忽略, 继续轮询 */ }
-  }, 2500);
+    await loadKbs();
+  });
   return { saved: d.saved, started: true };
 }
 
@@ -2685,32 +2849,55 @@ window.addEventListener('drop', async e => {
   if (!files.length) return;
   if (cur) await dropIntoKb(cur, files); else await dropIntoNew(files);
 });
+// 文件选择框：files = 普通多选（能看见文件名）；folder = 整个文件夹（保留相对路径）。
+// 之前两个入口都硬编码 webkitdirectory=true，系统选择框只允许选文件夹，
+// 用户既看不到单个文件，也没法只传几个文件。
+function makeFileInput(kind){
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.multiple = true;
+  if (kind === 'folder'){ try { inp.webkitdirectory = true; } catch(e) {} }
+  return inp;
+}
+function pickedFiles(inp){
+  return Array.from(inp.files || []).map(f => ({
+    file: f, relpath: f.webkitRelativePath || f.name
+  }));
+}
+// 选完先告诉用户选了什么，避免“点了上传却不知道传了哪些”
+function describePicked(files){
+  const rels = files.map(x => x.relpath || x.file.name);
+  const dirs = new Set(rels.filter(r => r.includes('/')).map(r => r.split('/')[0]));
+  const head = rels.slice(0, 8).join('、');
+  const more = rels.length > 8 ? ` 等 ${rels.length} 个文件` : '';
+  return `${files.length} 个文件${dirs.size ? `（含 ${dirs.size} 个文件夹）` : ''}：${head}${more}`;
+}
 // 新建库时点选文件/文件夹
-function openCreatePicker(){
+function openCreatePicker(kind){
+  kind = kind === 'folder' ? 'folder' : 'files';
   $('#nb_folder').value = '';
-  const inp = document.createElement('input');
-  inp.type = 'file'; inp.multiple = true;
-  try { inp.webkitdirectory = true; } catch(e) {}
-  inp.onchange = async () => { const files = Array.from(inp.files || []).map(f => ({file:f, relpath:f.webkitRelativePath || f.name})); if (files.length) { await dropIntoNew(files); $('#nb_folder').value=''; } };
+  const inp = makeFileInput(kind);
+  inp.onchange = async () => {
+    const files = pickedFiles(inp);
+    if (files.length){
+      addMsg('assistant', '已选择 ' + esc(describePicked(files)) + '，准备新建知识库并上传。');
+      await dropIntoNew(files);
+      $('#nb_folder').value = '';
+    }
+  };
   inp.click();
 }
-// 往当前库添加文件(按钮)
-// 浏览器安全限制: <input type=file> 无法预设初始目录, 只能由用户自己导航。
-// 这里先告知当前库的源目录, 方便用户直接定位。
-function openAddFiles(){
+// 往当前库添加文件/文件夹（右上角「＋ 添加」）
+function pickAdd(kind){
   if (!cur){ alert('请先选择一个知识库'); return; }
-  const folder = (cur.folder || '').split('|').filter(Boolean).join('\n  ');
-  const tip = folder
-    ? '当前知识库的源目录：\n  ' + folder + '\n\n浏览器不允许网页指定文件框的初始目录，请在弹出的窗口里自行导航到上面的路径。\n\n' +
-      '（如果只是想写一段文字/贴图片，直接用「✍️ 写内容」更方便，不用找文件。）\n\n继续打开文件选择框？'
-    : '当前知识库是纯上传型（没有绑定本地源目录）。\n\n继续打开文件选择框？';
-  if (!confirm(tip)) return;
-  const inp = document.createElement('input');
-  inp.type = 'file'; inp.multiple = true;
-  try { inp.webkitdirectory = true; } catch(e) {}
-  inp.onchange = async () => { const files = Array.from(inp.files || []).map(f => ({file:f, relpath:f.webkitRelativePath || f.name})); if (files.length) await dropIntoKb(cur, files); };
+  const inp = makeFileInput(kind);
+  inp.onchange = async () => {
+    const files = pickedFiles(inp);
+    if (files.length) await dropIntoKb(cur, files);
+  };
   inp.click();
 }
+// 兼容旧调用
+function openAddFiles(){ pickAdd('files'); }
 
 // ---- 写内容(手写笔记, 可贴图) ----
 let noteImages = [];      // [{name, data:dataURL}]
@@ -2981,24 +3168,23 @@ async function saveNote(btn){
 // 触发索引并等待完成(轮询), 用于「写内容」等非上传场景
 async function runIndexInline(kid){
   uploadBusy = true;
-  taskShow('正在为「' + ((cur && cur.name) || '') + '」重建索引…', null, true);
+  const label = (cur && cur.id === kid && cur.name) || indexLabel(kid);
+  taskShow('正在为「' + label + '」重建索引…', null, true);
   try { await fetch('/api/kb/' + kid + '/index', withAuth({method: 'POST'})); } catch(e){}
-  const deadline = Date.now() + 10 * 60 * 1000;
-  return new Promise(res => {
-    const t = setInterval(async () => {
-      if (Date.now() > deadline){ clearInterval(t); taskHide(); uploadBusy = false; res(); return; }
-      try {
-        const r = await (await fetch('/api/kb', withAuth({cache: 'no-store'}))).json();
-        const kb0 = ((r && r.kbs) || []).find(x => x.id === kid);
-        if (!kb0 || kb0.status !== 'indexing'){
-          clearInterval(t); taskHide(); uploadBusy = false;
-          if (kb0 && kb0.chunk_count > 0)
-            addMsg('assistant', '✅ 索引完成：「' + esc(kb0.name || '') + '」共 ' + kb0.chunk_count + ' 块，可以提问了。');
-          await loadKbs(); res();
-        }
-      } catch(e){}
-    }, 2500);
-  });
+  const j = await waitIndexJob(kid, label);
+  uploadBusy = false;
+  taskHide();
+  if (j.status === 'done'){
+    const n = (j.stats && j.stats.total_chunks) || 0;
+    announceIndex(kid, '✅ 索引完成：「' + esc(label) + '」' +
+      (n ? '共 ' + n + ' 块' : '') + '，可以提问了。');
+  } else if (j.status === 'failed' || j.status === 'interrupted'){
+    announceIndex(kid, '⚠️ 索引' + (j.status === 'failed' ? '失败' : '被中断') +
+      '：「' + esc(label) + '」' + (j.error ? ' · ' + esc(j.error) : ''));
+  } else if (j.status === 'timeout'){
+    addMsg('assistant', '⏳ 索引仍在后台进行，已等待 30 分钟。可稍后刷新页面查看结果。');
+  }
+  await loadKbs();
 }
 
 // 粘贴图片进正文框
