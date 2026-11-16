@@ -71,6 +71,11 @@ def main():
     if not args.no_imgcap and (data_src / "_imgcap").is_dir():
         shutil.copytree(data_src / "_imgcap", out / "data" / "_imgcap")
 
+    # 注册邮箱域名白名单属于部署配置；不带上会退回默认域名
+    email_domains = data_src / "email_domains.txt"
+    if email_domains.is_file():
+        shutil.copy2(email_domains, out / "data" / "email_domains.txt")
+
     docs_roots, missing = [], []
     for raw in str(kb.get("folder") or "").split("|"):
         raw = raw.strip()
@@ -126,6 +131,7 @@ def main():
             "data/_imgcap 里的 sidecar 按原 Windows 路径命名；若在服务器重新索引，"
             "请先用 tools/export_img_captions.py 重新生成。",
             "镜像不含 data/models；运行时分别挂载 /opt/rag/data、/opt/rag/models。",
+            "data/email_domains.txt 为注册邮箱白名单，当前只允许 @hundsun.com。",
         ],
     }
     (out / "MANIFEST.json").write_text(

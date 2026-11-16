@@ -122,6 +122,7 @@ python eval/run_eval.py
 - 不要在服务器上 `pip install`/改代码；所有变更走新镜像；
 - 单容器更新有几秒中断；要零中断可起两个容器 + Nginx 切换，当前规模不需要；
 - `figures.enabled=false`（当前决定）：图片知识在 chunks 文本里，不展示图；
+- 注册邮箱白名单在 `data/email_domains.txt`，当前只允许 `@hundsun.com`；打包脚本会一并带上；
 - OCR 未装（rapidocr/opencv）：业务手册的 OCR 已进 chunks；重新索引扫描件需另加依赖；
 - RAGFlow/阶段 2 不在本机：需要新 VM + Docker 24+ + 32GB 可用内存 + 500GB 磁盘。
 

@@ -6,6 +6,16 @@
 
 ---
 
+### 15:10（11-16） | Claude Code | `deploy/prepare_o32_bundle.py`、`app/data/email_domains.txt`、deploy/README | 注册邮箱白名单限定 @hundsun.com | 人补充：注册邮箱格式为 @hundsun.com
+
+- 服务器 `/opt/rag/data/email_domains.txt` 写入 `hundsun.com`，已 chown 1000；
+  `/api/register/config` 返回 `["hundsun.com"]`，非该域名返回 400
+- 本地 `app/data/email_domains.txt` 同步（共享数据目录，新增文件，未删改）
+- `prepare_o32_bundle.py` 打包时复制该文件，避免下次出包退回默认域名
+- 未改 `app/server.py`（RAG-Agent 归属）；默认值仍为 `examplecorp.com`，依赖白名单文件覆盖
+
+---
+
 ### 14:27（11-16） | Claude Code | `deploy/*`、`.dockerignore`、`.gitignore`、docs | Docker 生产部署上线：RHEL7 + Docker 20.10 + Python3.12，仅业务手册单库 | 人确认长期 Docker
 
 - 新增 `deploy/Dockerfile`、`requirements-server.txt`、`docker-compose.yml`、`docker.service`、
