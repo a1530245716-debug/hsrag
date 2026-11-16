@@ -16,6 +16,9 @@
 - Docker json-file 保留（20MB×5）仍可用 `docker logs`；容器重建不再丢持久化日志
 - `.gitignore` 增加 `logs/`；本地实测 `logs/app-20261116.log` 已包含启动和
   `/api/health` 访问日志
+- 16:21 已部署 `rag-bff:20261116-809e643` 到 10.20.154.26:8000，healthy；
+  `/opt/rag/logs/app-20261116.log` 已验证包含新容器启动和访问日志，
+  旧容器日志也已导入该文件
 
 ---
 

@@ -28,6 +28,7 @@
   data/            # bundle/data -> /app/app/data
   models/          # bundle/models -> /app/models
   docs/            # bundle/docs -> /opt/rag/docs (ro)
+  logs/            # -> /app/logs (rw)，按天 app-YYYYMMDD.log
   config.json      # -> /app/app/config.json (ro)
   assets/
   compose.yml
@@ -144,9 +145,11 @@ python eval/run_eval.py
 | 端口 | 8000（未用 8123；80 仍是 learn-center，未受影响） |
 | 15:58 更新 | `rag-bff:20261116-a27b725`：索引进度/文件选择/答辩预生成；`/opt/rag/.env` 固定 `RAG_TAG`；容器 healthy |
 | 16:12 修复 | `rag-bff:20261116-fc10c8b`：参考答案截断自动重试、手册检索跳过精排、一次只预生成一题 |
+| 16:21 日志 | `rag-bff:20261116-809e643`：持久化日志 `/opt/rag/logs`（按天，保留 30 天）；旧日志已导入 |
 
-回滚：把 `/opt/rag/.env` 的 `RAG_TAG` 改回上一版 `20261116-a27b725`
-（或最初的 `20261116-o32`），`docker-compose -f compose.yml up -d`；数据卷不动。
+回滚：把 `/opt/rag/.env` 的 `RAG_TAG` 改回上一版 `20261116-fc10c8b`
+（或更早的 `20261116-a27b725` / `20261116-o32`），
+`docker-compose -f compose.yml up -d`；数据卷不动。
 
 ## 10. 日志
 
