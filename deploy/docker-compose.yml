@@ -3,6 +3,7 @@
 #   /opt/rag/data    <- 业务手册 KB + registry/users
 #   /opt/rag/models  <- bge-small / bge-reranker
 #   /opt/rag/docs    <- 业务手册源文档（预览/图片）
+#   /opt/rag/logs    <- 应用日志（按天 app-YYYYMMDD.log，保留 30 天）
 #   /opt/rag/config.json <- 配置（含 LLM Key，600）
 services:
   rag:
@@ -16,10 +17,12 @@ services:
     environment:
       TZ: Asia/Shanghai
       RAG_LLM_API_KEY: ${RAG_LLM_API_KEY:-}
+      RAG_LOG_DIR: /app/logs
     volumes:
       - /opt/rag/data:/app/app/data
       - /opt/rag/models:/app/models
       - /opt/rag/docs:/opt/rag/docs:ro
+      - /opt/rag/logs:/app/logs
       - /opt/rag/config.json:/app/app/config.json:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5)"]

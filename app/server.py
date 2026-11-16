@@ -25,6 +25,98 @@ import indexer, kb, llm, auth, fallback, planner, users, qa_log, cache, imgserve
 # 阶段 3：检索内核抽象。业务层只认 backend.retrieve，底下换 BM25/RAGFlow/Mock 都不改这里。
 import backend
 
+
+# ---------------- 持久化日志 ----------------
+# Docker 的 json-file 会在容器重建时丢掉旧日志。这里再把 stdout/stderr
+# 原样写一份到日志目录（服务器挂载 /opt/rag/logs → /app/logs），按天分文件。
+# uvicorn 的启动/访问日志、print 的 [coach]/[llm]/报错都会被一起写到文件。
+_LOG_SETUP_DONE = False
+
+
+def _setup_file_logging():
+    global _LOG_SETUP_DONE
+    if _LOG_SETUP_DONE:
+        return
+    _LOG_SETUP_DONE = True
+    try:
+        base = os.environ.get("RAG_LOG_DIR") or (
+            "/app/logs" if Path("/app").is_dir()
+            else str(Path(__file__).resolve().parents[1] / "logs"))
+        log_dir = Path(base)
+        log_dir.mkdir(parents=True, exist_ok=True)
+        # 只保留 30 天，避免长期运行把磁盘写满
+        cutoff = time.time() - 30 * 86400
+        for p in log_dir.glob("app-*.log"):
+            try:
+                if p.stat().st_mtime < cutoff:
+                    p.unlink()
+            except Exception:
+                pass
+    except Exception:
+        return
+
+    state = {"day": "", "f": None}
+    lock = threading.Lock()
+
+    def _file():
+        day = time.strftime("%Y%m%d")
+        if state["day"] != day or state["f"] is None or state["f"].closed:
+            if state["f"]:
+                try:
+                    state["f"].close()
+                except Exception:
+                    pass
+            state["f"] = open(log_dir / f"app-{day}.log", "a",
+                              encoding="utf-8", buffering=1)
+            state["day"] = day
+            state["f"].write(
+                f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')} "
+                f"start pid={os.getpid()} =====\n")
+            state["f"].flush()
+        return state["f"]
+
+    class _Tee:
+        def __init__(self, orig):
+            self._orig = orig
+
+        def write(self, s):
+            try:
+                if self._orig is not None:
+                    self._orig.write(s)
+            except Exception:
+                pass
+            try:
+                with lock:
+                    f = _file()
+                    f.write(s)
+                    f.flush()
+            except Exception:
+                pass
+            return len(s)
+
+        def flush(self):
+            try:
+                if self._orig is not None:
+                    self._orig.flush()
+            except Exception:
+                pass
+            try:
+                with lock:
+                    _file().flush()
+            except Exception:
+                pass
+
+        def __getattr__(self, name):
+            return getattr(self._orig, name)
+
+    if not isinstance(sys.stdout, _Tee):
+        sys.stdout = _Tee(sys.stdout)
+    if not isinstance(sys.stderr, _Tee):
+        sys.stderr = _Tee(sys.stderr)
+
+
+_setup_file_logging()
+
 app = FastAPI(title="项目智能问答助手", version="1.0.0")
 
 # ---------------- 模型 ----------------

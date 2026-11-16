@@ -24,7 +24,7 @@ COPY app/ /app/app/
 COPY *.py /app/
 
 # 非 root 运行；宿主机数据卷请 chown 1000:1000
-RUN useradd --create-home --uid 1000 rag && chown -R rag:rag /app
+RUN useradd --create-home --uid 1000 rag && mkdir -p /app/logs && chown -R rag:rag /app /app/logs
 USER rag
 
 EXPOSE 8000

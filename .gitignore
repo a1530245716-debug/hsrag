@@ -24,6 +24,7 @@ app/data/
 health.log
 server.out.log
 server.err.log
+logs/
 *.log
 
 # ================= 大文件 / 模型 / 生成物 =================

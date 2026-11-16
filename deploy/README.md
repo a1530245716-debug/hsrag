@@ -150,16 +150,16 @@ python eval/run_eval.py
 
 ## 10. 日志
 
-- 应用日志走容器 stdout/stderr，Docker `json-file`：
-  `/var/lib/docker/containers/<container-id>/<container-id>-json.log`，
-  单个 20MB、保留 5 个（compose 已配）。
-- 查看：`docker logs -t rag-bff | grep -E '\\[coach\\]|\\[llm\\]|ERROR'`；
-  `docker logs --since 1h rag-bff`。
+- **持久化日志**：宿主机 `/opt/rag/logs` 挂到容器 `/app/logs`，
+  按天写 `app-YYYYMMDD.log`，保留 30 天。包含启动日志、uvicorn 访问日志、
+  `print` 的 `[coach]`/`[llm]`/异常堆栈。容器重建不会丢。
+- 查看：`tail -f /opt/rag/logs/app-$(date +%Y%m%d).log`；
+  或 `grep -E '\\[coach\\]|\\[llm\\]|ERROR' /opt/rag/logs/app-*.log`。
+- 同时保留 Docker `json-file` 控制台日志（单文件 20MB、5 个）：
+  `docker logs -t rag-bff`。容器 recreate 后这部分会随旧容器删除。
 - `[coach]` 行是答辩拆解耗时（检索/模型/输出长度/stop_reason）；
-  `[llm]` 行是重试后仍失败；解析失败现在会打 `parse_failed ... raw=...`。
+  `[llm]` 行是重试后仍失败；解析失败会打 `parse_failed ... raw=...`。
 - `/opt/rag/data/qa_log.jsonl` 只记录主问答，**不记录答辩内容和模型原文**。
-- 注意：容器 recreate 后旧容器的 `json.log` 会随旧容器删除；
-  需要长期审计时应另接日志卷或集中日志。
 
 未做/后续：Nginx 8080/8443 + TLS/ACL、admin 密码轮换、每日备份、
 `docker save` 镜像备份、数据卷扩容；RAGFlow 等新 VM。

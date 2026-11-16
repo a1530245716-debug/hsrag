@@ -6,6 +6,19 @@
 
 ---
 
+### 16:25（11-16） | Claude Code | `app/server.py`、`deploy/Dockerfile`、`deploy/docker-compose.yml`、`.gitignore`、deploy/README | 持久化日志目录 `/opt/rag/logs` | 人要求“加个 logs 文件夹，把日志保持到这里”
+
+- `server.py` 启动时把 stdout/stderr 同时写一份到 `RAG_LOG_DIR`
+  （容器 `/app/logs`，本地默认仓库 `logs/`），按天 `app-YYYYMMDD.log`，
+  启动时清理 30 天前文件；uvicorn 启动/访问日志、`[coach]`、`[llm]`、异常都进文件
+- compose 新增 `/opt/rag/logs:/app/logs` 和 `RAG_LOG_DIR=/app/logs`；
+  Dockerfile 预建 `/app/logs` 并 chown 1000
+- Docker json-file 保留（20MB×5）仍可用 `docker logs`；容器重建不再丢持久化日志
+- `.gitignore` 增加 `logs/`；本地实测 `logs/app-20261116.log` 已包含启动和
+  `/api/health` 访问日志
+
+---
+
 ### 16:11（11-16） | Claude Code | `app/defense_coach.py`、`app/defense_api.py` | 修复“查看参考答案”失败/慢 | 人反馈服务器一次失败且很慢，要求看日志
 
 - 日志证据：4 次 `[coach] reveal` 分别 70.5s / 64.0s / 38.0s / 78.2s；
