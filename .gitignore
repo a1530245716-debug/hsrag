@@ -59,5 +59,12 @@ __pycache__/
 # ================= 本地工具配置 =================
 .claude/
 
+# ================= Docker 离线资产 / 构建产物 =================
+deploy/wheels/
+deploy/assets/
+deploy/*.tar
+deploy/*.tgz
+dist/
+
 # ================= 本地演示日志 =================
 tools/local_dev/*.log

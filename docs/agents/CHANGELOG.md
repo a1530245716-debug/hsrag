@@ -6,6 +6,19 @@
 
 ---
 
+### 14:27（11-16） | Claude Code | `deploy/*`、`.dockerignore`、`.gitignore`、docs | Docker 生产部署上线：RHEL7 + Docker 20.10 + Python3.12，仅业务手册单库 | 人确认长期 Docker
+
+- 新增 `deploy/Dockerfile`、`requirements-server.txt`、`docker-compose.yml`、`docker.service`、
+  `prepare_o32_bundle.py`、`README`、根 `.dockerignore`
+- 服务器 10.20.154.26：Docker 20.10.24 overlay2；基础 `python:3.12-slim`；
+  应用镜像 `rag-bff:20261116-o32` 592MB；容器 healthy，host network 8000
+- 只部署业务手册 `20261108_174939_69c8b5`（4,065 块）；镜像验证**无 data/models/config**
+- health 200、admin 登录 200、SJSMXn 问答 23.1s 返回引用
+- 未改 8123/80；learn-center 仍 active
+- 待办：Nginx/TLS/ACL、admin 密码轮换、备份、`docker save`、RAGFlow 另机
+
+---
+
 ### 10:44（11-16） | Claude Code | `docs/ai-fde/10-上线方案-目标服务器.md`、README | 目标服务器只读评估 + 两套上线方案 | 人给了一台服务器，先评估、先不动手
 
 - 服务器：RHEL 7.5、16 vCPU、62GB（**11GB 可用**）、50GB 可用；

@@ -1,0 +1,23 @@
+.git
+.gitignore
+__pycache__
+*.pyc
+*.pyo
+*.log
+
+# 知识库数据 / 模型 / 旧索引：绝不进镜像
+app/data
+app/config.json
+app/config.json.bak*
+models
+index
+demo
+docs
+eval/results
+tools/loadtest
+
+# 构建产物/离线资产
+dist
+deploy/assets
+deploy/*.tar
+deploy/*.tgz

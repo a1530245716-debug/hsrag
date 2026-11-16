@@ -1,0 +1,23 @@
+[Unit]
+Description=Docker Application Container Engine (static binary, RHEL7)
+Documentation=https://docs.docker.com
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=/usr/sbin/modprobe overlay
+ExecStart=/usr/local/bin/dockerd --host=unix:///var/run/docker.sock --storage-driver=overlay2 --iptables=false --bridge=none
+ExecReload=/bin/kill -s HUP $MAINPID
+LimitNOFILE=infinity
+LimitNPROC=infinity
+LimitCORE=infinity
+TasksMax=infinity
+Delegate=yes
+KillMode=process
+Restart=always
+StartLimitBurst=3
+StartLimitInterval=60s
+
+[Install]
+WantedBy=multi-user.target
