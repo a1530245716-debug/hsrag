@@ -122,7 +122,8 @@
   /* 引用角标：模型在句末标 [1,3] / （片段1、片段3），渲染成右上角小标 */
   .msg.assistant sup.cite { font-size:11px; line-height:0; vertical-align:super;
     color:var(--accent); font-weight:600; margin:0 1px; letter-spacing:-.2px;
-    cursor:default; user-select:none; }
+    cursor:pointer; user-select:none; padding:0 1px; border-radius:3px; }
+  .msg.assistant sup.cite:hover { background:#dbeafe; }
   .refs { align-self:flex-start; max-width:80%; }
   /* 点缩略图打开的页内大图 */
   #lb { display:none; position:fixed; inset:0; background:rgba(15,23,42,.92); z-index:999;
@@ -137,7 +138,8 @@
                   background:var(--accent); border-radius:8px; margin-right:2px; }
   .refs details { font-size:12px; color:var(--muted); background:#fafafa; border:1px solid var(--line);
                   border-radius:8px; padding:6px 10px; margin-top:4px; }
-  .refs .r { padding:2px 0; }
+  .refs .r { padding:2px 0; scroll-margin-top:90px; border-radius:6px; }
+  .refs .r.ref-flash { background:#fef3c7; box-shadow:0 0 0 2px #fde68a; }
   .refs .score { color:var(--muted); }
   /* 引用片段里的文档插图 */
   .refs .ref-imgs { margin:6px 0 2px; display:flex; flex-wrap:wrap; gap:6px; }
@@ -147,8 +149,11 @@
   .refs .ref-imgs img:hover { transform:scale(1.08); box-shadow:0 0 0 2px var(--accent); }
   .ref-link { color:var(--accent); text-decoration:none; word-break:break-all; }
   .ref-link:hover { text-decoration:underline; }
-  #inputbar { padding:14px 20px; border-top:1px solid var(--line); background:var(--panel); display:flex; gap:10px; }
-  #inputbar input { flex:1; padding:10px 14px; border:1px solid var(--line); border-radius:8px; font-size:14px; }
+  #inputbar { padding:14px 20px; border-top:1px solid var(--line); background:var(--panel);
+              display:flex; gap:10px; align-items:flex-end; }
+  #inputbar input, #inputbar textarea { flex:1; padding:10px 14px; border:1px solid var(--line);
+              border-radius:8px; font-size:14px; font-family:inherit; }
+  #inputbar textarea { resize:none; min-height:42px; max-height:140px; line-height:1.5; overflow-y:auto; }
   #inputbar button { padding:10px 20px; }
   .empty { color:var(--muted); text-align:center; margin-top:60px; font-size:14px; }
   .modal { position:fixed; inset:0; background:rgba(0,0,0,.35); display:none; align-items:center; justify-content:center; z-index:10; }
@@ -203,7 +208,7 @@
   .qalist:hover::-webkit-scrollbar-thumb { background:#cbd5e1; }
   .qalist.tall { max-height:200px; }
   .qalist.taller { max-height:min(52vh,460px); font-size:14px; }
-  .qalist .qi { padding:9px 12px; border-bottom:1px solid var(--line); display:flex; gap:10px; align-items:baseline; line-height:1.5; }
+  .qalist .qi { padding:9px 12px; border-bottom:1px solid var(--line); display:flex; gap:10px; align-items:baseline; line-height:1.5; flex-wrap:wrap; }
   .qalist .qi:last-child { border-bottom:none; }
   .qalist .qi:hover { background:rgba(0,0,0,.02); }
   .qalist .qc { color:var(--muted); flex:none; min-width:30px; text-align:right; font-variant-numeric:tabular-nums; }
@@ -228,6 +233,11 @@
                padding:3px 10px; cursor:pointer; font-size:12.5px; }
   .fbbox .fb:hover { background:#eff6ff; border-color:#bfdbfe; }
   .fbbox .fb:disabled { opacity:.5; cursor:default; }
+  .fbbox.fbask { flex-wrap:wrap; align-items:flex-start; }
+  .fbbox.fbask textarea { flex:1 1 100%; width:100%; min-height:56px; max-height:120px;
+    padding:7px 9px; border:1px solid var(--line); border-radius:6px;
+    font-size:12.5px; font-family:inherit; line-height:1.6; resize:vertical; }
+  .fbbox .fbrow { display:flex; gap:8px; justify-content:flex-end; width:100%; }
   .fbdone { color:var(--accent); }
   /* 当前用户 / 用户管理 */
   .me-name { font-size:12px; color:var(--muted); margin-right:2px; white-space:nowrap; }
@@ -423,7 +433,7 @@
 
     /* 输入栏：输入框独占一行，按钮统一到第二行，别挤成一团 */
     #inputbar { padding:8px 10px calc(8px + env(safe-area-inset-bottom)); gap:6px; flex-wrap:wrap; }
-    #inputbar input { flex:1 1 100%; font-size:15px; padding:10px 12px; }
+    #inputbar input, #inputbar textarea { flex:1 1 100%; font-size:15px; padding:10px 12px; }
     #inputbar button { flex:1 1 auto; padding:9px 12px; font-size:13px; min-height:38px; }
     #inputbar #sendBtn { flex:0 0 30%; font-weight:600; }
 
@@ -553,7 +563,7 @@
   <div id="inputbar">
     <button class="btn" id="imgBtn" onclick="pickAskImages()" title="添加图片（也可以直接 Ctrl+V 粘贴截图）">🖼</button>
     <input type="file" id="askImgFile" accept="image/*" multiple style="display:none" onchange="onAskImgPick(this)">
-    <input id="q" type="text" placeholder="输入问题，回车发送（可 Ctrl+V 贴图）" disabled>
+    <textarea id="q" rows="1" placeholder="输入问题：Enter 发送，Shift+Enter 换行（可 Ctrl+V 贴图）" disabled></textarea>
     <button class="btn" id="ctxBtn" onclick="toggleCtx()" title="默认关闭：每次提问独立理解。开启后会把最近几轮对话带进去，方便追问">💬 上下文：关</button>
     <button class="btn" id="lenBtn" onclick="cycleLen()" title="控制回答详略：简答适合现场演示快速看结论，详细适合做资料">📏 标准</button>
 <button class="btn" id="newChatBtn" style="display:none" onclick="resetChat()" title="清空上下文，开始新话题">🆕 新会话</button>
@@ -1575,13 +1585,17 @@ async function loadQaStats(){
       `<div class="qi"><span class="qt">${esc(q)}</span></div>`).join('')
       || '<div class="empty2">🎉 没有兜底的，都从知识库答上了</div>';
     $('#qaBad').innerHTML = (st.worst || []).map(w =>
-      `<div class="qi"><span class="qt">${esc(w.q)}</span><span class="qd">${(w.source_type==='kb'?'知识库':'兜底')}</span></div>`).join('')
+      `<div class="qi"><span class="qt">${esc(w.q)}</span><span class="qd">${(w.source_type==='kb'?'知识库':'兜底')}</span>` +
+      (w.fb_comment ? `<div style="flex:1 1 100%;font-size:12px;color:#92400e;margin-top:3px">💬 ${esc(w.fb_comment)}</div>` : '') +
+      `</div>`).join('')
       || '<div class="empty2">暂无差评</div>';
 
     const logs = (await api('/api/qa/logs?days=7&limit=40')).logs || [];
     $('#qaRecent').innerHTML = logs.map(r =>
       `<div class="qi"><span class="qt">${esc(r.q)}</span><span class="qd">${r.hits} 命中 · ${r.ms}ms${
-        r.vote === 1 ? ' · 👍' : (r.vote === -1 ? ' · 👎' : '')}${r.fallback ? ' · 兜底' : ''}</span></div>`).join('')
+        r.vote === 1 ? ' · 👍' : (r.vote === -1 ? ' · 👎' : '')}${r.fallback ? ' · 兜底' : ''}</span>` +
+      (r.vote === -1 && r.fb_comment ? `<div style="flex:1 1 100%;font-size:12px;color:#92400e;margin-top:3px">💬 ${esc(r.fb_comment)}</div>` : '') +
+      `</div>`).join('')
       || '<div class="empty2">暂无</div>';
   }catch(e){
     $('#qaCards').innerHTML = '<div style="padding:10px;color:#b91c1c;font-size:13px">加载失败: ' + esc(e.message) + '</div>';
@@ -1965,7 +1979,7 @@ function upsertChatBlock(node, owner){
 function renderRefs(refs, className){
   const d = document.createElement('div'); d.className = className || 'refs';
   const kbId = cur ? cur.id : '';
-  d.innerHTML = `<details><summary>📎 引用 ${refs.length} 个片段（点击文件名可打开原文件）</summary>` +
+  d.innerHTML = `<details><summary>📎 引用 ${refs.length} 个片段（点击正文角标可定位；点击文件名可打开原文件）</summary>` +
     refs.map((s, ri) => {
       // 传完整片段(优先 text_full, 最前 600 字)用于预览页定位, 保证包名/路径完整
       const hl = encodeURIComponent(((s.text_full || s.text) || '').slice(0, 600));
@@ -1979,7 +1993,7 @@ function renderRefs(refs, className){
         `onerror="this.closest('a').remove()"></a>`).join('');
       const imgBlock = imgs ? `<div class="ref-imgs">${imgs}</div>` : '';
       // 编号要和正文右上角的角标对得上：正文 [3] 就是这里第 3 条
-      return `<div class="r">■ <span class="ref-no">${ri + 1}</span> <a href="${href}" target="_blank" rel="noopener" class="ref-link" title="在新窗口预览原文件，并定位到该引用段落">📄 ${esc(s.path)}</a>` +
+      return `<div class="r" data-ref="${ri + 1}">■ <span class="ref-no">${ri + 1}</span> <a href="${href}" target="_blank" rel="noopener" class="ref-link" title="在新窗口预览原文件，并定位到该引用段落">📄 ${esc(s.path)}</a>` +
              `<span class="score">(${s.score})</span><br><span style="color:#6b7280">${esc(s.text)}</span>` +
              imgBlock + `</div>`;
     }).join('') + `</details>`;
@@ -2105,6 +2119,7 @@ async function ask(retryQ, reuseNode, fbMode){
   const qShown = q;                    // 气泡里显示用户原话（只贴图时为空）
   if (!q && imgs.length) q = '请看看这几张图，说明这是什么情况、该怎么处理';
   $('#q').value = '';
+  fitQHeight();
   if (imgs.length) clearAskImgs();     // 图已进本轮，输入区清空
   const sendBtn = $('#sendBtn'); sendBtn.disabled = true;
   let msg;
@@ -2332,7 +2347,7 @@ async function ask(retryQ, reuseNode, fbMode){
     else { msg.innerHTML = '请求失败: ' + esc(e.message) + '<br>可点「↻ 重试」再来一次。'; }
     retryBtn.style.display = 'inline-block';      // 失败/中断都要能一键重试
     // 失败时把问题放回输入框，用户想改几个字再发也行
-    if (!$('#q').value) $('#q').value = q;
+    if (!$('#q').value){ $('#q').value = q; fitQHeight(); }
     msg.appendChild(ctrl);
   }
   clearInterval(tick);
@@ -2342,16 +2357,83 @@ async function ask(retryQ, reuseNode, fbMode){
 async function sendFeedback(btn, vote){
   const box = btn.closest('.fbbox'); if (!box) return;
   const id = box.dataset.id;
+  // 点踩先让用户说一句“为什么没用”，提交时和 vote 一起落库
+  if (vote === -1 && !box.dataset.commenting){
+    box.dataset.commenting = '1';
+    box.classList.add('fbask');
+    box.innerHTML =
+      '<div style="width:100%">' +
+        '<div class="fblabel" style="margin-bottom:5px">哪里没用？写一句帮我们改进（可留空）</div>' +
+        '<textarea placeholder="例如：答非所问 / 引用不对 / 漏了关键步骤 / 说的不是我们系统"></textarea>' +
+      '</div>' +
+      '<div class="fbrow">' +
+        '<button class="fb" data-skip>跳过</button>' +
+        '<button class="fb primary" data-submit>提交</button>' +
+      '</div>';
+    const ta = box.querySelector('textarea');
+    const submit = () => submitFeedback(box, id, -1, ta ? ta.value : '');
+    box.querySelector('[data-submit]').onclick = submit;
+    box.querySelector('[data-skip]').onclick = () => submitFeedback(box, id, -1, '');
+    if (ta){
+      ta.focus();
+      ta.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)){ e.preventDefault(); submit(); }
+      });
+    }
+    return;
+  }
+  submitFeedback(box, id, vote, '');
+}
+
+async function submitFeedback(box, id, vote, comment){
   box.querySelectorAll('button').forEach(b => b.disabled = true);
   try{
     await api('/api/feedback', {method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({id, vote})});
-    box.innerHTML = vote > 0 ? '<span class="fbdone">✅ 感谢反馈</span>'
-                             : '<span class="fbdone">已记录，我们会改进（可留言告诉管理员哪里不对）</span>';
-  }catch(e){ box.innerHTML = '<span class="fbdone">反馈失败</span>'; }
+      body: JSON.stringify({id, vote, comment: comment || ''})});
+    box.innerHTML = vote > 0
+      ? '<span class="fbdone">✅ 感谢反馈</span>'
+      : '<span class="fbdone">✅ 已记录，感谢说明问题</span>';
+  }catch(e){
+    box.innerHTML = '<span class="fbdone">反馈失败，请稍后再试</span>';
+  }
 }
 function scrollChat(){ const box=$('#chat'); box.scrollTop = box.scrollHeight; }
-$('#q').addEventListener('keydown', e => { if (e.key==='Enter') ask(); });
+// Enter 发送；Shift+Enter 换行；中文输入法组合期间的 Enter 不发送
+const qBox = $('#q');
+function fitQHeight(){
+  if (!qBox) return;
+  qBox.style.height = 'auto';
+  qBox.style.height = Math.min(140, qBox.scrollHeight) + 'px';
+}
+qBox && qBox.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229){
+    e.preventDefault();
+    ask();
+  }
+});
+qBox && qBox.addEventListener('input', fitQHeight);
+
+// 点正文右上角标：展开该回答的引用区，滚动并高亮对应片段
+$('#chat').addEventListener('click', e => {
+  const badge = e.target && e.target.closest && e.target.closest('sup.cite[data-ref]');
+  if (!badge) return;
+  const msg = badge.closest('.msg');
+  const owner = msg && msg.dataset.owner;
+  let refs = owner ? document.querySelector('#chat .refs[data-owner="' + owner + '"]') : null;
+  if (!refs && msg){
+    let n = msg.nextElementSibling;
+    while (n && !(n.classList && n.classList.contains('refs'))) n = n.nextElementSibling;
+    refs = n;
+  }
+  if (!refs) return;
+  const det = refs.querySelector('details');
+  if (det) det.open = true;
+  const item = refs.querySelector('.r[data-ref="' + badge.dataset.ref + '"]');
+  if (!item) return;
+  item.scrollIntoView({behavior:'smooth', block:'center'});
+  item.classList.add('ref-flash');
+  setTimeout(() => item.classList.remove('ref-flash'), 2200);
+});
 
 // markdown 渲染：标题 / 有序无序列表 / 表格 / 引用块 / 代码块 / 粗斜体 / 行内代码 / 链接 / 分隔线
 // 之前只把 "- " 换成 "• " 字符、不认三级标题和表格，模型输出的表格和 ### 会原样漏出来
@@ -2448,8 +2530,10 @@ function md(t){
   // 引用角标：模型写成（片段1、片段3、片段4）/【片段1】/[1,3] 都统一成右上角小标，
   // 正文里那一长串“（片段1、片段3、片段4）”读起来太碍眼
   const cite = s => {
-    const ns = (String(s).match(/\d{1,2}/g) || []).slice(0, 8);
-    return ns.length ? '<sup class="cite">' + ns.join(',') + '</sup>' : '';
+    const ns = [...new Set(String(s).match(/\d{1,2}/g) || [])].slice(0, 8);
+    return ns.map(n =>
+      `<sup class="cite" data-ref="${n}" title="定位到第 ${n} 条引用">${n}</sup>`
+    ).join(',');
   };
   return out.join('\n')
     .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')

@@ -943,12 +943,13 @@ def login(body: LoginIn, response: Response):
 class FeedbackIn(BaseModel):
     id: str
     vote: int          # 1 = 有用, -1 = 没用
+    comment: str = ""  # 👎 时用户说明原因，作为改进线索
 
 
 @app.post("/api/feedback")
 def api_feedback(body: FeedbackIn, request: Request):
     u = _current_user(request)
-    ok = qa_log.feedback(body.id, body.vote, u)
+    ok = qa_log.feedback(body.id, body.vote, u, comment=body.comment)
     return {"ok": ok}
 
 

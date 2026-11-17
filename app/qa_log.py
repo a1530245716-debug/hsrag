@@ -94,12 +94,13 @@ def record(q, kb_id="", user=None, answer="", sources=None, source_type="kb",
         return ""
 
 
-def feedback(qa_id, vote, user=None):
-    """记录 👍(1) / 👎(-1)。"""
+def feedback(qa_id, vote, user=None, comment=""):
+    """记录 👍(1) / 👎(-1)；👎 可附一段“为什么没用”。"""
     try:
         if vote not in (1, -1):
             return False
         rec = {"t": "fb", "id": qa_id, "ts": int(time.time()), "vote": int(vote),
+               "comment": (comment or "").strip()[:1000],
                "user": (user or {}).get("name", ""), "uid": (user or {}).get("id", "")}
         p = _log_path()
         with _LOCK:
@@ -136,12 +137,15 @@ def stats(days=7):
         if r.get("t") == "ask":
             asks.append(r)
         elif r.get("t") == "fb":
-            fbs[r.get("id")] = r.get("vote")
+            fbs[r.get("id")] = r
     n = len(asks)
     if not n:
         return {"days": days, "asks": 0, "msg": "该时间段没有问答记录"}
 
-    fb_vals = list(fbs.values())
+    def vote_of(x):
+        return x.get("vote") if isinstance(x, dict) else x
+
+    fb_vals = [vote_of(x) for x in fbs.values()]
     fb_total = len(fb_vals)
     good = sum(1 for v in fb_vals if v > 0)
     bad = fb_total - good
@@ -153,6 +157,15 @@ def stats(days=7):
 
     def pct(x, d):
         return round(100.0 * x / d, 1) if d else 0.0
+
+    worst = []
+    for a in fb_asks:
+        fb = fbs.get(a["id"]) or {}
+        if vote_of(fb) == -1:
+            b = dict(a)
+            b["fb_comment"] = (fb.get("comment") or "") if isinstance(fb, dict) else ""
+            worst.append(b)
+    worst.sort(key=lambda x: x.get("ts", 0), reverse=True)
 
     return {
         "days": days,
@@ -167,8 +180,7 @@ def stats(days=7):
         "rewritten": sum(1 for a in asks if a.get("rewritten")),
         "split": sum(1 for a in asks if a.get("split")),
         "top_questions": qs.most_common(10),
-        "worst": sorted([a for a in fb_asks if fbs.get(a["id"]) == -1],
-                        key=lambda x: x.get("ts", 0), reverse=True)[:10],
+        "worst": worst[:10],
         "fallback_questions": [a.get("q") for a in asks if a.get("fallback")][:10],
     }
 
@@ -179,9 +191,11 @@ def load(days=7, limit=200):
     rows = []
     for r in _iter(days):
         if r.get("t") == "fb":
-            fbs[r.get("id")] = r.get("vote")
+            fbs[r.get("id")] = r
         else:
             rows.append(r)
     for r in rows:
-        r["vote"] = fbs.get(r.get("id"))
+        fb = fbs.get(r.get("id")) or {}
+        r["vote"] = fb.get("vote") if isinstance(fb, dict) else fb
+        r["fb_comment"] = fb.get("comment", "") if isinstance(fb, dict) else ""
     return rows[-limit:][::-1]

@@ -6,6 +6,19 @@
 
 ---
 
+### 14:26（11-17） | Claude Code | `app/static/index.html`、`app/server.py`、`app/qa_log.py` | Shift+Enter 换行、引用角标联动、点踩补充原因 | 人反馈输入框不能换行、角标与引用区无关联、点踩希望能写原因
+
+- 问题输入由单行 `<input>` 改为可自动增高的 `<textarea>`：
+  Enter 发送、Shift+Enter 换行；中文输入法组合期间 Enter 不误发
+- 引用角标改成可点击：每个数字带 `data-ref`，点击后展开该回答的引用区、
+  滚动到对应 `.r[data-ref]` 并高亮 2 秒；引用摘要提示也写明“点角标可定位”
+- 点踩先弹出小文本框“哪里没用”，提交时把 `comment` 与 vote=-1 一起写入
+  `qa_log.jsonl` 的反馈记录；管理员问答统计的差评/最近记录里显示这条原因
+- 本地 Edge 实测：Shift+Enter 输入 `第一行\n第二行` 且不发送；角标点击能展开并高亮；
+  点踩提交的请求体包含 `{"vote":-1,"comment":"答案不具体，没有说明回滚步骤"}`
+
+---
+
 ### 10:14（11-17） | Claude Code | defense_coach.py、defense_api.py、server.py、index.html、defense.html、indexer.py | 答辩自动推荐知识库 + 切库清屏 + 文件列表 + 隐藏块/段计数 | 人确认“自动选库但保留选择权”，并要求切换知识库清空旧内容、隐藏技术计数、能看每库文件
 
 - **自动推荐**：PPT 上传后调 `/api/defense/recommend_kb`，后端把 PPT 摘要 +
