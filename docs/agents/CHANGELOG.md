@@ -6,6 +6,22 @@
 
 ---
 
+### 23:13（11-17） | Claude Code | `app/server.py`、`app/static/index.html`、`app/config.example.json` | 支持 zip 批量上传 + 多文件并行上传/减少 fsync | 人确认 A+C 都做
+
+- **A：/api/kb/{id}/upload_zip**：流式接收 zip，安全解压到 upload；
+  路径穿越/符号链接/加密包/zip bomb 限制（500MB 包、2GB 解压、20k 文件、单文件 500MB）；
+  支持中文文件名（cp437→GB18030）、跳过 `__MACOSX`/`.DS_Store`/`Thumbs.db`；
+  前端新建/添加菜单都有「上传压缩包（zip）」，单 zip 自动走该接口。
+- **C：多文件 2–3 路并行上传**：按文件数/总大小拆批并均衡字节，
+  XHR 数组统一取消；进度按总字节聚合。实测 25 文件触发 2 路请求，
+  100 文件拆成 3 批（33/33/34）。
+- **C：fsync 可配置**：新增 `upload.fsync`（默认 false）；
+  默认不再每文件 fsync，批量小文件上传更快；需要强持久化可设 true。
+- 测试：zip 中文文件名/CSV 正常解压，`../evil.txt` 被拒绝且未落盘；
+  单 zip 走 `/upload_zip`，多文件走并行 `/upload`。
+
+---
+
 ### 22:42（11-17） | Claude Code | `index_docs.py`、`app/static/index.html` | 支持 DBF 表索引（纯 Python，无新依赖） | 人问“知识库能解析 dbf 文件吗”，确认后实现
 
 - 新增 `extract_dbf` + `.dbf` 注册到 `EXTRACTORS`；
@@ -20,6 +36,10 @@
   `index_kb` 建索引后 chunks 含 `fund.dbf` 和中文值；UI 使用文档补上 DBF。
 - 22:45 已部署 `rag-bff:20261117-dc019f4` 到 10.20.154.26:8000，healthy；
   容器内验证 `'.dbf' in index_docs.EXTRACTORS == True`。
+
+---
+
+### 17:38（11-17） | Claude Code | `app/static/index.html`、公开仓库 `hsrag_public` | 每个知识库保留自己的聊天记录 + 公开仓库中文化/同步 | 人要求来回切知识库时问答历史跟着切换，并同步 GitHub
 
 - 主问答新增 `KB_SESSIONS`（内存）：切走时保存当前库的消息 HTML、上下文历史、
   滚动位置；切回时恢复；`resetChat` 只清当前库上下文，删除知识库时清理对应会话。

@@ -7,7 +7,7 @@
 - 路由 /api:知识库管理与问答
 - 静态 /    :轻量单页前端
 """
-import base64, html as _html, os, re, sys, shutil, threading, time, urllib.parse
+import base64, html as _html, os, re, sys, shutil, threading, time, urllib.parse, zipfile
 import asyncio
 import contextlib
 from concurrent.futures import ThreadPoolExecutor
@@ -1567,6 +1567,16 @@ def kb_index_status(kb_id: str):
     return {"ok": True, "job": job}
 
 
+def _upload_fsync_enabled():
+    """每文件 fsync 很慢，大量小文件时可在 config 里关掉。
+    关掉后断电可能丢最近上传，但正常进程内读取不受影响。"""
+    try:
+        import llm
+        return bool(llm.load_config().get("upload", {}).get("fsync", False))
+    except Exception:
+        return False
+
+
 @app.post("/api/kb/{kb_id}/upload")
 async def kb_upload(kb_id: str, request: Request, index: bool = False):
     """拖拽/批量上传文件到该库的 upload 目录。multipart: 多个同名 files 字段。
@@ -1575,6 +1585,7 @@ async def kb_upload(kb_id: str, request: Request, index: bool = False):
     if not kb_:
         return JSONResponse({"ok": False, "msg": "知识库不存在"}, status_code=404)
     up = indexer.upload_dir(kb_id)
+    do_fsync = _upload_fsync_enabled()
     form = await request.form()
     saved, skipped = 0, []
     for f in form.getlist("files"):
@@ -1601,7 +1612,8 @@ async def kb_upload(kb_id: str, request: Request, index: bool = False):
                     fh.write(buf)
                     written += len(buf)
                 fh.flush()
-                os.fsync(fh.fileno())
+                if do_fsync:
+                    os.fsync(fh.fileno())
             if written == 0:
                 tmp.unlink(missing_ok=True)
                 skipped.append(f"{rel}(空文件)")
@@ -1617,6 +1629,129 @@ async def kb_upload(kb_id: str, request: Request, index: bool = False):
     if index and saved:
         threading.Thread(target=lambda: (indexer.index_kb(kb_, progress=lambda m: None))).start()
     return {"ok": True, "saved": saved, "skipped": skipped}
+
+
+def _zip_entry_name(info):
+    """zip 文件名：没带 UTF-8 标记时，zipfile 会按 cp437 解成乱码；
+    再 cp437→bytes→GB18030 还原中文包名。"""
+    name = info.filename or ""
+    if not (info.flag_bits & 0x800):
+        try:
+            name = name.encode("cp437").decode("gb18030")
+        except Exception:
+            pass
+    return name.replace("\\", "/").lstrip("/")
+
+
+@app.post("/api/kb/{kb_id}/upload_zip")
+async def kb_upload_zip(kb_id: str, file: UploadFile = File(...)):
+    """上传 zip，解压到该库 upload 目录；带路径穿越、zip bomb、文件数限制。"""
+    kb_ = indexer.get_kb(kb_id)
+    if not kb_:
+        return JSONResponse({"ok": False, "msg": "知识库不存在"}, status_code=404)
+    up = indexer.upload_dir(kb_id)
+    up_res = up.resolve()
+    max_zip = 500 * 1024 * 1024
+    max_unzip = 2 * 1024 * 1024 * 1024
+    max_files = 20000
+    max_entry = 500 * 1024 * 1024
+    tmp_zip = up.parent / f".zipupload-{os.getpid()}-{time.time_ns()}.zip"
+    try:
+        size = 0
+        with open(tmp_zip, "wb") as dst:
+            while True:
+                buf = await file.read(1 << 20)
+                if not buf:
+                    break
+                size += len(buf)
+                if size > max_zip:
+                    return JSONResponse(
+                        {"ok": False, "msg": "压缩包太大（限 500MB）"}, status_code=413)
+                dst.write(buf)
+        if not zipfile.is_zipfile(tmp_zip):
+            return JSONResponse({"ok": False, "msg": "不是有效的 zip 文件"}, status_code=400)
+        do_fsync = _upload_fsync_enabled()
+        saved = 0
+        saved_bytes = 0
+        skipped = []
+        with zipfile.ZipFile(tmp_zip) as zf:
+            infos = zf.infolist()
+            if len(infos) > max_files:
+                return JSONResponse(
+                    {"ok": False, "msg": f"压缩包内文件太多（限 {max_files} 个）"},
+                    status_code=413)
+            total_unzip = sum(max(0, i.file_size) for i in infos)
+            if total_unzip > max_unzip or (
+                    size > 0 and total_unzip > max(200 * 1024 * 1024, size * 100)):
+                return JSONResponse(
+                    {"ok": False, "msg": "解压后体积异常（压缩比过高），已拒绝"},
+                    status_code=413)
+            for info in infos:
+                if info.flag_bits & 0x1:
+                    return JSONResponse(
+                        {"ok": False, "msg": "压缩包不能有密码，请去掉密码后重传"},
+                        status_code=400)
+                name = _zip_entry_name(info)
+                low = name.lower()
+                if (not name or low.startswith("__macosx/") or
+                        low == ".ds_store" or low.endswith("/.ds_store") or
+                        low == "thumbs.db" or low.endswith("/thumbs.db")):
+                    continue
+                rel = name.strip("/")
+                parts = [p for p in rel.split("/") if p]
+                if not parts or any(p == ".." for p in parts):
+                    skipped.append(name)
+                    continue
+                dest = (up / "/".join(parts)).resolve()
+                if not (str(dest) == str(up_res) or
+                        str(dest).startswith(str(up_res) + os.sep)):
+                    skipped.append(name)
+                    continue
+                if info.is_dir():
+                    dest.mkdir(parents=True, exist_ok=True)
+                    continue
+                # 符号链接不落盘
+                mode = (info.external_attr >> 16) & 0o170000
+                if mode == 0o120000:
+                    skipped.append(f"{name}(符号链接)")
+                    continue
+                if info.file_size > max_entry:
+                    skipped.append(f"{name}(单文件过大)")
+                    continue
+                if info.file_size == 0:
+                    skipped.append(f"{name}(空文件)")
+                    continue
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                tmp = dest.with_name(
+                    f"{dest.name}.{os.getpid()}_{threading.get_ident()}_{time.time_ns()}.tmp")
+                try:
+                    with zf.open(info) as src, open(tmp, "wb") as dst:
+                        shutil.copyfileobj(src, dst, 1 << 20)
+                        dst.flush()
+                        if do_fsync:
+                            os.fsync(dst.fileno())
+                    tmp.replace(dest)
+                    saved += 1
+                    saved_bytes += info.file_size
+                except Exception as e:
+                    skipped.append(f"{name}({e})")
+                    try:
+                        if tmp.exists():
+                            tmp.unlink()
+                    except Exception:
+                        pass
+        return {"ok": True, "saved": saved, "bytes": saved_bytes,
+                "skipped": skipped[:50], "skipped_total": len(skipped),
+                "entries": len(infos)}
+    except zipfile.BadZipFile:
+        return JSONResponse({"ok": False, "msg": "zip 文件损坏"}, status_code=400)
+    except Exception as e:
+        return JSONResponse({"ok": False, "msg": f"解压失败: {e}"}, status_code=500)
+    finally:
+        try:
+            tmp_zip.unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 # ---------------- API: 手写笔记(纯文字/图片直接进库) ----------------

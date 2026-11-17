@@ -503,6 +503,7 @@
         <div style="font-size:12px;color:var(--muted);margin-bottom:8px">从你的电脑上传资料：</div>
         <button type="button" class="btn" onclick="event.stopPropagation();openCreatePicker('files')">📄 选择文件</button>
         <button type="button" class="btn" onclick="event.stopPropagation();openCreatePicker('folder')">📁 选择文件夹</button>
+        <button type="button" class="btn" onclick="event.stopPropagation();openZipPicker('new')">🗜 上传压缩包</button>
         <div style="font-size:12px;margin-top:8px">也可以把文件/文件夹直接拖到这里</div>
       </div>
       <div class="field"><button class="btn primary" style="width:100%" onclick="createKb()">创建并建索引</button></div>
@@ -528,6 +529,7 @@
         <div class="menu" id="addMenu">
           <div onclick="closeAddMenu();pickAdd('files')">📄 选择文件（可多选）</div>
           <div onclick="closeAddMenu();pickAdd('folder')">📁 选择文件夹</div>
+          <div onclick="closeAddMenu();openZipPicker('add')">🗜 上传压缩包（zip）</div>
         </div>
       </div>
       <a class="btn" id="defenseLink" href="/defense" onclick="return openDefense(event)" title="上传答辩 PPT，AI 扮演评委提问，答完看报告">🎓 答辩演练</a>
@@ -1003,6 +1005,7 @@
         <li><b>后端</b>：Python + FastAPI + Uvicorn</li>
         <li><b>检索</b>：中文分词（jieba）+ BM25 关键词检索 + <b>本地语义向量（bge-small-zh, ONNX）</b> + <b>Rerank 精排（bge-reranker-base int8）</b>；
             关键词与语义两路并行召回后融合，再按权威性/版本新旧/文件名命中加权，块级索引 + 内存缓存 + 启动预热</li>
+        <li><b>批量导入</b>：支持上传 zip 压缩包（服务端安全解压），多文件自动 2–3 路并行上传</li>
         <li><b>文档解析</b>：python-docx / python-pptx / openpyxl / xlrd / pymupdf(PDF) + 直接读 Office 内部结构定位图片；
             支持 Word、Excel、PPT、PDF、文本、CSV、JSON、DBF 等</li>
         <li><b>文档内图片</b>：按需从原文档解压（docx 的 word/media、pptx 的 ppt/media 等），转换后缓存；
@@ -2761,7 +2764,7 @@ let dropDepth = 0;
 const DS = s => { const e = $('#dropstatus'); if (s) e.textContent = s; e.classList.toggle('show', !!s); };
 
 // ---- 任务进度条(上传/索引, 不阻塞界面) ----
-let uploadAbort = null;         // 当前上传的 XHR(可中止)
+let uploadAborts = [];          // 当前上传的所有 XHR(并行上传可一起中止)
 let uploadCanceled = false;     // 用户是否点了取消
 let pollTimer = null;           // 索引轮询计时器
 let uploadBusy = false;         // 同一时刻只允许一个上传/索引任务(防轮询/进度条互相踩)
@@ -2908,8 +2911,9 @@ function waitIndexJob(kid, label, opts){
 
 $('#taskCancel') && $('#taskCancel').addEventListener('click', () => {
   uploadCanceled = true;
-  // 上传中 → 中止 XHR; 索引中 → 取消轮询等待
-  if (uploadAbort) { try { uploadAbort.abort(); } catch(e){} uploadAbort = null; }
+  // 上传中 → 中止所有并行 XHR; 索引中 → 取消轮询等待
+  const _aborts = uploadAborts.splice(0);
+  _aborts.forEach(x => { try { x.abort(); } catch(e){} });
   if (pollTimer){ clearInterval(pollTimer); pollTimer = null; }
   uploadBusy = false;
   taskHide();
@@ -2917,18 +2921,20 @@ $('#taskCancel') && $('#taskCancel').addEventListener('click', () => {
 });
 
 // 带真实进度的上传: 返回 {ok, saved, skipped}; 用户取消抛 'canceled'
-function xhrUpload(url, formData){
+function xhrUpload(url, formData, onProgress, onUploaded){
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    uploadAbort = xhr;
+    uploadAborts.push(xhr);
+    const done = () => { uploadAborts = uploadAborts.filter(x => x !== xhr); };
     xhr.open('POST', url);
     xhr.upload.onprogress = e => {
-      if (e.lengthComputable && e.total > 0){
-        taskShow('正在上传…', e.loaded / e.total * 100, false);
+      if (onProgress && e.lengthComputable && e.total > 0){
+        onProgress(e.loaded, e.total);
       }
     };
+    xhr.upload.onload = () => { if (onUploaded) onUploaded(); };
     xhr.onload = () => {
-      if (uploadAbort === xhr) uploadAbort = null;
+      done();
       try {
         const d = JSON.parse(xhr.responseText || '{}');
         if (xhr.status === 401){ showLogin('登录已过期，请重新登录'); reject(new Error('未登录')); return; }
@@ -2936,44 +2942,33 @@ function xhrUpload(url, formData){
         resolve(d);
       } catch(err){ reject(err); }
     };
-    xhr.onerror = () => { if (uploadAbort === xhr) uploadAbort = null; reject(new Error('网络错误,上传中断')); };
-    xhr.onabort = () => { uploadAbort = null; reject(new Error('canceled')); };
+    xhr.onerror = () => { done(); reject(new Error('网络错误,上传中断')); };
+    xhr.onabort = () => { done(); reject(new Error('canceled')); };
     xhr.send(formData);
   });
 }
 
-// 上传文件 → 后台异步建索引 → 轮询等完成(不阻塞界面)。
-// 同一时刻只允许一个上传任务: 第二个上传会提示排队, 避免进度条/轮询互相覆盖。
-async function uploadFiles(files, kid, label){
-  if (uploadBusy){
-    addMsg('assistant', '⏳ 已有上传/索引任务进行中，请等它完成或点「✕ 取消」后再传。');
-    throw new Error('busy');
-  }
-  // 前置过滤空文件(0 字节)与空列表, 避免上传无效文件
-  const valid = (files || []).filter(x => x && x.file && x.file.size > 0);
-  const emptyCount = (files || []).length - valid.length;
-  if (emptyCount > 0){
-    addMsg('assistant', '⚠️ 已跳过 ' + emptyCount + ' 个空文件(0 字节)，其余继续上传。');
-  }
-  if (!valid.length){ throw new Error('所选文件均为空或不可用'); }
-  addMsg('assistant', '已选择 ' + esc(describePicked(valid)) + '，开始上传到「' + esc(label) + '」。');
-  uploadBusy = true;
-  uploadCanceled = false;
-  const fd = new FormData();
-  valid.forEach(x => fd.append('files', x.file, x.relpath));
-  taskShow('正在上传 ' + valid.length + ' 个文件到「' + label + '」…', 0, false);
-  let d;
-  try { d = await xhrUpload('/api/kb/' + kid + '/upload', fd); }
-  catch(e){
-    uploadBusy = false;
-    taskHide();
-    if (uploadCanceled || (e && e.message === 'canceled')){ throw new Error('已取消'); }
-    throw e;
-  }
-  if (!d.ok){ uploadBusy = false; taskHide(); throw new Error(d.msg || '上传失败'); }
-  if (uploadCanceled){ uploadBusy = false; taskHide(); throw new Error('已取消'); }
-  // 上传完成 → 异步触发索引(不阻塞界面)；进度/完成都看真实的 index_status
-  taskShow('已上传 ' + d.saved + ' 个文件，正在后台建立索引…', null, true);
+// 文件多时拆成 2-3 路并行上传；每路仍保留相对路径。
+function makeUploadBatches(items){
+  const totalBytes = items.reduce((s, x) => s + (x.file.size || 0), 0);
+  let n = 1;
+  if (items.length >= 80 || totalBytes > 150 * 1024 * 1024) n = 3;
+  else if (items.length >= 20 || totalBytes > 40 * 1024 * 1024) n = 2;
+  n = Math.min(n, 3, items.length);
+  if (n <= 1) return [items];
+  const buckets = Array.from({length: n}, () => []);
+  const sizes = Array(n).fill(0);
+  items.slice().sort((a, b) => (b.file.size || 0) - (a.file.size || 0)).forEach(it => {
+    let j = 0;
+    for (let k = 1; k < n; k++) if (sizes[k] < sizes[j]) j = k;
+    buckets[j].push(it);
+    sizes[j] += it.file.size || 0;
+  });
+  return buckets.filter(b => b.length);
+}
+
+function startIndexAndWait(kid, label){
+  taskShow('正在后台建立索引…', null, true);
   fetch('/api/kb/' + kid + '/index', withAuth({method:'POST'})).catch(()=>{});
   waitIndexJob(kid, label, {cancelCheck: () => uploadCanceled}).then(async j => {
     uploadBusy = false;
@@ -2994,7 +2989,108 @@ async function uploadFiles(files, kid, label){
     }
     await loadKbs();
   });
+}
+
+async function uploadZip(file, kid, label){
+  if (uploadBusy){
+    addMsg('assistant', '⏳ 已有上传/索引任务进行中，请等它完成或点「✕ 取消」后再传。');
+    throw new Error('busy');
+  }
+  uploadBusy = true;
+  uploadCanceled = false;
+  addMsg('assistant', '已选择压缩包「' + esc(file.name) + '」，上传到「' + esc(label) + '」。');
+  taskShow('正在上传压缩包到「' + label + '」…', 0, false);
+  const fd = new FormData();
+  fd.append('file', file, file.name);
+  let d;
+  try {
+    d = await xhrUpload('/api/kb/' + kid + '/upload_zip', fd,
+      (loaded, total) => taskShow('正在上传压缩包…', total ? loaded / total * 100 : 0, false),
+      () => taskShow('压缩包已传完，服务端正在解压…', null, true));
+  } catch(e){
+    uploadBusy = false;
+    taskHide();
+    if (uploadCanceled || (e && e.message === 'canceled')) throw new Error('已取消');
+    throw e;
+  }
+  if (!d.ok){
+    uploadBusy = false;
+    taskHide();
+    throw new Error(d.msg || '压缩包解压失败');
+  }
+  if (uploadCanceled){
+    uploadBusy = false;
+    taskHide();
+    throw new Error('已取消');
+  }
+  let msg = '✅ 压缩包已解压：新增 ' + d.saved + ' 个文件';
+  if (d.skipped_total) msg += '，跳过 ' + d.skipped_total + ' 个（' +
+    (d.skipped || []).slice(0, 3).join('；') + '）';
+  addMsg('assistant', msg);
+  startIndexAndWait(kid, label);
   return { saved: d.saved, started: true };
+}
+
+// 上传文件 → 后台异步建索引 → 轮询等完成(不阻塞界面)。
+// 同一时刻只允许一个上传任务: 第二个上传会提示排队, 避免进度条/轮询互相覆盖。
+async function uploadFiles(files, kid, label){
+  if (uploadBusy){
+    addMsg('assistant', '⏳ 已有上传/索引任务进行中，请等它完成或点「✕ 取消」后再传。');
+    throw new Error('busy');
+  }
+  // 前置过滤空文件(0 字节)与空列表, 避免上传无效文件
+  const valid = (files || []).filter(x => x && x.file && x.file.size > 0);
+  const emptyCount = (files || []).length - valid.length;
+  if (emptyCount > 0){
+    addMsg('assistant', '⚠️ 已跳过 ' + emptyCount + ' 个空文件(0 字节)，其余继续上传。');
+  }
+  if (!valid.length){ throw new Error('所选文件均为空或不可用'); }
+
+  // 只选了一个 zip：走安全解压接口，不用把 zip 当普通文件上传。
+  if (valid.length === 1 && /\.zip$/i.test(valid[0].file.name)){
+    return uploadZip(valid[0].file, kid, label);
+  }
+
+  addMsg('assistant', '已选择 ' + esc(describePicked(valid)) + '，开始上传到「' + esc(label) + '」。');
+  uploadBusy = true;
+  uploadCanceled = false;
+  const batches = makeUploadBatches(valid);
+  const totalBytes = valid.reduce((s, x) => s + (x.file.size || 0), 0);
+  const loadedByBatch = Array(batches.length).fill(0);
+  const updateProgress = () => {
+    const sum = loadedByBatch.reduce((a, b) => a + b, 0);
+    const pct = totalBytes ? Math.min(99, sum * 100 / totalBytes) : 0;
+    taskShow('正在上传 ' + valid.length + ' 个文件到「' + label + '」' +
+      (batches.length > 1 ? '（' + batches.length + ' 路并行）' : '') + '…', pct, false);
+  };
+  taskShow('正在上传 ' + valid.length + ' 个文件到「' + label + '」…', 0, false);
+  let results;
+  try {
+    results = await Promise.all(batches.map((batch, i) => {
+      const fd = new FormData();
+      batch.forEach(x => fd.append('files', x.file, x.relpath));
+      return xhrUpload('/api/kb/' + kid + '/upload', fd,
+        (loaded) => { loadedByBatch[i] = loaded; updateProgress(); });
+    }));
+  } catch(e){
+    const xs = uploadAborts.splice(0);
+    xs.forEach(x => { try { x.abort(); } catch(err){} });
+    uploadBusy = false;
+    taskHide();
+    if (uploadCanceled || (e && e.message === 'canceled')){ throw new Error('已取消'); }
+    throw e;
+  }
+  if (uploadCanceled){ uploadBusy = false; taskHide(); throw new Error('已取消'); }
+  const bad = results.find(r => !r || !r.ok);
+  if (bad){ uploadBusy = false; taskHide(); throw new Error(bad.msg || '上传失败'); }
+  const saved = results.reduce((s, r) => s + (r.saved || 0), 0);
+  const skipped = results.flatMap(r => r.skipped || []);
+  if (skipped.length){
+    addMsg('assistant', '⚠️ 有 ' + skipped.length + ' 个文件未上传（' +
+      skipped.slice(0, 3).join('；') + '）。');
+  }
+  startIndexAndWait(kid, label);
+  return { saved, started: true };
 }
 
 // 递归读取 DataTransfer 里文件(含文件夹 → 相对路径)
@@ -3115,6 +3211,30 @@ function pickAdd(kind){
 }
 // 兼容旧调用
 function openAddFiles(){ pickAdd('files'); }
+
+// 选择 zip：新建库时走 dropIntoNew，已有库时走 dropIntoKb；
+// uploadFiles 检测到只选了一个 .zip 会自动改走 upload_zip 接口。
+function openZipPicker(mode){
+  const inp = document.createElement('input');
+  inp.type = 'file';
+  inp.accept = '.zip,application/zip';
+  inp.style.display = 'none';
+  document.body.appendChild(inp);
+  inp.onchange = async () => {
+    const f = inp.files && inp.files[0];
+    inp.remove();
+    if (!f) return;
+    if (!/\.zip$/i.test(f.name)){ alert('请选择 .zip 压缩包'); return; }
+    const item = { file: f, relpath: f.name };
+    if (mode === 'new'){
+      await dropIntoNew([item]);
+    } else {
+      if (!cur){ alert('请先选择一个知识库'); return; }
+      await dropIntoKb(cur, [item]);
+    }
+  };
+  inp.click();
+}
 
 // ---- 写内容(手写笔记, 可贴图) ----
 let noteImages = [];      // [{name, data:dataURL}]
