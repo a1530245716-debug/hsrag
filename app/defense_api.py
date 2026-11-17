@@ -294,6 +294,88 @@ def make_question(sess, user_answer=None, images=None,
     return q, ""
 
 
+def recommend_kb_for_ppt(meta, user=None, cfg=None, user_key="", timeout=45):
+    """根据 PPT 内容推荐一个用户可读的知识库。
+
+    只做预选，前端仍允许用户改。只扫描前 500 行 chunks 取文档示例，避免大库拖慢。
+    """
+    import json
+    from itertools import islice
+    from pathlib import Path
+    import defense_coach
+    import indexer
+    import users
+
+    reg = indexer.load_registry()
+    candidates = []
+    for kb in reg:
+        kid = str(kb.get("id") or "")
+        if not kid or not users.can_read_kb(kb, user):
+            continue
+        n = int(kb.get("chunk_count") or
+                (kb.get("stats") or {}).get("total_chunks") or 0)
+        if n <= 0:
+            continue
+        folders = []
+        for raw in str(kb.get("folder") or "").split("|"):
+            raw = raw.strip()
+            if raw:
+                folders.append(Path(raw).name)
+        examples = []
+        try:
+            p = indexer._kb_dir(kid) / "chunks.jsonl"
+            if p.exists():
+                with open(p, "r", encoding="utf-8") as f:
+                    for line in islice(f, 500):
+                        try:
+                            r = json.loads(line)
+                        except Exception:
+                            continue
+                        name = str(r.get("path") or "").replace("\\", "/").split("/")[-1]
+                        if name and name not in examples:
+                            examples.append(name)
+                        if len(examples) >= 8:
+                            break
+        except Exception:
+            pass
+        candidates.append({
+            "id": kid,
+            "name": str(kb.get("name") or ""),
+            "folder": " | ".join(folders)[:160],
+            "examples": examples,
+        })
+    if not candidates:
+        return {"kb_id": "", "reason": "没有可用知识库", "confidence": "low",
+                "candidates": []}
+
+    material = defense_coach.material_from_ppt(meta or {})
+    r = defense_coach.recommend_kb(material, candidates, cfg=cfg,
+                                   user_key=user_key, timeout=timeout)
+    # 模型失败/弃权时，用名称/目录名做一次保守兜底
+    if not r.get("kb_id"):
+        text = material.lower()
+        hits = []
+        for c in candidates:
+            labels = [c.get("name", "")] + c.get("folder", "").split(" | ")
+            for label in labels:
+                label = label.strip()
+                if len(label) >= 3 and label.lower() in text:
+                    hits.append(c)
+                    break
+        uniq = {c["id"]: c for c in hits}
+        if len(uniq) == 1:
+            c = next(iter(uniq.values()))
+            r = {"kb_id": c["id"],
+                 "reason": "PPT 内容命中了该库的名称/目录：" + c["name"],
+                 "confidence": "low"}
+    return {
+        "kb_id": r.get("kb_id") or "",
+        "reason": r.get("reason") or "",
+        "confidence": r.get("confidence") or "low",
+        "candidates": [{"id": c["id"], "name": c["name"]} for c in candidates[:10]],
+    }
+
+
 def total_of(sess):
     return int(sess.get("total") or QUESTIONS_TOTAL)
 

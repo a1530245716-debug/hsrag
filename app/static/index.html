@@ -574,6 +574,16 @@
   </div>
 </div>
 
+<!-- 知识库文件列表 -->
+<div class="modal" id="filesModal">
+  <div class="card" style="width:min(920px,96vw);max-height:82vh;display:flex;flex-direction:column">
+    <h3 id="filesTitle">知识库文件</h3>
+    <div id="filesSummary" style="font-size:12.5px;color:var(--muted);margin:-4px 0 8px"></div>
+    <div id="filesList" style="overflow:auto;flex:1;border:1px solid var(--line);border-radius:8px"></div>
+    <div class="foot"><button class="btn" onclick="closeFiles()">关闭</button></div>
+  </div>
+</div>
+
 <!-- 问答统计弹窗(仅管理员) -->
 <div class="modal" id="qaModal">
   <div class="card" style="width:min(1080px,96vw)">
@@ -1353,12 +1363,15 @@ function renderKbs(){
       <div class="row">
         <span class="name ${indexing?'dim':''}">${esc(k.name)}</span>
         <span class="kbmgr">
+          <button class="rm" title="查看文件列表" onclick="event.stopPropagation();openKbFiles('${k.id}')">📂</button>
           ${window.__isAdmin ? `<button class="rm" title="分配知识库权限（多选只读）" onclick="event.stopPropagation();openShare('${k.id}')">📤</button>` : ''}
           <button class="rm" title="重命名" onclick="event.stopPropagation();promptRename('${k.id}')">✎</button>
           <button class="del" title="删除" onclick="event.stopPropagation();delKb('${k.id}')">✕</button>
         </span>
       </div>
-      <div class="meta" title="${esc(k.folder || '（未绑定目录，纯上传型）')}">${k.folder ? '' : '纯上传型 · '}文件 ${k.file_count||0} / 块 ${k.chunk_count||0}${indexing?' · 索引中…':''}${idxBad?' · <span style="color:#b91c1c">索引失败/中断</span>':''}${
+      <div class="meta" title="${esc(k.folder || '（未绑定目录，纯上传型）')}">${k.folder ? '' : '纯上传型 · '}${
+        indexing ? '索引中…' : idxBad ? '<span style="color:#b91c1c">索引失败/中断</span>'
+        : (k.chunk_count ? '已就绪' : '未建索引')}${
         (window.__isAdmin && k.owner_name && !k.mine) ? ` · <span style="color:#b45309">👤 ${esc(k.owner_name)}</span>` : ''}</div>`;
     div.onclick = () => select(k);
     el.appendChild(div);
@@ -1387,7 +1400,10 @@ function select(k){
   if (changed) clearAskImgs();   // 切库时清掉待发图
   cur = k;
   $('#curName').textContent = k.name;
-  const metaTxt = `${k.folder ? '' : '纯上传型 · '}文件 ${k.file_count||0} · 块 ${k.chunk_count||0}`;
+  const st = k.status === 'indexing' ? '索引中…'
+           : (k.index_status === 'failed' || k.index_status === 'interrupted') ? '索引失败/中断'
+           : (k.chunk_count ? '已就绪' : '未建索引');
+  const metaTxt = `${k.folder ? '' : '纯上传型 · '}${st}`;
   $('#curMeta').textContent = metaTxt;
   $('#curMeta').title = k.folder ? ('源目录：' + k.folder) : '纯上传型知识库';
   $('#q').disabled = false;
@@ -1396,7 +1412,18 @@ function select(k){
     ? `向「${k.name}」提问`
     : `向「${k.name}」提问，可接着追问`;
   syncIndexState(k);   // 首次建库未完成时禁用提问，并显示索引进度
-  if (changed) resetChat(true);  // 换知识库 → 静默清空上下文, 避免串库
+  if (changed){
+    resetChat(true);                       // 清掉当前知识库的上下文
+    if (typeof askAbort !== 'undefined' && askAbort){
+      try { askAbort.abort(); } catch(e){}
+      askAbort = null;
+    }
+    const box = $('#chat');
+    if (box){
+      box.innerHTML = '';                  // 旧知识库的消息不要留在界面上
+      addMsg('assistant', '已切换到「' + esc(k.name) + '」，之前的对话已清空。');
+    }
+  }
   // 清除残留的"请选择知识库"空提示
   const empty = $('#chat .empty');
   if (empty) empty.remove();
@@ -1694,6 +1721,58 @@ function openShare(kbId){
 }
 
 function closeShare(){ $('#shareModal').classList.remove('show'); }
+
+// ---- 知识库文件列表 ----
+function fmtSize(n){
+  n = Number(n) || 0;
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  if (n < 1024 * 1024 * 1024) return (n / 1048576).toFixed(1) + ' MB';
+  return (n / 1073741824).toFixed(1) + ' GB';
+}
+function closeFiles(){ $('#filesModal').classList.remove('show'); }
+async function openKbFiles(id){
+  const kb = (kbs || []).find(x => x.id === id) || cur;
+  $('#filesModal').classList.add('show');
+  $('#filesTitle').textContent = '文件列表 · ' + ((kb && kb.name) || id);
+  $('#filesSummary').textContent = '正在读取…';
+  $('#filesList').innerHTML = '<div style="padding:18px;color:var(--muted)"><span class="spin"></span> 正在读取文件列表…</div>';
+  try{
+    const d = await api('/api/kb/' + encodeURIComponent(id) + '/files', {cache:'no-store'});
+    if (!d || !d.ok){
+      $('#filesSummary').textContent = '';
+      $('#filesList').innerHTML = '<div style="padding:18px;color:#b91c1c">⚠️ ' + esc((d && d.msg) || '读取失败') + '</div>';
+      return;
+    }
+    const files = d.files || [];
+    const roots = (d.roots || []).map(r => r.name).filter(Boolean);
+    $('#filesSummary').textContent = `共 ${d.total || 0} 个文件` +
+      (d.truncated ? `（仅显示前 ${files.length} 个）` : '') +
+      (roots.length ? ' · 来源：' + roots.join('、') : '');
+    if (!files.length){
+      $('#filesList').innerHTML = '<div style="padding:18px;color:var(--muted)">这个知识库还没有文件。</div>';
+      return;
+    }
+    let h = '<div style="display:flex;gap:8px;padding:7px 10px;background:#f8fafc;' +
+            'font-size:12px;color:#64748b;position:sticky;top:0;z-index:1">' +
+            '<span style="flex:1">文件</span>' +
+            '<span style="width:90px;text-align:right">大小</span>' +
+            '<span style="width:110px;text-align:right">来源</span>' +
+            '<span style="width:145px;text-align:right">修改时间</span></div>';
+    for (const f of files){
+      const src = f.source === '上传' ? '上传' : '源目录 · ' + esc(f.root || '');
+      h += `<div style="display:flex;gap:8px;padding:6px 10px;border-top:1px solid #f1f5f9;font-size:12.5px" title="${esc(f.path)}">` +
+           `<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(f.name)}</span>` +
+           `<span style="width:90px;text-align:right;color:#64748b;flex:none">${fmtSize(f.size)}</span>` +
+           `<span style="width:110px;text-align:right;color:#64748b;flex:none">${src}</span>` +
+           `<span style="width:145px;text-align:right;color:#94a3b8;flex:none">${new Date((f.mtime || 0) * 1000).toLocaleString()}</span>` +
+           `</div>`;
+    }
+    $('#filesList').innerHTML = h;
+  }catch(e){
+    $('#filesList').innerHTML = '<div style="padding:18px;color:#b91c1c">⚠️ ' + esc(e.message) + '</div>';
+  }
+}
 
 async function loadShareUsers(){
   const kid = $('#shareKb').value || '';
@@ -2623,10 +2702,8 @@ function startIndexBannerWatch(kid, label, hasChunks){
     }
     stopIndexBannerWatch();
     if (st === 'done'){
-      const n = (j.stats && j.stats.total_chunks) || 0;
       hideIndexBanner();
-      announceIndex(kid, '✅ 索引完成：「' + esc(label) + '」' +
-        (n ? '共 ' + n + ' 块' : '') + '，现在可以提问了。');
+      announceIndex(kid, '✅ 索引完成：「' + esc(label) + '」，现在可以提问了。');
       loadKbs().catch(()=>{});
     } else if (st === 'failed' || st === 'interrupted'){
       setIndexBanner(`⚠️ 索引${st === 'failed' ? '失败' : '中断'}：「${label}」` +
@@ -2772,9 +2849,7 @@ async function uploadFiles(files, kid, label){
     uploadBusy = false;
     taskHide();
     if (j.status === 'done'){
-      const n = (j.stats && j.stats.total_chunks) || 0;
-      announceIndex(kid, '✅ 索引完成：「' + esc(label) + '」' +
-        (n ? '共 ' + n + ' 块' : '') + '，现在可以提问了。');
+      announceIndex(kid, '✅ 索引完成：「' + esc(label) + '」，现在可以提问了。');
     } else if (j.status === 'failed' || j.status === 'interrupted'){
       announceIndex(kid, '⚠️ 索引' + (j.status === 'failed' ? '失败' : '被中断') +
         '：「' + esc(label) + '」' + (j.error ? ' · ' + esc(j.error) : '') +
@@ -3187,9 +3262,7 @@ async function runIndexInline(kid){
   uploadBusy = false;
   taskHide();
   if (j.status === 'done'){
-    const n = (j.stats && j.stats.total_chunks) || 0;
-    announceIndex(kid, '✅ 索引完成：「' + esc(label) + '」' +
-      (n ? '共 ' + n + ' 块' : '') + '，可以提问了。');
+    announceIndex(kid, '✅ 索引完成：「' + esc(label) + '」，可以提问了。');
   } else if (j.status === 'failed' || j.status === 'interrupted'){
     announceIndex(kid, '⚠️ 索引' + (j.status === 'failed' ? '失败' : '被中断') +
       '：「' + esc(label) + '」' + (j.error ? ' · ' + esc(j.error) : ''));

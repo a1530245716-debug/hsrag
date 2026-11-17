@@ -1409,6 +1409,19 @@ def kb_detail(kb_id: str):
     return {"ok": True, "kb": kb_}
 
 
+@app.get("/api/kb/{kb_id}/files")
+def kb_files(kb_id: str, request: Request):
+    """文件清单：源目录 + 上传目录，只列名字/大小，不读内容。"""
+    kb_ = indexer.get_kb(kb_id)
+    if not kb_:
+        return JSONResponse({"ok": False, "msg": "知识库不存在"}, status_code=404)
+    u = _current_user(request)
+    if not users.can_read_kb(kb_, u):
+        return JSONResponse({"ok": False, "msg": "无权查看该知识库"}, status_code=403)
+    r = indexer.list_kb_files(kb_id)
+    return r or {"ok": False, "msg": "知识库不存在"}
+
+
 class KbShareIn(BaseModel):
     users: list = []          # 要分享给哪些用户（id 列表，可多选；空 = 收回全部）
 
@@ -3493,6 +3506,28 @@ async def defense_upload(request: Request, file: UploadFile = File(...)):
                     "has_image": s["has_image"], "images": s["images"]}
                    for s in meta.get("slides", [])],
     }
+
+
+@app.post("/api/defense/recommend_kb")
+async def defense_recommend_kb(request: Request):
+    """根据 PPT 内容推荐知识库，前端预选但保留用户选择权。"""
+    u, err = _require_defense(request)
+    if err:
+        return err
+    import defense_api
+    import defense_ppt
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    ppt_id = str(body.get("ppt_id") or "")
+    meta = defense_ppt.load(ppt_id) if ppt_id else None
+    if not meta:
+        return {"ok": False, "msg": "PPT 解析结果已失效，请重新上传"}
+    r = await _run_blocking(
+        defense_api.recommend_kb_for_ppt, meta, u,
+        cfg=_cfg_with_user_key(request), user_key=_user_llm_key(request))
+    return {"ok": True, **r}
 
 
 @app.get("/api/defense/ppt/{upload_id}/img/{filename}")

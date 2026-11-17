@@ -309,6 +309,67 @@ def _fmt_manual(hits):
     return "\n\n".join(parts)
 
 
+_RECOMMEND_SYSTEM = """你是答辩材料归档助手。根据学员 PPT 的内容，从候选知识库中选出最适合作为“出题依据”的一个。
+
+判断时优先看：
+- PPT 的主题、业务系统名、项目名，是否和候选库的**文档示例、目录名**对得上；
+- 术语和业务范围（例如 O32/清算/回购/ETF/某客户项目）是否一致；
+- 不要因为某个库文档多、名字长就偏向它。
+
+宁可不选，也不要勉强选错。不确定时 kb_id 返回空串，confidence 用 low。
+只输出 JSON（不要代码块）：
+{"kb_id":"候选 id 或空串","reason":"20-50 字理由","confidence":"high|medium|low"}
+"""
+
+
+def recommend_kb(material, candidates, cfg=None, user_key="", timeout=45):
+    """根据 PPT 内容从候选知识库中选一个。
+
+    candidates: [{"id","name","folder","examples"}]
+    返回 {"kb_id","reason","confidence"}；kb_id 为空表示不建议自动选。
+    这是给前端“预选 + 可修改”用的，不是强制绑定。
+    """
+    import llm
+    if not candidates:
+        return {"kb_id": "", "reason": "没有可用知识库", "confidence": "low"}
+    if len(candidates) == 1:
+        c = candidates[0]
+        return {"kb_id": c["id"], "reason": "唯一可用知识库", "confidence": "high"}
+    if not (material or "").strip():
+        return {"kb_id": "", "reason": "PPT 没有提取到内容", "confidence": "low"}
+
+    lines = []
+    for c in candidates[:10]:
+        ex = "、".join((c.get("examples") or [])[:6])
+        lines.append(f"- id={c['id']} | 名称={c.get('name', '')} | "
+                     f"目录={c.get('folder', '')} | 文档示例={ex}")
+    body = "\n".join([
+        "【PPT 内容摘要】", material[:2800], "",
+        "【候选知识库】", "\n".join(lines), "",
+        "请选择最适合的库；不确定就返回空 id。",
+    ])
+    md = {}
+    t0 = time.time()
+    ans = llm.chat([{"role": "user", "content": body}], cfg=cfg,
+                   system=_RECOMMEND_SYSTEM, timeout=timeout,
+                   user_key=user_key, meta=md) or ""
+    _log_timing("recommend_kb", t0, n=len(candidates), prompt=len(body),
+                out=len(ans), stop=md.get("stop_reason"))
+    data = _parse_json(ans)
+    if not isinstance(data, dict):
+        print(f"[coach] recommend_kb parse_failed stop={md.get('stop_reason')} "
+              f"out={len(ans)} raw={ans[:160]!r}", file=sys.stderr)
+        return {"kb_id": "", "reason": "模型没有返回可解析结果", "confidence": "low"}
+    kid = str(data.get("kb_id") or "").strip()
+    if kid not in {str(c["id"]) for c in candidates}:
+        kid = ""
+    conf = str(data.get("confidence") or "").lower()
+    if conf not in ("high", "medium", "low"):
+        conf = "low"
+    return {"kb_id": kid, "reason": str(data.get("reason") or "")[:200],
+            "confidence": conf}
+
+
 _REVEAL_SYSTEM = """你是答辩辅导老师。现在要给学员讲清楚这道题的正确答案。
 
 你要给出两部分（不要点评学员刚才的回答，省掉这段）：

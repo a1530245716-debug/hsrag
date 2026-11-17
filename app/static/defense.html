@@ -404,6 +404,9 @@ let TOTAL = 10;         // 本次总题数
 let MODE = 'practice';  // practice 练习 / exam 答辩
 let REVEAL_OK = true;   // 现在能不能看答案
 let KB_ID = '';         // 用哪个知识库当依据
+let KB_REC = null;      // 后端根据 PPT 内容给出的推荐
+let KB_REC_SEQ = 0;     // 防止旧的上传结果覆盖新的推荐
+let KB_USER_CHANGED = false;   // 用户手动改过下拉框就不再自动覆盖
 let BUSY = false;
 
 const ANSWERED = [];    // 已答的题 [{no, q, a}]，答辩模式最后统一看解析用
@@ -460,11 +463,12 @@ document.querySelectorAll('.modeCard').forEach(c => {
   c.onclick = () => setMode(c.dataset.mode);
 });
 
-// 知识库下拉：默认选业务手册，其它库都能选
+// 知识库下拉：默认选业务手册，上传后根据 PPT 内容推荐一个（用户仍可改）
 async function loadKbOptions(){
   const sel = $('#kbSel');
   sel.innerHTML = '<option value="">加载中…</option>';
   await READY;
+  KB_REC = null; KB_REC_SEQ++; KB_USER_CHANGED = false;
   let d;
   try {
     const r = await fetch('/api/kb', withAuth({ credentials:'same-origin' }));
@@ -474,6 +478,7 @@ async function loadKbOptions(){
   if (!kbs.length){
     sel.innerHTML = '<option value="">（没有可用知识库，将只按历史答辩出题）</option>';
     KB_ID = '';
+    updateKbHint();
     return;
   }
   // 业务手册排第一并默认选中；其余按名字排序
@@ -482,23 +487,64 @@ async function loadKbOptions(){
                      .sort((a,b) => (a.name||'').localeCompare(b.name||'', 'zh'));
   const list = [...manual, ...others];
   sel.innerHTML = list.map(k =>
-    `<option value="${k.id}">${esc(k.name)}${k.readonly ? '（别人分享的·只读）' : ''}` +
-    `　· ${k.chunk_count || k.chunks || 0} 段</option>`
+    `<option value="${k.id}">${esc(k.name)}${k.readonly ? '（别人分享的·只读）' : ''}</option>`
   ).join('');
   KB_ID = list[0].id;
   sel.value = KB_ID;
   updateKbHint();
   sel.onchange = () => {
     KB_ID = sel.value;
+    KB_USER_CHANGED = true;
     updateKbHint();
   };
+  recommendKb();
 }
-function updateKbHint(){
+
+function updateKbHint(rec){
+  rec = rec === undefined ? KB_REC : rec;
   const opt = $('#kbSel').selectedOptions[0];
-  const name = opt ? opt.textContent.split('　')[0] : '';
-  $('#kbHint').textContent = KB_ID
-    ? `出题和参考答案里的「依据」都从这个库找：${name}`
+  const name = opt ? opt.textContent.replace('（别人分享的·只读）', '') : '';
+  let html = KB_ID
+    ? `出题和参考答案里的「依据」都从这个库找：${esc(name)}`
     : '没有选库，只能按历史答辩和你的 PPT 出题，给不出文件依据。';
+  if (rec && rec.kb_id){
+    const rn = ((rec.candidates || []).find(x => x.id === rec.kb_id) || {}).name || rec.kb_id;
+    const conf = rec.confidence === 'high' ? '高'
+               : rec.confidence === 'medium' ? '中' : '低';
+    const changed = (KB_USER_CHANGED && KB_ID !== rec.kb_id) ? '（你已改为当前选择）' : '';
+    html += `<div style="margin-top:4px;color:#1d4ed8">📌 根据 PPT 推荐：${esc(rn)}` +
+            `（置信度${conf}）${rec.reason ? ' · ' + esc(rec.reason) : ''}${changed}</div>`;
+  } else if (rec && rec.reason){
+    html += `<div style="margin-top:4px;color:var(--muted)">未自动选择：${esc(rec.reason)}。` +
+            `默认用业务手册，可手动修改。</div>`;
+  }
+  $('#kbHint').innerHTML = html;
+}
+
+async function recommendKb(){
+  const pid = PPT && PPT.id;
+  if (!pid) return;
+  const my = ++KB_REC_SEQ;
+  const hint = $('#kbHint');
+  if (hint) hint.textContent = '正在根据 PPT 内容匹配知识库…（可先手动选择）';
+  let d;
+  try{
+    d = await api('/api/defense/recommend_kb', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ ppt_id: pid })
+    });
+  }catch(e){ d = { ok:false }; }
+  if (my !== KB_REC_SEQ) return;          // 已重新上传，旧结果丢弃
+  if (!d || !d.ok){ updateKbHint(); return; }
+  KB_REC = d;
+  if (d.kb_id && !KB_USER_CHANGED && !SESSION){
+    const sel = $('#kbSel');
+    if (sel && [...sel.options].some(o => o.value === d.kb_id)){
+      sel.value = d.kb_id;
+      KB_ID = d.kb_id;
+    }
+  }
+  updateKbHint(KB_REC);
 }
 
 // ---------------- 上传 ----------------

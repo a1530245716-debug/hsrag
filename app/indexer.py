@@ -79,6 +79,62 @@ def get_kb(kb_id):
     return None
 
 
+def list_kb_files(kb_id, limit=800):
+    """列出知识库的源目录 + 上传目录文件（只读，不读内容）。
+
+    用于前端确认“这个库到底放了哪些资料”。图片也列出来；隐藏目录、
+    Office 临时文件不列。大库最多先返回 limit 条并标记 truncated。
+    """
+    kb = get_kb(kb_id)
+    if not kb:
+        return None
+    roots = []
+    for raw in str(kb.get("folder") or "").split("|"):
+        raw = raw.strip()
+        if raw:
+            p = Path(raw)
+            roots.append((p, "源目录"))
+    roots.append((upload_dir(kb_id), "上传"))
+
+    files = []
+    total = 0
+    for root, kind in roots:
+        if not root.is_dir():
+            continue
+        for dp, dirs, fns in os.walk(root):
+            dirs[:] = [d for d in dirs
+                       if d not in ("__pycache__", ".git", "node_modules")
+                       and not d.startswith(".")]
+            for fn in fns:
+                if fn.startswith("~$") or fn.endswith(".tmp"):
+                    continue
+                p = Path(dp) / fn
+                try:
+                    st = p.stat()
+                except Exception:
+                    continue
+                rel = p.relative_to(root).as_posix()
+                total += 1
+                if len(files) < limit:
+                    files.append({
+                        "name": fn,
+                        "path": rel,
+                        "root": root.name,
+                        "source": kind,
+                        "size": st.st_size,
+                        "mtime": int(st.st_mtime),
+                    })
+    files.sort(key=lambda x: (-x["mtime"], x["path"]))
+    return {
+        "ok": True,
+        "files": files,
+        "total": total,
+        "truncated": total > len(files),
+        "roots": [{"name": r.name, "kind": k, "exists": r.is_dir()}
+                  for r, k in roots],
+    }
+
+
 def resolve_kb_file(kb_id, rel):
     """按索引里的 rel 路径定位真实文件(源目录或 upload 目录), 防路径穿越。
 
