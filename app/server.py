@@ -572,6 +572,7 @@ _KB_READONLY_PATHS = (
     "/api/kb/{id}/file/preview",
     "/api/kb/{id}/file/raw",
     "/api/kb/{id}/file/download",
+    "/api/kb/{id}/files",
     "/api/kb/{id}/img",
     "/api/kb/{id}/debug_search",
     "/api/kb/{id}/ask",
@@ -1909,6 +1910,112 @@ def _preview_html(kb_id, path, name, content_html, kind, size=None, hl=""):
     raw = f"/api/kb/{urllib.parse.quote(kb_id)}/file/raw?path={enc}"
     size_txt = f"{size} 字节" if size else ""
     badge = {"text": "文本", "image": "图片", "media": "媒体/PDF", "office": "文档", "error": "错误"}.get(kind, "")
+
+    # 左侧文件树（目录导航）。用普通字符串拼，避免和 f-string 的花括号打架。
+    nav_css = """
+  .shell { display:flex; align-items:flex-start; }
+  #nav { width:280px; flex:none; position:sticky; top:52px; max-height:calc(100vh - 52px);
+         overflow:auto; background:#fff; border-right:1px solid #e3e6ea; padding:10px 8px;
+         font-size:12.5px; box-sizing:border-box; }
+  #nav .navhead { font-weight:600; color:#334155; padding:4px 6px 8px; position:sticky; top:0;
+                  background:#fff; z-index:1; }
+  #nav details { margin-left:8px; }
+  #nav summary { cursor:pointer; padding:3px 5px; color:#475569; border-radius:5px;
+                 white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #nav summary:hover { background:#f1f5f9; }
+  #nav a.navfile { display:block; padding:4px 8px; margin-left:12px; color:#334155;
+                   text-decoration:none; border-radius:5px; white-space:nowrap;
+                   overflow:hidden; text-overflow:ellipsis; }
+  #nav a.navfile:hover { background:#eff6ff; }
+  #nav a.navfile.active { background:#dbeafe; color:#1d4ed8; font-weight:600; }
+  #nav .navempty { color:#94a3b8; padding:10px 6px; line-height:1.6; }
+  #navBtn { display:none; background:#374151; border:0; color:#fff; border-radius:6px;
+            padding:6px 10px; font-size:13px; cursor:pointer; }
+  #navMask { display:none; position:fixed; inset:0; background:rgba(15,23,42,.35); z-index:150; }
+  main { flex:1; min-width:0; padding:20px; max-width:1100px; margin:0 auto; }
+  @media (max-width:820px) {
+    .shell { display:block; }
+    #nav { position:fixed; left:0; top:0; width:82vw; max-width:320px; height:100vh;
+           max-height:none; z-index:200; transform:translateX(-100%);
+           transition:transform .18s ease; border-right:1px solid #e3e6ea; }
+    #nav.open { transform:translateX(0); }
+    #navMask.show { display:block; }
+    #navBtn { display:inline-block; }
+    main { padding:14px; }
+  }
+"""
+    import json as _json
+    nav_script = r"""
+<script>
+(function(){
+  var KB = __KB__, CUR = __CUR__;
+  var nav = document.getElementById('nav');
+  var mask = document.getElementById('navMask');
+  var body = document.getElementById('navBody');
+  var count = document.getElementById('navCount');
+  function esc(v){ return String(v == null ? '' : v).replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function norm(p){ return String(p || '').replace(/\\/g,'/').replace(/^\/+/,''); }
+  function toggle(open){
+    nav.classList.toggle('open', open);
+    mask.classList.toggle('show', open);
+  }
+  var btn = document.getElementById('navBtn');
+  if (btn) btn.onclick = function(){ toggle(!nav.classList.contains('open')); };
+  mask.onclick = function(){ toggle(false); };
+  function renderNode(node){
+    var html = '';
+    Object.keys(node.dirs).sort().forEach(function(d){
+      html += '<details open><summary>📁 ' + esc(d) + '</summary>' +
+              renderNode(node.dirs[d]) + '</details>';
+    });
+    node.files.sort(function(a,b){ return String(a.name).localeCompare(String(b.name), 'zh'); })
+      .forEach(function(f){
+        var active = norm(f.path) === norm(CUR) ? ' active' : '';
+        var href = '/api/kb/' + encodeURIComponent(KB) + '/file/preview?path=' +
+                   encodeURIComponent(f.path);
+        html += '<a class="navfile' + active + '" href="' + href + '" title="' +
+                esc(f.path) + '">📄 ' + esc(f.name) + '</a>';
+      });
+    return html;
+  }
+  function build(files){
+    var groups = {};
+    (files || []).forEach(function(f){
+      var root = f.source === '上传' ? '上传' : ('源目录 · ' + (f.root || ''));
+      if (!groups[root]) groups[root] = {dirs:{}, files:[]};
+      var node = groups[root];
+      var parts = norm(f.path).split('/');
+      parts.slice(0, -1).forEach(function(d){
+        if (!node.dirs[d]) node.dirs[d] = {dirs:{}, files:[]};
+        node = node.dirs[d];
+      });
+      node.files.push(f);
+    });
+    var html = '';
+    Object.keys(groups).sort().forEach(function(g){
+      html += '<details open><summary>📁 ' + esc(g) + '</summary>' +
+              renderNode(groups[g]) + '</details>';
+    });
+    body.innerHTML = html || '<div class="navempty">这个库还没有文件。</div>';
+    count.textContent = (files || []).length ? '(' + files.length + ')' : '';
+  }
+  var tok = '';
+  try { tok = sessionStorage.getItem('rag.token') || ''; } catch(e){}
+  var opt = {credentials:'same-origin'};
+  if (tok) opt.headers = {'X-RAG-Token': tok};
+  fetch('/api/kb/' + encodeURIComponent(KB) + '/files', opt)
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (!d || !d.ok) throw new Error((d && d.msg) || '加载失败');
+      build(d.files || []);
+    })
+    .catch(function(e){
+      body.innerHTML = '<div class="navempty">目录加载失败：' + esc(e.message) + '</div>';
+    });
+})();
+</script>
+""".replace("__KB__", _json.dumps(kb_id)).replace("__CUR__", _json.dumps(path))
     hl_block = ""
     if hl:
         hl_json = __import__("json").dumps(hl)
@@ -1929,31 +2036,35 @@ def _preview_html(kb_id, path, name, content_html, kind, size=None, hl=""):
   try {{
     var needle = {hl_json};
     if (needle && needle.length > 3) {{
-      // 1) 找内容里能匹配的最长子串(去掉首尾空白)
-      var pieces = [needle, needle.slice(0, 60), needle.slice(0, 40), needle.slice(0, 20)];
-      var found = null;
-      var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      // 表格片段里有 |，正文可能被拆成多个单元格；按 | 和句号切成短片段再找。
+      var pieces = needle.split(/[|\\n\\r]+/)
+        .concat(needle.split(/[。！？；;]/))
+        .map(function(s){{ return s.trim(); }})
+        .filter(function(s){{ return s.length >= 4; }});
+      pieces.sort(function(a,b){{ return b.length - a.length; }});
+      var found = null, marked = 0;
+      var root = document.querySelector('main') || document.body;
+      var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
       var nodes = [];
       while (walker.nextNode()) nodes.push(walker.currentNode);
-      for (var p = 0; p < pieces.length && !found; p++) {{
-        var nd = pieces[p].trim();
-        if (nd.length < 4) continue;
+      for (var p = 0; p < pieces.length && marked < 6; p++) {{
+        var nd = pieces[p];
         for (var i = 0; i < nodes.length; i++) {{
           var n = nodes[i];
           var idx = n.nodeValue.indexOf(nd);
-          if (idx >= 0) {{
-            var span = document.createElement('mark');
-            span.textContent = nd;
-            var after = n.splitText(idx);
-            var rest = after.splitText(nd.length);
-            after.parentNode.replaceChild(span, after);
-            found = span;
-            break;
-          }}
+          if (idx < 0) continue;
+          var span = document.createElement('mark');
+          span.textContent = nd;
+          var after = n.splitText(idx);
+          var rest = after.splitText(nd.length);
+          after.parentNode.replaceChild(span, after);
+          if (!found) found = span;
+          marked++;
+          break;
         }}
       }}
       var target = found || document.getElementById('hitCard');
-      if (target) {{ setTimeout(function(){{ target.scrollIntoView({{block:'center', behavior:'smooth'}}); }}, 80); }}
+      if (target) {{ setTimeout(function(){{ target.scrollIntoView({{block:'center', behavior:'smooth'}}); }}, 120); }}
     }}
   }} catch(e) {{}}
 }})();
@@ -2004,14 +2115,23 @@ def _preview_html(kb_id, path, name, content_html, kind, size=None, hl=""):
   .dp .slide {{ border-top:1px solid #e5e7eb; padding:14px 0 4px; margin-top:8px; }}
   .dp .slide:first-child {{ border-top:0; margin-top:0; }}
   .dp .sno {{ font-size:11px; color:#9ca3af; letter-spacing:.5px; }}
+  {nav_css}
 </style></head><body>
 <div class="bar">
+  <button id="navBtn" title="打开文件目录">☰ 目录</button>
   <span>📄</span><span class="nm">{_html.escape(name)}</span>
   <span class="meta">{_html.escape(badge)}{(" · " + size_txt) if size_txt else ""}</span>
   <a class="btn ghost" href="{raw}" target="_blank" rel="noopener">🗎 原始文件</a>
   <a class="btn" href="{dwl}" download>⬇ 下载原文件</a>
 </div>
-<main>{hl_block}{content_html}</main>
+<div class="shell">
+  <aside id="nav">
+    <div class="navhead">📁 目录 <span id="navCount" style="color:#94a3b8;font-weight:400"></span></div>
+    <div id="navBody" class="navempty">正在加载目录…</div>
+  </aside>
+  <main>{hl_block}{content_html}</main>
+</div>
+<div id="navMask"></div>
 <div id="lb"><span id="lbx" title="关闭（Esc 或点空白处）">✕</span><img id="lbimg" alt=""></div>
 <style>
   #lb {{ display:none; position:fixed; inset:0; background:rgba(15,23,42,.92); z-index:999;
@@ -2036,6 +2156,7 @@ def _preview_html(kb_id, path, name, content_html, kind, size=None, hl=""):
   document.addEventListener('keydown', function(e){{ if (e.key === 'Escape') close(); }});
 }})();
 </script>
+{nav_script}
 </body></html>"""
 
 
