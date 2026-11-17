@@ -3,8 +3,9 @@
 用法: python index_docs.py [--root 源目录] [--out 输出目录]
 输出: --out/chunks.jsonl  每行一个 json 块;  --out/manifest.json  统计信息
 """
-import os, sys, json, glob, shutil, hashlib, re, subprocess
+import os, sys, json, glob, shutil, hashlib, re, subprocess, struct
 from pathlib import Path
+from datetime import datetime, timedelta
 import sys as _sys
 _sys.path.insert(0, str(Path(__file__).parent / "app"))
 
@@ -250,10 +251,199 @@ def extract_txt(p: Path) -> str:
     return ""
 
 
+# ---------------- DBF (dBase / FoxPro 表) ----------------
+MAX_DBF_ROWS = 20000
+MAX_DBF_FIELD = 500
+
+
+def _dbf_decode(raw: bytes) -> str:
+    raw = raw.rstrip(b"\x00 ").strip()
+    if not raw:
+        return ""
+    try:
+        s = raw.decode("utf-8")
+        if "�" not in s:
+            return s.strip()
+    except Exception:
+        pass
+    for enc in ("gb18030", "gbk", "cp1252", "latin1"):
+        try:
+            return raw.decode(enc).strip()
+        except Exception:
+            pass
+    return raw.decode("latin1", "replace").strip()
+
+
+def _dbf_memo_reader(p: Path):
+    """找同名 .fpt/.dbt，返回 pointer -> text 的函数；找不到返回 None。"""
+    cand = None
+    for f in p.parent.glob(p.stem + ".*"):
+        if f.suffix.lower() in (".fpt", ".dbt"):
+            cand = f
+            break
+    if not cand:
+        return None
+    try:
+        data = cand.read_bytes()
+    except Exception:
+        return None
+    if len(data) < 8:
+        return None
+    if cand.suffix.lower() == ".fpt":
+        block = int.from_bytes(data[6:8], "big") or 512
+
+        def get(ptr):
+            try:
+                n = int(str(ptr).strip())
+            except Exception:
+                return ""
+            off = n * block
+            if off + 8 > len(data):
+                return ""
+            ln = int.from_bytes(data[off + 4:off + 8], "big")
+            if ln <= 0 or ln > 5_000_000:
+                return ""
+            return _dbf_decode(data[off + 8:off + 8 + ln])
+        return get
+
+    # dBase III/IV .dbt：块大小通常 512
+    def get_dbt(ptr):
+        try:
+            n = int(str(ptr).strip())
+        except Exception:
+            return ""
+        off = n * 512
+        if off >= len(data):
+            return ""
+        raw = data[off:off + 4096]
+        end = raw.find(b"\x1a\x1a")
+        if end >= 0:
+            raw = raw[:end]
+        return _dbf_decode(raw)
+    return get_dbt
+
+
+def _dbf_value(raw, typ, flen, dec, memo=None):
+    t = (typ or "C").upper()
+    if t == "C":
+        return _dbf_decode(raw)
+    if t in ("N", "F"):
+        return _dbf_decode(raw).strip()
+    if t == "D":
+        s = _dbf_decode(raw).strip()
+        if len(s) == 8 and s.isdigit():
+            return f"{s[:4]}-{s[4:6]}-{s[6:]}"
+        return s
+    if t == "L":
+        s = _dbf_decode(raw).strip().upper()
+        return "是" if s in ("T", "Y") else ("否" if s in ("F", "N") else "")
+    if t in ("M", "G", "P", "V"):
+        ptr = _dbf_decode(raw).strip()
+        if memo and ptr:
+            txt = memo(ptr)
+            if txt:
+                return txt[:2000]
+        return "[memo 未解析]" if ptr else ""
+    if t == "I" and len(raw) >= 4:
+        return str(struct.unpack("<i", raw[:4])[0])
+    if t in ("B", "O") and len(raw) >= 8:
+        return str(struct.unpack("<d", raw[:8])[0])
+    if t == "Y" and len(raw) >= 8:
+        v = struct.unpack("<q", raw[:8])[0] / 10000.0
+        return f"{v:.4f}".rstrip("0").rstrip(".")
+    if t == "T" and len(raw) >= 8:
+        jd, ms = struct.unpack("<ii", raw[:8])
+        try:
+            dt = datetime(1970, 1, 1) + timedelta(days=jd - 2440588, milliseconds=ms)
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return ""
+    return _dbf_decode(raw).strip()
+
+
+def read_dbf(p: Path, max_rows=None):
+    """返回 (fields, rows, total)。fields=[(name,type,len,dec)]。"""
+    try:
+        data = p.read_bytes()
+    except Exception:
+        return [], [], 0
+    if len(data) < 32:
+        return [], [], 0
+    nrec = int.from_bytes(data[4:8], "little")
+    hlen = int.from_bytes(data[8:10], "little")
+    rlen = int.from_bytes(data[10:12], "little")
+    if hlen < 33 or rlen < 1 or hlen > len(data):
+        return [], [], 0
+    fields = []
+    pos = 32
+    while pos + 32 <= hlen and data[pos] != 0x0D:
+        fd = data[pos:pos + 32]
+        name = _dbf_decode(fd[0:11]).strip()
+        typ = chr(fd[11]) if 32 <= fd[11] <= 126 else "C"
+        flen = fd[16]
+        dec = fd[17]
+        if name:
+            fields.append((name, typ, flen, dec))
+        pos += 32
+    if not fields:
+        return [], [], 0
+    memo = _dbf_memo_reader(p)
+    rows = []
+    total = 0
+    pos = hlen
+    for _ in range(max(0, nrec)):
+        if pos + rlen > len(data):
+            break
+        rec = data[pos:pos + rlen]
+        pos += rlen
+        if rec[:1] == b"*":       # 删除标记
+            continue
+        total += 1
+        off = 1
+        row = []
+        for name, typ, flen, dec in fields:
+            raw = rec[off:off + flen]
+            off += flen
+            row.append(_dbf_value(raw, typ, flen, dec, memo))
+        if max_rows is None or len(rows) < max_rows:
+            rows.append(row)
+    return fields, rows, total
+
+
+def extract_dbf(p: Path) -> str:
+    """把 DBF 表转成“表结构 + 行数据”，每 20 行重复表头，便于按行检索。"""
+    fields, rows, total = read_dbf(p, max_rows=MAX_DBF_ROWS)
+    if not fields:
+        return ""
+    names = [f[0] for f in fields]
+    lines = [
+        f"【DBF 表】{p.name}",
+        f"记录数: {total}",
+        "字段: " + "、".join(f"{n}({t}{l})" for n, t, l, d in fields),
+    ]
+    header = " | ".join(names)
+    for i, row in enumerate(rows, 1):
+        if i == 1 or (i - 1) % 20 == 0:
+            lines.append(f"[行{i}起，字段: {header}]")
+        parts = []
+        for n, v in zip(names, row):
+            v = (v or "").replace("\r", " ").replace("\n", " ").strip()
+            if not v:
+                continue
+            if len(v) > MAX_DBF_FIELD:
+                v = v[:MAX_DBF_FIELD] + "…"
+            parts.append(f"{n}={v}")
+        if parts:
+            lines.append(f"行{i}: " + " | ".join(parts))
+    if total > len(rows):
+        lines.append(f"（仅索引前 {len(rows)} 行，共 {total} 行）")
+    return "\n".join(lines)
+
+
 EXTRACTORS = {".docx": extract_docx, ".doc": extract_doc, ".pptx": extract_pptx,
               ".ppt": extract_pptx, ".xlsx": extract_xlsx, ".xls": extract_xls_xlrd,
               ".pdf": extract_pdf, ".txt": extract_txt, ".csv": extract_txt,
-              ".json": extract_txt, ".md": extract_txt}
+              ".json": extract_txt, ".md": extract_txt, ".dbf": extract_dbf}
 
 
 _IMG_TOKEN = re.compile(

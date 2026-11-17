@@ -1004,7 +1004,7 @@
         <li><b>检索</b>：中文分词（jieba）+ BM25 关键词检索 + <b>本地语义向量（bge-small-zh, ONNX）</b> + <b>Rerank 精排（bge-reranker-base int8）</b>；
             关键词与语义两路并行召回后融合，再按权威性/版本新旧/文件名命中加权，块级索引 + 内存缓存 + 启动预热</li>
         <li><b>文档解析</b>：python-docx / python-pptx / openpyxl / xlrd / pymupdf(PDF) + 直接读 Office 内部结构定位图片；
-            支持 Word、Excel、PPT、PDF、文本、CSV、JSON 等</li>
+            支持 Word、Excel、PPT、PDF、文本、CSV、JSON、DBF 等</li>
         <li><b>文档内图片</b>：按需从原文档解压（docx 的 word/media、pptx 的 ppt/media 等），转换后缓存；
             矢量格式 EMF/WMF 自动转 PNG，所以引用区和预览页里的图都能直接看</li>
         <li><b>预览渲染</b>：不靠外部 Office，直接按文档结构生成网页——标题层级、表格、图片位置都与原文档一致</li>
@@ -1266,7 +1266,7 @@ function showFirstRunTip(){
                       'border-radius:8px;color:#1e40af;font-size:13.5px;line-height:1.7;position:relative';
   bar.innerHTML = '<b>欢迎使用，三步就能开始：</b><br>' +
     '① 点上方「+ 新建知识库」，给资料起个名字<br>' +
-    '② 把 Word / PDF / PPT 拖进去，等索引跑完（几十页大约 1–2 分钟）<br>' +
+    '② 把 Word / PDF / PPT / Excel / DBF 拖进去，等索引跑完（几十页大约 1–2 分钟）<br>' +
     '③ 在下面直接提问，回答会引用你上传的资料<br>' +
     '<span style="color:#64748b;font-size:12.5px">提示：资料越全，回答越准。同一份文档重复上传不会重复占空间。</span>';
   const close = document.createElement('span');

@@ -6,7 +6,18 @@
 
 ---
 
-### 17:38（11-17） | Claude Code | `app/static/index.html`、公开仓库 `hsrag_public` | 每个知识库保留自己的聊天记录 + 公开仓库中文化/同步 | 人要求来回切知识库时问答历史跟着切换，并同步 GitHub
+### 22:42（11-17） | Claude Code | `index_docs.py`、`app/static/index.html` | 支持 DBF 表索引（纯 Python，无新依赖） | 人问“知识库能解析 dbf 文件吗”，确认后实现
+
+- 新增 `extract_dbf` + `.dbf` 注册到 `EXTRACTORS`；
+  纯 Python 解析 dBase/FoxPro 头、字段描述、定长记录，不依赖 `dbfread`；
+- 表感知输出：文件名、记录数、字段名/类型/长度；每 20 行重复表头，
+  行格式 `行N: 字段=值 | 字段=值`，避免长表分块后丢上下文；
+- 支持 C/N/F/D/L 字段，I/B/O/Y/T 二进制数值/日期时间；
+  字符值按 UTF-8 → GB18030/GBK → cp1252 顺序解码；删除标记记录跳过；
+- 尝试读取同名 `.fpt` / `.dbt` memo；解析不到时标记 `[memo 未解析]`；
+- 单表默认最多索引 20,000 行、单字段最多 500 字，超出在文本里注明；
+- 实测：GBK 中文值、日期、数值、memo、删除记录均正确；经临时库
+  `index_kb` 建索引后 chunks 含 `fund.dbf` 和中文值；UI 使用文档补上 DBF。
 
 - 主问答新增 `KB_SESSIONS`（内存）：切走时保存当前库的消息 HTML、上下文历史、
   滚动位置；切回时恢复；`resetChat` 只清当前库上下文，删除知识库时清理对应会话。
