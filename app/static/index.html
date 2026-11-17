@@ -1407,7 +1407,17 @@ async function promptRename(id){
 
 function select(k){
   const changed = !cur || cur.id !== k.id;
-  if (changed) clearAskImgs();   // 切库时清掉待发图
+  const prev = cur;
+  if (changed){
+    saveKbSession(prev);       // 先把上一个知识库的聊天记录存起来
+    clearAskImgs();            // 切库时清掉待发图
+    if (typeof askAbort !== 'undefined' && askAbort){
+      try { askAbort.abort(); } catch(e){}
+      askAbort = null;
+    }
+    curMsgEl = null;
+    curOwner = '';
+  }
   cur = k;
   $('#curName').textContent = k.name;
   const st = k.status === 'indexing' ? '索引中…'
@@ -1422,21 +1432,7 @@ function select(k){
     ? `向「${k.name}」提问`
     : `向「${k.name}」提问，可接着追问`;
   syncIndexState(k);   // 首次建库未完成时禁用提问，并显示索引进度
-  if (changed){
-    resetChat(true);                       // 清掉当前知识库的上下文
-    if (typeof askAbort !== 'undefined' && askAbort){
-      try { askAbort.abort(); } catch(e){}
-      askAbort = null;
-    }
-    const box = $('#chat');
-    if (box){
-      box.innerHTML = '';                  // 旧知识库的消息不要留在界面上
-      addMsg('assistant', '已切换到「' + esc(k.name) + '」，之前的对话已清空。');
-    }
-  }
-  // 清除残留的"请选择知识库"空提示
-  const empty = $('#chat .empty');
-  if (empty) empty.remove();
+  if (changed) restoreKbSession(k);   // 恢复这个库上次的聊天记录
   renderKbs();
   if (!k.chunk_count && k.status !== 'indexing' && k.index_status !== 'failed'
       && k.index_status !== 'interrupted'){
@@ -1491,7 +1487,14 @@ async function createKb(){
 async function delKb(id){
   if (!confirm('删除该知识库及其索引?')) return;
   await api('/api/kb/' + id, { method:'DELETE' });
-  if (cur && cur.id === id) cur = null;
+  delete KB_SESSIONS[id];
+  if (cur && cur.id === id){
+    cur = null;
+    chatHistory = [];
+    syncNewChatBtn();
+    const box = $('#chat');
+    if (box) box.innerHTML = '<div class="empty">← 在左侧选择或新建一个知识库,然后开始提问</div>';
+  }
   await loadKbs();
   if (!cur){ $('#curName').textContent='未选择知识库'; $('#curMeta').textContent=''; $('#q').disabled = true; }
 }
@@ -2022,6 +2025,44 @@ function renderWebRefs(refs){
 // 默认**关闭** —— 交付场景里大部分问法是独立提问，带上旧对话只会让答案跑偏
 let chatHistory = [];
 let ctxOn = false;
+
+// 每个知识库保留自己的聊天记录（消息 DOM + 上下文），来回切换时恢复。
+// 只存在当前页面内存里：刷新页面后清空，和原来的“上下文默认关闭”一致。
+const KB_SESSIONS = {};
+function syncNewChatBtn(){
+  const n = chatHistory.length;
+  const b = $('#newChatBtn');
+  if (!b) return;
+  b.style.display = n ? 'inline-block' : 'none';
+  b.textContent = n ? `🆕 清空上文（已记 ${n} 轮）` : '🆕 新会话';
+}
+function saveKbSession(kb){
+  if (!kb || !kb.id) return;
+  const box = $('#chat');
+  KB_SESSIONS[kb.id] = {
+    html: box ? box.innerHTML : '',
+    history: (chatHistory || []).slice(),
+    scroll: box ? box.scrollTop : 0,
+  };
+}
+function restoreKbSession(kb){
+  const box = $('#chat');
+  if (!box) return;
+  const s = KB_SESSIONS[kb.id];
+  if (s && s.html){
+    box.innerHTML = s.html;
+    chatHistory = (s.history || []).slice();
+    syncNewChatBtn();
+    requestAnimationFrame(() => {
+      box.scrollTop = s.scroll || box.scrollHeight;
+    });
+  } else {
+    box.innerHTML = '<div class="empty">已切换到「' + esc(kb.name) + '」，可以开始提问</div>';
+    chatHistory = [];
+    syncNewChatBtn();
+    box.scrollTop = 0;
+  }
+}
 function syncCtxBtn(){
   const b = $('#ctxBtn');
   if (!b) return;
@@ -2069,8 +2110,13 @@ function toggleCtx(){
 function resetChat(silent){
   const n = chatHistory.length;
   chatHistory = [];
+  if (cur && KB_SESSIONS[cur.id]){
+    KB_SESSIONS[cur.id].history = [];
+    const box0 = $('#chat');
+    if (box0) KB_SESSIONS[cur.id].html = box0.innerHTML;
+  }
   clearAskImgs();          // 换话题时把还没发出去的图清掉，避免误带进下一个问题
-  const b = $('#newChatBtn'); if (b) b.style.display = 'none';
+  syncNewChatBtn();
   // 点"清空上文"后必须给个反馈，否则按钮一点就消失，像是坏了
   const box = $('#chat');
   if (!silent && n && box){
