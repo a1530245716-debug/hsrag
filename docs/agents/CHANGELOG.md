@@ -17,6 +17,8 @@
   命中后滚动到所在段落上下文并高亮，找不到才退回命中卡片并明确提示。
 - 本地实测：docx 标题生成 1 条目录、pptx 15 条；两类都出现 mark；
   点击目录第 2 项 active 正确；页面无 JS 错误。
+- 11:00 修复：`surroundContents` 在 Word 加粗 run / 部分文本节点上会抛异常，
+  改用 `extractContents + insertNode`；复测“设置截图”在 docx 中 mark=1。
 
 ---
 

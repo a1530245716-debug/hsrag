@@ -2279,7 +2279,10 @@ def _preview_html(kb_id, path, name, content_html, kind, size=None, hl=""):
           range.setStart(a.node, a.off);
           range.setEnd(b.node, b.off);
           var mark = document.createElement('mark');
-          range.surroundContents(mark);
+          // extractContents 能处理 Word 拆 run / 跨 <b> 的情况；
+          // surroundContents 在部分选中非文本节点时会抛异常。
+          mark.appendChild(range.extractContents());
+          range.insertNode(mark);
           return mark;
         }} catch(e) {{ return null; }}
       }}
