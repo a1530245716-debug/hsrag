@@ -6,6 +6,20 @@
 
 ---
 
+### 10:23（11-18） | Claude Code | `app/system_settings.py`（新增）、`app/server.py`、`app/static/index.html` | 管理员系统参数：首次注册默认权限 + 默认共享知识库 | 人要求不做每次开发调整
+
+- 新增 `data/system_settings.json`（运行时数据，Docker 卷持久化），
+  不写只读的 `config.json`；支持原子写；
+- 默认注册权限：`kb=true, defense=false`（未配置时）；
+- 默认共享知识库：未配置时沿用业务手册；可多选，全部不选 = 不自动分配；
+- 管理员「⚙ 更多 → 系统参数设置」：知识库/模拟答辩多选、知识库多选，
+  `/api/admin/settings` GET/POST；
+- `/api/register` 用配置初始化 perms 并共享配置的库；管理员建号仍按表单权限；
+- 本地实测：设置 kb+defense+业务手册 → 注册新账号 perms 正确、`/api/kb` 能看到共享库；
+  UI 保存成功；测试账号已删除、测试设置文件已清理。
+
+---
+
 ### 23:13（11-17） | Claude Code | `app/server.py`、`app/static/index.html`、`app/config.example.json` | 支持 zip 批量上传 + 多文件并行上传/减少 fsync | 人确认 A+C 都做
 
 - **A：/api/kb/{id}/upload_zip**：流式接收 zip，安全解压到 upload；

@@ -132,6 +132,8 @@ python eval/run_eval.py
   多用户上传/建库没有全局锁；rerank 并发 1、问答全局 6/单用户 2 是资源限流，超限返回 429；
 - 上传支持 zip 批量导入（安全解压、路径穿越/zip bomb 限制）；多文件默认 2–3 路并行；
   `upload.fsync` 默认 false，追求速度；需要强持久化可改为 true；
+- 首次注册默认权限/默认共享知识库由管理员「系统参数设置」维护，
+  存 `/opt/rag/data/system_settings.json`（运行时数据卷）；
 - OCR 未装（rapidocr/opencv）：业务手册的 OCR 已进 chunks；重新索引扫描件需另加依赖；
 - RAGFlow/阶段 2 不在本机：需要新 VM + Docker 24+ + 32GB 可用内存 + 500GB 磁盘。
 

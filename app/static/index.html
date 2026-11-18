@@ -542,6 +542,7 @@
           <div onclick="openDoc();closeMoreMenu()">📖 使用文档</div>
           <div onclick="openMyKey();closeMoreMenu()">🔑 我的大模型 Key</div>
           <div id="llmCfgItem" style="display:none" onclick="openLlmCfg();closeMoreMenu()">🤖 大模型设置（全局）</div>
+          <div id="sysCfgItem" style="display:none" onclick="openSysCfg();closeMoreMenu()">⚙ 系统参数设置</div>
 <div id="demoModeItem" onclick="toggleDemoMode();closeMoreMenu()">🧪 演示模式（不走缓存）</div>
 <div onclick="clearAnswerCache()">🧹 清空答案缓存</div>
           <div class="sep"></div>
@@ -593,6 +594,35 @@
     <div id="filesSummary" style="font-size:12.5px;color:var(--muted);margin:-4px 0 8px"></div>
     <div id="filesList" style="overflow:auto;flex:1;border:1px solid var(--line);border-radius:8px"></div>
     <div class="foot"><button class="btn" onclick="closeFiles()">关闭</button></div>
+  </div>
+</div>
+
+<!-- 系统参数设置(仅管理员) -->
+<div class="modal" id="sysCfgModal">
+  <div class="card" style="width:min(640px,94vw)">
+    <h3>系统参数设置</h3>
+    <div class="field">
+      <label>首次注册默认权限（可多选）</label>
+      <label style="display:inline-flex;align-items:center;gap:6px;margin-right:18px;font-weight:400">
+        <input type="checkbox" id="sysPermKb"> 知识库
+      </label>
+      <label style="display:inline-flex;align-items:center;gap:6px;font-weight:400">
+        <input type="checkbox" id="sysPermDefense"> 模拟答辩
+      </label>
+    </div>
+    <div class="field">
+      <label>首次注册默认只读共享的知识库</label>
+      <div id="sysKbList" style="max-height:280px;overflow:auto;border:1px solid var(--line);
+           border-radius:8px;padding:8px;font-weight:400"></div>
+      <div style="font-size:12px;color:var(--muted);margin-top:6px">
+        全部不选 = 不自动分配；未设置过时默认业务手册。
+      </div>
+    </div>
+    <div id="sysCfgMsg" style="font-size:12.5px;min-height:20px"></div>
+    <div class="foot">
+      <button class="btn" onclick="closeSysCfg()">取消</button>
+      <button class="btn primary" onclick="saveSysCfg()">保存</button>
+    </div>
   </div>
 </div>
 
@@ -1294,6 +1324,8 @@ function renderMe(){
   // 全局大模型设置会改到所有人，只给管理员看
   const lc = $('#llmCfgItem');
   if (lc) lc.style.display = isAdmin ? 'block' : 'none';
+  const sc = $('#sysCfgItem');
+  if (sc) sc.style.display = isAdmin ? 'block' : 'none';
   // 管理员: 知识库列表里显示归属
   window.__isAdmin = isAdmin;
 }
@@ -1791,6 +1823,52 @@ async function openKbFiles(id){
     $('#filesList').innerHTML = h;
   }catch(e){
     $('#filesList').innerHTML = '<div style="padding:18px;color:#b91c1c">⚠️ ' + esc(e.message) + '</div>';
+  }
+}
+
+// ---- 系统参数设置（仅管理员） ----
+function closeSysCfg(){ $('#sysCfgModal').classList.remove('show'); }
+async function openSysCfg(){
+  $('#sysCfgModal').classList.add('show');
+  $('#sysCfgMsg').textContent = '';
+  $('#sysKbList').innerHTML = '<div style="color:var(--muted)">加载中…</div>';
+  try{
+    const [s, kd] = await Promise.all([
+      api('/api/admin/settings'),
+      api('/api/kb', {cache:'no-store'})
+    ]);
+    if (!s || !s.ok) throw new Error((s && s.msg) || '读取设置失败');
+    const perms = (s.registration || {}).perms || {};
+    $('#sysPermKb').checked = !!perms.kb;
+    $('#sysPermDefense').checked = !!perms.defense;
+    const effective = new Set(s.effective_kb_ids || []);
+    const list = ((kd && kd.kbs) || []).filter(k => k.name);
+    $('#sysKbList').innerHTML = list.length ? list.map(k =>
+      `<label style="display:flex;align-items:center;gap:8px;padding:5px 4px;font-weight:400">
+         <input type="checkbox" value="${esc(k.id)}" ${effective.has(k.id) ? 'checked' : ''}>
+         <span>${esc(k.name)}${k.readonly ? '（只读分享）' : ''}</span>
+       </label>`).join('') : '<div style="color:var(--muted);padding:6px">暂无知识库</div>';
+  }catch(e){
+    $('#sysKbList').innerHTML = '<div style="color:#b91c1c;padding:6px">' + esc(e.message) + '</div>';
+  }
+}
+async function saveSysCfg(){
+  const kb = !!$('#sysPermKb').checked;
+  const defense = !!$('#sysPermDefense').checked;
+  const ids = Array.from(document.querySelectorAll('#sysKbList input:checked')).map(x => x.value);
+  const msg = $('#sysCfgMsg');
+  msg.textContent = '保存中…'; msg.style.color = 'var(--muted)';
+  try{
+    const r = await api('/api/admin/settings', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({kb, defense, kb_ids: ids})
+    });
+    if (!r || !r.ok) throw new Error((r && r.msg) || '保存失败');
+    msg.textContent = '✅ 已保存，后续新注册账号按此分配。';
+    msg.style.color = '#047857';
+  }catch(e){
+    msg.textContent = '⚠️ ' + e.message;
+    msg.style.color = '#b91c1c';
   }
 }
 

@@ -21,7 +21,7 @@ from pydantic import BaseModel
 
 APP_DIR = Path(__file__).parent
 sys.path.insert(0, str(APP_DIR))
-import indexer, kb, llm, auth, fallback, planner, users, qa_log, cache, imgserve, mailer
+import indexer, kb, llm, auth, fallback, planner, users, qa_log, cache, imgserve, mailer, system_settings
 # 阶段 3：检索内核抽象。业务层只认 backend.retrieve，底下换 BM25/RAGFlow/Mock 都不改这里。
 import backend
 
@@ -838,16 +838,13 @@ def register_domains_set(request: Request, domains: str = ""):
 _DEFAULT_SHARE_LOCK = threading.Lock()
 
 
-def _grant_manual_kb(uid):
-    """把「业务手册（O32/资管培训）」只读共享给指定用户。"""
+def _grant_kb(uid, kid):
+    """把指定知识库只读共享给用户（已是 owner 或已共享则跳过）。"""
     uid = str(uid or "")
-    if not uid:
+    kid = str(kid or "")
+    if not uid or not kid:
         return
     try:
-        import defense_coach
-        kid = defense_coach.manual_kb_id()
-        if not kid:
-            return
         with _DEFAULT_SHARE_LOCK:
             kb_ = indexer.get_kb(kid)
             if not kb_ or kb_.get("owner") == uid:
@@ -859,14 +856,33 @@ def _grant_manual_kb(uid):
             users.set_shared_with(kb_, ids)
             indexer._update_registry(kb_)
     except Exception as e:
-        print(f"[users] 默认知识库分享失败: {e}", file=sys.stderr)
+        print(f"[users] 默认知识库分享失败({kid}): {e}", file=sys.stderr)
 
 
-def _share_default_kb(user):
-    """新账号默认只读共享「业务手册（O32/资管培训）」。"""
+def _grant_manual_kb(uid):
+    """把「业务手册（O32/资管培训）」只读共享给指定用户。"""
+    try:
+        import defense_coach
+        _grant_kb(uid, defense_coach.manual_kb_id())
+    except Exception as e:
+        print(f"[users] 默认手册分享失败: {e}", file=sys.stderr)
+
+
+def _share_default_kb(user, kb_ids=None):
+    """新账号默认只读共享哪些库；未配置时沿用业务手册。"""
     if not user or users.is_admin(user):
         return
-    _grant_manual_kb(user.get("id"))
+    if kb_ids is None:
+        kb_ids = system_settings.registration_defaults().get("kb_ids")
+    if kb_ids is None:
+        try:
+            import defense_coach
+            kid = defense_coach.manual_kb_id()
+            kb_ids = [kid] if kid else []
+        except Exception:
+            kb_ids = []
+    for kid in kb_ids:
+        _grant_kb(user.get("id"), kid)
 
 
 @app.post("/api/register")
@@ -889,12 +905,14 @@ def register(body: RegisterIn, response: Response):
         okc, msgc = mailer.verify(email, body.code)
         if not okc:
             return JSONResponse({"ok": False, "msg": msgc}, status_code=401)
+    defs = system_settings.registration_defaults()
     try:
         u = users.create_account(email, body.password, name=body.name or email,
-                                 role="user", note="自助注册")
+                                 role="user", note="自助注册",
+                                 perms=defs.get("perms"))
     except ValueError as e:
         return JSONResponse({"ok": False, "msg": str(e)}, status_code=400)
-    _share_default_kb(u)
+    _share_default_kb(u, defs.get("kb_ids"))
     tk = auth.make_token(u["id"], acfg["ttl"])
     response.set_cookie(value=tk, **auth.cookie_kwargs(acfg["ttl"]))
     # token 也要回给前端（和 /api/login 一致）：前端把它存 sessionStorage，
@@ -1020,6 +1038,12 @@ class UserPatch(BaseModel):
     perms: dict = None           # 管理员改入口权限
 
 
+class SysSettingsIn(BaseModel):
+    kb: bool = True              # 首次注册默认知识库权限
+    defense: bool = False        # 首次注册默认模拟答辩权限
+    kb_ids: list = []            # 首次注册自动只读共享的知识库
+
+
 def _require_admin(request: Request):
     u = _user_of(request)
     if not u:
@@ -1080,6 +1104,43 @@ def users_create(body: UserIn, request: Request):
     if (body.perms or {}).get("defense"):
         _grant_manual_kb(nu["id"])
     return {"ok": True, "user": nu}
+
+
+@app.get("/api/admin/settings")
+def admin_settings_get(request: Request):
+    u, err = _require_admin(request)
+    if err:
+        return err
+    s = system_settings.load()
+    reg = s["registration"]
+    manual = ""
+    try:
+        import defense_coach
+        manual = defense_coach.manual_kb_id() or ""
+    except Exception:
+        pass
+    effective = reg["kb_ids"] if reg["kb_ids"] is not None else ([manual] if manual else [])
+    return {"ok": True, "registration": reg, "manual_kb_id": manual,
+            "effective_kb_ids": effective}
+
+
+@app.post("/api/admin/settings")
+def admin_settings_set(body: SysSettingsIn, request: Request):
+    u, err = _require_admin(request)
+    if err:
+        return err
+    ids = []
+    for x in (body.kb_ids or []):
+        kid = str(x or "").strip()
+        if kid and kid not in ids and indexer.get_kb(kid):
+            ids.append(kid)
+    out = system_settings.save({
+        "registration": {
+            "perms": {"kb": bool(body.kb), "defense": bool(body.defense)},
+            "kb_ids": ids,
+        }
+    })
+    return {"ok": True, **out}
 
 
 @app.patch("/api/users/{uid}")
