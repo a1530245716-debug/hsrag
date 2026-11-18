@@ -15,6 +15,8 @@
 - 系统参数 UI 两块各有独立知识库多选；
 - 实测：问答关+答辩开（kb=[业务手册], defense=[etf]）新号只看到 etf；
   问答开+答辩关只看到业务手册；两者都开看到两者。
+- 13:30 已部署 `rag-bff:20261118-8c54df4` 到 10.20.154.26:8000，healthy；
+  服务端 GET 已返回 `defense_kb_ids/effective_defense_kb_ids`，UI 两个库列表正常。
 
 ---
 
