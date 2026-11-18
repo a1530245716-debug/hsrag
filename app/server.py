@@ -2119,11 +2119,11 @@ def _preview_html(kb_id, path, name, content_html, kind, size=None, hl=""):
   #nav summary { cursor:pointer; padding:3px 5px; color:#475569; border-radius:5px;
                  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   #nav summary:hover { background:#f1f5f9; }
-  #nav a.navfile { display:block; padding:4px 8px; margin-left:12px; color:#334155;
+  #nav a.navlink { display:block; padding:4px 8px; margin:1px 0; color:#334155;
                    text-decoration:none; border-radius:5px; white-space:nowrap;
                    overflow:hidden; text-overflow:ellipsis; }
-  #nav a.navfile:hover { background:#eff6ff; }
-  #nav a.navfile.active { background:#dbeafe; color:#1d4ed8; font-weight:600; }
+  #nav a.navlink:hover { background:#eff6ff; }
+  #nav a.navlink.active { background:#dbeafe; color:#1d4ed8; font-weight:600; }
   #nav .navempty { color:#94a3b8; padding:10px 6px; line-height:1.6; }
   #navBtn { display:none; background:#374151; border:0; color:#fff; border-radius:6px;
             padding:6px 10px; font-size:13px; cursor:pointer; }
@@ -2140,18 +2140,15 @@ def _preview_html(kb_id, path, name, content_html, kind, size=None, hl=""):
     main { padding:14px; }
   }
 """
-    import json as _json
     nav_script = r"""
 <script>
 (function(){
-  var KB = __KB__, CUR = __CUR__;
   var nav = document.getElementById('nav');
   var mask = document.getElementById('navMask');
   var body = document.getElementById('navBody');
   var count = document.getElementById('navCount');
   function esc(v){ return String(v == null ? '' : v).replace(/&/g,'&amp;')
     .replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-  function norm(p){ return String(p || '').replace(/\\/g,'/').replace(/^\/+/,''); }
   function toggle(open){
     nav.classList.toggle('open', open);
     mask.classList.toggle('show', open);
@@ -2159,59 +2156,73 @@ def _preview_html(kb_id, path, name, content_html, kind, size=None, hl=""):
   var btn = document.getElementById('navBtn');
   if (btn) btn.onclick = function(){ toggle(!nav.classList.contains('open')); };
   mask.onclick = function(){ toggle(false); };
-  function renderNode(node){
-    var html = '';
-    Object.keys(node.dirs).sort().forEach(function(d){
-      html += '<details open><summary>📁 ' + esc(d) + '</summary>' +
-              renderNode(node.dirs[d]) + '</details>';
-    });
-    node.files.sort(function(a,b){ return String(a.name).localeCompare(String(b.name), 'zh'); })
-      .forEach(function(f){
-        var active = norm(f.path) === norm(CUR) ? ' active' : '';
-        var href = '/api/kb/' + encodeURIComponent(KB) + '/file/preview?path=' +
-                   encodeURIComponent(f.path);
-        html += '<a class="navfile' + active + '" href="' + href + '" title="' +
-                esc(f.path) + '">📄 ' + esc(f.name) + '</a>';
-      });
-    return html;
+  var main = document.querySelector('main');
+  if (!main){
+    body.innerHTML = '<div class="navempty">没有正文内容。</div>';
+    return;
   }
-  function build(files){
-    var groups = {};
-    (files || []).forEach(function(f){
-      var root = f.source === '上传' ? '上传' : ('源目录 · ' + (f.root || ''));
-      if (!groups[root]) groups[root] = {dirs:{}, files:[]};
-      var node = groups[root];
-      var parts = norm(f.path).split('/');
-      parts.slice(0, -1).forEach(function(d){
-        if (!node.dirs[d]) node.dirs[d] = {dirs:{}, files:[]};
-        node = node.dirs[d];
-      });
-      node.files.push(f);
-    });
-    var html = '';
-    Object.keys(groups).sort().forEach(function(g){
-      html += '<details open><summary>📁 ' + esc(g) + '</summary>' +
-              renderNode(groups[g]) + '</details>';
-    });
-    body.innerHTML = html || '<div class="navempty">这个库还没有文件。</div>';
-    count.textContent = (files || []).length ? '(' + files.length + ')' : '';
+  var entries = [];
+  Array.from(main.querySelectorAll('h1,h2,h3,h4,h5,h6')).forEach(function(h){
+    var txt = (h.textContent || '').trim().replace(/\s+/g, ' ');
+    if (!txt) return;
+    if (!h.id) h.id = 'sec-' + (entries.length + 1);
+    entries.push({el:h, text:txt, level:parseInt(h.tagName.slice(1), 10)});
+  });
+  // PPT 有些页没有标题，用“第 N 页”作为目录项
+  Array.from(main.querySelectorAll('.slide')).forEach(function(s){
+    if (s.querySelector('h1,h2,h3,h4,h5,h6')) return;
+    var sno = s.querySelector('.sno');
+    var txt = sno ? (sno.textContent || '').trim() : '';
+    if (!txt) return;
+    if (!s.id) s.id = 'slide-' + (entries.length + 1);
+    entries.push({el:s, text:txt, level:6});
+  });
+  if (!entries.length){
+    body.innerHTML = '<div class="navempty">这份文档没有识别到标题。' +
+      'PDF/图片，或没有使用标题样式的文本，暂不支持文档目录。</div>';
+    count.textContent = '';
+    return;
   }
-  var tok = '';
-  try { tok = sessionStorage.getItem('rag.token') || ''; } catch(e){}
-  var opt = {credentials:'same-origin'};
-  if (tok) opt.headers = {'X-RAG-Token': tok};
-  fetch('/api/kb/' + encodeURIComponent(KB) + '/files', opt)
-    .then(function(r){ return r.json(); })
-    .then(function(d){
-      if (!d || !d.ok) throw new Error((d && d.msg) || '加载失败');
-      build(d.files || []);
-    })
-    .catch(function(e){
-      body.innerHTML = '<div class="navempty">目录加载失败：' + esc(e.message) + '</div>';
+  var minLevel = Math.min.apply(null, entries.map(function(e){ return e.level; }));
+  var html = '';
+  entries.forEach(function(e, i){
+    var indent = Math.max(0, Math.min(5, e.level - minLevel));
+    e.el.style.scrollMarginTop = '70px';
+    html += '<a class="navlink" data-i="' + i + '" style="padding-left:' +
+            (8 + indent * 14) + 'px" href="#' + e.el.id + '" title="' +
+            esc(e.text) + '">' + esc(e.text.length > 80 ? e.text.slice(0, 80) + '…' : e.text) +
+            '</a>';
+  });
+  body.innerHTML = html;
+  count.textContent = '(' + entries.length + ')';
+  function active(a){
+    body.querySelectorAll('a.navlink').forEach(function(x){
+      x.classList.toggle('active', x === a);
     });
+  }
+  body.querySelectorAll('a.navlink').forEach(function(a){
+    a.addEventListener('click', function(ev){
+      ev.preventDefault();
+      var entry = entries[+a.dataset.i];
+      if (!entry) return;
+      active(a);
+      entry.el.scrollIntoView({behavior:'smooth', block:'start'});
+      if (window.innerWidth <= 820) toggle(false);
+    });
+  });
+  if ('IntersectionObserver' in window){
+    var obs = new IntersectionObserver(function(items){
+      items.forEach(function(it){
+        if (!it.isIntersecting) return;
+        var i = entries.findIndex(function(e){ return e.el === it.target; });
+        if (i >= 0) active(body.querySelector('a.navlink[data-i="' + i + '"]'));
+      });
+    }, {rootMargin:'-10% 0px -80% 0px', threshold:0});
+    entries.forEach(function(e){ obs.observe(e.el); });
+  }
 })();
 </script>
-""".replace("__KB__", _json.dumps(kb_id)).replace("__CUR__", _json.dumps(path))
+"""
     hl_block = ""
     if hl:
         hl_json = __import__("json").dumps(hl)
@@ -2224,7 +2235,7 @@ def _preview_html(kb_id, path, name, content_html, kind, size=None, hl=""):
             hl_esc = "<div class='hitext'>" + _html.escape(hl) + "</div>"
         hl_block = f"""
 <div class="hitcard" id="hitCard">
-  <div class="hitlabel">🎯 已定位到检索命中片段</div>
+  <div class="hitlabel" id="hitLabel">🎯 检索命中片段（正文中高亮）</div>
   {hl_esc}
 </div>
 <script>
@@ -2232,35 +2243,73 @@ def _preview_html(kb_id, path, name, content_html, kind, size=None, hl=""):
   try {{
     var needle = {hl_json};
     if (needle && needle.length > 3) {{
-      // 表格片段里有 |，正文可能被拆成多个单元格；按 | 和句号切成短片段再找。
+      // 表格片段里有 |，正文可能被拆成多个单元格；按 | 和句号切成短片段。
       var pieces = needle.split(/[|\\n\\r]+/)
         .concat(needle.split(/[。！？；;]/))
         .map(function(s){{ return s.trim(); }})
         .filter(function(s){{ return s.length >= 4; }});
       pieces.sort(function(a,b){{ return b.length - a.length; }});
-      var found = null, marked = 0;
       var root = document.querySelector('main') || document.body;
-      var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-      var nodes = [];
-      while (walker.nextNode()) nodes.push(walker.currentNode);
-      for (var p = 0; p < pieces.length && marked < 6; p++) {{
-        var nd = pieces[p];
-        for (var i = 0; i < nodes.length; i++) {{
-          var n = nodes[i];
-          var idx = n.nodeValue.indexOf(nd);
-          if (idx < 0) continue;
-          var span = document.createElement('mark');
-          span.textContent = nd;
-          var after = n.splitText(idx);
-          var rest = after.splitText(nd.length);
-          after.parentNode.replaceChild(span, after);
-          if (!found) found = span;
-          marked++;
-          break;
+      var blocks = Array.from(root.querySelectorAll(
+        'p,li,td,th,h1,h2,h3,h4,h5,h6,.li,.slide'));
+      if (!blocks.length) blocks = [root];
+
+      function markIn(block, frag) {{
+        var walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+        var nodes = [], text = '', n;
+        while ((n = walker.nextNode())) {{
+          nodes.push({{node:n, start:text.length}});
+          text += n.nodeValue;
+        }}
+        var idx = text.indexOf(frag);
+        if (idx < 0) return null;
+        var end = idx + frag.length;
+        function locate(pos) {{
+          for (var i = 0; i < nodes.length; i++) {{
+            var st = nodes[i].start;
+            var en = st + nodes[i].node.nodeValue.length;
+            if (pos >= st && pos <= en) return {{node:nodes[i].node, off:pos - st}};
+          }}
+          return null;
+        }}
+        var a = locate(idx), b = locate(end);
+        if (!a || !b) return null;
+        try {{
+          var range = document.createRange();
+          range.setStart(a.node, a.off);
+          range.setEnd(b.node, b.off);
+          var mark = document.createElement('mark');
+          range.surroundContents(mark);
+          return mark;
+        }} catch(e) {{ return null; }}
+      }}
+
+      var found = null, marked = 0;
+      for (var p = 0; p < pieces.length && marked < 4; p++) {{
+        var frag = pieces[p];
+        var tries = [frag];
+        if (frag.length > 120) tries.push(frag.slice(0, 120));
+        if (frag.length > 60) tries.push(frag.slice(0, 60));
+        for (var t = 0; t < tries.length && !found; t++) {{
+          var nd = tries[t].trim();
+          if (nd.length < 4) continue;
+          for (var i = 0; i < blocks.length; i++) {{
+            var m = markIn(blocks[i], nd);
+            if (m) {{ if (!found) found = m; marked++; break; }}
+          }}
         }}
       }}
-      var target = found || document.getElementById('hitCard');
-      if (target) {{ setTimeout(function(){{ target.scrollIntoView({{block:'center', behavior:'smooth'}}); }}, 120); }}
+      var lab = document.getElementById('hitLabel');
+      if (found) {{
+        var host = found.closest('p,li,td,th,h1,h2,h3,h4,h5,h6,.li,.slide') || found;
+        setTimeout(function(){{
+          host.scrollIntoView({{block:'center', behavior:'smooth'}});
+        }}, 250);
+      }} else {{
+        if (lab) lab.textContent = '🎯 检索命中片段（正文中未精确匹配，以下是原文）';
+        var card = document.getElementById('hitCard');
+        if (card) setTimeout(function(){{ card.scrollIntoView({{block:'center', behavior:'smooth'}}); }}, 150);
+      }}
     }}
   }} catch(e) {{}}
 }})();
@@ -2283,7 +2332,7 @@ def _preview_html(kb_id, path, name, content_html, kind, size=None, hl=""):
   .hitext {{ font-size:13px; color:#78350f; line-height:1.6; white-space:pre-wrap; word-break:break-word; }}
   .hcol {{ padding:2px 0; word-break:break-all; }}
   .hmark {{ color:#d97706; margin-right:4px; }}
-  mark {{ background:#fde047; padding:1px 2px; border-radius:3px; }}
+  mark {{ background:#fde047; padding:1px 2px; border-radius:3px; scroll-margin-top:80px; }}
   pre {{ background:#fff; border:1px solid #e3e6ea; border-radius:8px; padding:16px;
         font-size:13px; line-height:1.6; white-space:pre-wrap; word-break:break-word; max-height:78vh; overflow:auto; }}
   table {{ border-collapse:collapse; background:#fff; width:100%; font-size:12px; }}
@@ -2322,8 +2371,8 @@ def _preview_html(kb_id, path, name, content_html, kind, size=None, hl=""):
 </div>
 <div class="shell">
   <aside id="nav">
-    <div class="navhead">📁 目录 <span id="navCount" style="color:#94a3b8;font-weight:400"></span></div>
-    <div id="navBody" class="navempty">正在加载目录…</div>
+    <div class="navhead">📄 文档目录 <span id="navCount" style="color:#94a3b8;font-weight:400"></span></div>
+    <div id="navBody" class="navempty">正在生成目录…</div>
   </aside>
   <main>{hl_block}{content_html}</main>
 </div>

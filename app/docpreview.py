@@ -14,6 +14,7 @@
 EMF/WMF 也走同一条路自动转 PNG。
 """
 import html as _html
+import re
 from pathlib import Path
 from urllib.parse import quote
 
@@ -86,7 +87,7 @@ def _docx(fp, kb_id, doc_path):
     chunks = []
 
     def para_html(p):
-        lvl = _heading_level(p)
+        lvl = _heading_level(p) or _visual_heading(p)
         pieces = []
         # 图在 run 里：先出图，再出文字（图常单独占一段）
         for r in p.runs:
@@ -164,6 +165,39 @@ def _heading_level(p):
             return 1
     if low in ("title", "标题"):
         return 1
+    return 0
+
+
+def _visual_heading(p):
+    """没有用 Heading 样式的中文文档：靠字号/加粗/章节编号识别标题。
+
+    很多现场文档把标题做成了“16pt 加粗的 Normal 段落”，不识别的话
+    预览页就没有目录。
+    """
+    try:
+        text = (p.text or "").strip()
+    except Exception:
+        return 0
+    if not text or len(text) > 100:
+        return 0
+    runs = [r for r in p.runs if (r.text or "").strip()]
+    sizes = []
+    for r in runs:
+        try:
+            if r.font.size and r.font.size.pt:
+                sizes.append(float(r.font.size.pt))
+        except Exception:
+            pass
+    max_size = max(sizes) if sizes else 0
+    bold = bool(runs) and all(bool(r.bold) for r in runs)
+    if max_size >= 16 and bold:
+        return 2
+    if max_size >= 14 and bold:
+        return 3
+    if re.match(r"^(第[一二三四五六七八九十百0-9]+[章节部分]|"
+                r"[一二三四五六七八九十]+、|（[一二三四五六七八九十]+）)", text):
+        if bold or max_size >= 14:
+            return 3
     return 0
 
 
