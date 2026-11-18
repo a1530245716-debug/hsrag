@@ -19,6 +19,8 @@
   点击目录第 2 项 active 正确；页面无 JS 错误。
 - 11:00 修复：`surroundContents` 在 Word 加粗 run / 部分文本节点上会抛异常，
   改用 `extractContents + insertNode`；复测“设置截图”在 docx 中 mark=1。
+- 11:05 已部署 `rag-bff:20261118-15ecbd5` 到 10.20.154.26:8000，healthy；
+  服务端预览 TOC=1、mark=1；系统参数两个独立区块正常显示。
 
 ---
 
