@@ -6,6 +6,16 @@
 
 ---
 
+### 13:55（11-18） | Claude Code | `app/static/index.html` | 系统参数改为“左侧参数列表 + 右侧详情” | 人反馈参数变多后弹窗排版会飞出去
+
+- 弹窗宽度 820px、固定最大高度，左侧 2 个参数项，右侧只显示当前项；
+- 每行显示摘要（入口开/关 + 默认库个数），点开切换详情；
+- 手机端参数列表横向排列、详情在下方；
+- 保存仍是全局一次保存；以后新增参数只需加一个 `.sysrow` + `.syspane`；
+- 本地实测：2 行列表、只显示 1 个详情、切换答辩详情正常、保存成功、无 JS 错误。
+
+---
+
 ### 13:24（11-18） | Claude Code | `app/system_settings.py`、`app/server.py`、`app/static/index.html` | 问答知识库与模拟答辩的知识库权限完全分开 | 人要求两套默认库分别配置
 
 - settings 新增 `registration.defense_kb_ids`；

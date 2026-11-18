@@ -226,6 +226,26 @@
   .tmobox { background:#fffbeb; border:1px solid #fcd34d; border-radius:8px;
             padding:12px 14px; white-space:pre-wrap; line-height:1.65; }
   .waiting .wtxt { color:var(--muted); }
+  /* 系统参数：左侧列表 + 右侧详情 */
+  .sysbody { display:flex; gap:14px; min-height:0; flex:1; }
+  .sysnav { width:220px; flex:none; display:flex; flex-direction:column; gap:6px;
+            border-right:1px solid var(--line); padding-right:12px; overflow:auto; }
+  .sysrow { display:flex; flex-direction:column; align-items:flex-start; gap:3px;
+            text-align:left; border:1px solid transparent; background:#f8fafc;
+            border-radius:8px; padding:9px 10px; cursor:pointer; font-size:13px;
+            color:var(--text); font-family:inherit; }
+  .sysrow:hover { background:#eff6ff; }
+  .sysrow.active { background:#dbeafe; border-color:#bfdbfe; color:#1d4ed8; font-weight:600; }
+  .sysrow small { font-weight:400; color:var(--muted); font-size:11.5px; white-space:normal; }
+  .sysdetail { flex:1; min-width:0; overflow:auto; }
+  .syspane h4 { margin:0 0 10px; font-size:14px; }
+  @media (max-width:760px){
+    .sysbody { display:block; }
+    .sysnav { width:auto; flex-direction:row; border-right:0; padding-right:0;
+              overflow:auto; margin-bottom:10px; }
+    .sysrow { flex:1 1 50%; }
+    .sysdetail { overflow:visible; }
+  }
   /* 答案反馈 */
   .fbbox { display:flex; align-items:center; gap:8px; margin-top:10px; padding-top:10px;
            border-top:1px dashed var(--line); font-size:12.5px; color:var(--muted); }
@@ -599,30 +619,42 @@
 
 <!-- 系统参数设置(仅管理员) -->
 <div class="modal" id="sysCfgModal">
-  <div class="card" style="width:min(640px,94vw)">
+  <div class="card" style="width:min(820px,96vw);max-height:86vh;display:flex;flex-direction:column">
     <h3>系统参数设置</h3>
-    <div class="field" style="border:1px solid var(--line);border-radius:8px;padding:12px 14px">
-      <label style="font-weight:600">新账号默认知识库</label>
-      <label style="display:inline-flex;align-items:center;gap:6px;margin-right:18px;font-weight:400">
-        <input type="checkbox" id="sysPermKb"> 开通知识库入口
-      </label>
-      <div style="font-size:12.5px;color:var(--muted);margin:8px 0 6px">默认只读共享的知识库</div>
-      <div id="sysKbList" style="max-height:240px;overflow:auto;border:1px solid var(--line);
-           border-radius:8px;padding:8px;font-weight:400"></div>
-      <div style="font-size:12px;color:var(--muted);margin-top:6px">
-        只有开通知识库入口时才自动共享；全部不选 = 不分配；未设置过时默认业务手册。
+    <div class="sysbody">
+      <div class="sysnav">
+        <button class="sysrow active" data-sys="kb" onclick="selectSysSection('kb')">
+          <span>新账号默认知识库</span><small id="sysSumKb">加载中…</small>
+        </button>
+        <button class="sysrow" data-sys="defense" onclick="selectSysSection('defense')">
+          <span>新账号默认模拟答辩</span><small id="sysSumDef">加载中…</small>
+        </button>
       </div>
-    </div>
-    <div class="field" style="border:1px solid var(--line);border-radius:8px;padding:12px 14px">
-      <label style="font-weight:600">新账号默认模拟答辩</label>
-      <label style="display:inline-flex;align-items:center;gap:6px;margin-right:18px;font-weight:400">
-        <input type="checkbox" id="sysPermDefense"> 开通模拟答辩入口
-      </label>
-      <div style="font-size:12.5px;color:var(--muted);margin:8px 0 6px">答辩默认只读共享的知识库</div>
-      <div id="sysDefKbList" style="max-height:240px;overflow:auto;border:1px solid var(--line);
-           border-radius:8px;padding:8px;font-weight:400"></div>
-      <div style="font-size:12px;color:var(--muted);margin-top:6px">
-        与问答知识库分开配置；全部不选 = 不分配；未设置过时默认业务手册。
+      <div class="sysdetail">
+        <section class="syspane" data-pane="kb">
+          <h4>新账号默认知识库</h4>
+          <label style="display:inline-flex;align-items:center;gap:6px;font-weight:400">
+            <input type="checkbox" id="sysPermKb"> 开通知识库入口
+          </label>
+          <div style="font-size:12.5px;color:var(--muted);margin:10px 0 6px">默认只读共享的知识库</div>
+          <div id="sysKbList" style="max-height:260px;overflow:auto;border:1px solid var(--line);
+               border-radius:8px;padding:8px;font-weight:400"></div>
+          <div style="font-size:12px;color:var(--muted);margin-top:6px">
+            只有开通知识库入口时才自动共享；全部不选 = 不分配；未设置过时默认业务手册。
+          </div>
+        </section>
+        <section class="syspane" data-pane="defense" style="display:none">
+          <h4>新账号默认模拟答辩</h4>
+          <label style="display:inline-flex;align-items:center;gap:6px;font-weight:400">
+            <input type="checkbox" id="sysPermDefense"> 开通模拟答辩入口
+          </label>
+          <div style="font-size:12.5px;color:var(--muted);margin:10px 0 6px">答辩默认只读共享的知识库</div>
+          <div id="sysDefKbList" style="max-height:260px;overflow:auto;border:1px solid var(--line);
+               border-radius:8px;padding:8px;font-weight:400"></div>
+          <div style="font-size:12px;color:var(--muted);margin-top:6px">
+            与问答知识库分开配置；全部不选 = 不分配；未设置过时默认业务手册。
+          </div>
+        </section>
       </div>
     </div>
     <div id="sysCfgMsg" style="font-size:12.5px;min-height:20px"></div>
@@ -1844,6 +1876,27 @@ function renderKbChecks(el, list, effectiveIds){
        <span>${esc(k.name)}${k.readonly ? '（只读分享）' : ''}</span>
      </label>`).join('') : '<div style="color:var(--muted);padding:6px">暂无知识库</div>';
 }
+function selectSysSection(key){
+  document.querySelectorAll('#sysCfgModal .sysrow').forEach(r => {
+    r.classList.toggle('active', r.dataset.sys === key);
+  });
+  document.querySelectorAll('#sysCfgModal .syspane').forEach(p => {
+    p.style.display = (p.dataset.pane === key) ? 'block' : 'none';
+  });
+  if (window.innerWidth <= 760){
+    const pane = document.querySelector('#sysCfgModal .syspane[data-pane="' + key + '"]');
+    if (pane) pane.scrollIntoView({block:'nearest'});
+  }
+}
+function updateSysSummaries(){
+  const kbOn = !!($('#sysPermKb') && $('#sysPermKb').checked);
+  const defOn = !!($('#sysPermDefense') && $('#sysPermDefense').checked);
+  const kbN = document.querySelectorAll('#sysKbList input:checked').length;
+  const defN = document.querySelectorAll('#sysDefKbList input:checked').length;
+  const a = $('#sysSumKb'), b = $('#sysSumDef');
+  if (a) a.textContent = (kbOn ? '入口开' : '入口关') + ' · 默认库 ' + kbN + ' 个';
+  if (b) b.textContent = (defOn ? '入口开' : '入口关') + ' · 默认库 ' + defN + ' 个';
+}
 async function openSysCfg(){
   $('#sysCfgModal').classList.add('show');
   $('#sysCfgMsg').textContent = '';
@@ -1861,6 +1914,8 @@ async function openSysCfg(){
     const list = ((kd && kd.kbs) || []).filter(k => k.name);
     renderKbChecks($('#sysKbList'), list, s.effective_kb_ids);
     renderKbChecks($('#sysDefKbList'), list, s.effective_defense_kb_ids);
+    updateSysSummaries();
+    selectSysSection('kb');
   }catch(e){
     const msg = '<div style="color:#b91c1c;padding:6px">' + esc(e.message) + '</div>';
     $('#sysKbList').innerHTML = msg;
@@ -1882,11 +1937,13 @@ async function saveSysCfg(){
     if (!r || !r.ok) throw new Error((r && r.msg) || '保存失败');
     msg.textContent = '✅ 已保存，后续新注册账号按此分配。';
     msg.style.color = '#047857';
+    updateSysSummaries();
   }catch(e){
     msg.textContent = '⚠️ ' + e.message;
     msg.style.color = '#b91c1c';
   }
 }
+if ($('#sysCfgModal')) $('#sysCfgModal').addEventListener('change', updateSysSummaries);
 
 async function loadShareUsers(){
   const kid = $('#shareKb').value || '';
