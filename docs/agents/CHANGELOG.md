@@ -6,6 +6,21 @@
 
 ---
 
+### 16:25（11-18） | Claude Code | `app/imgindex.py`、`app/server.py`、`app/static/index.html`、`app/config.example.json` | 架构图/流程图结构化 + 明确意图展示最多 2 张 | 人拍板：最多 2 张、明确问、操作图只留文字、架构/流程/拓扑/时序都纳入
+
+- 图片新增 `role`：diagram / operation / text / decorative；从已有 `kind/summary/keywords/ocr` 推断；
+- 对 diagram 增加结构化 JSON：title/diagram_type/components/links/layers/flows/aliases/confidence，
+  检索文本包含组件、连线、流程、别名；
+- `imgindex.search_diagrams` 只检索 diagram，最多 2 张；`diagram_blocks` 供前端展示；
+- 只有问题明确命中“架构/拓扑/网络结构/部署图/流程图/时序图/数据流/组件关系”等词，
+  才把架构图加入上下文并展示；操作截图保留 OCR 文本但不展示；
+- 前端配图底部区最多 2 张，标题改为“相关架构图”；
+- `figures.enabled=true, mode=diagram_only`；服务器配置已同步；
+- 单张架构图结构化因 thinking 吃 token 曾失败，max_tokens 提到 6000 后正常；
+  业务手册 69 张图正在后台补跑结构化（可先按已有摘要展示）。
+
+---
+
 ### 14:57（11-18） | Claude Code | `app/users.py`、`app/server.py`、`app/defense_api.py`、`app/static/index.html`、`defense.html` | 用户管理的知识库分配拆成智能问答/模拟答辩 | 人要求分配知识库权限也分开
 
 - 知识库记录新增 `shared_with_defense`；`shared_with` 保留为问答；
