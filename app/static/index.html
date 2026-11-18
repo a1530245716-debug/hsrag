@@ -792,23 +792,30 @@
   <div class="card" style="width:min(720px,95vw)">
     <h3>📤 分配知识库权限</h3>
     <div style="font-size:12px;color:var(--muted);margin:-6px 0 14px;line-height:1.8">
-      把某个知识库<b>只读</b>分给多个人：他们能提问、能看引用，但<b>不能改、不能删</b>。
-      自己的库始终归自己，不受影响。
+      把某个知识库分别<b>只读</b>分给「智能问答」和「模拟答辩」用户：
+      能提问、能看引用，但不能改、不能删。两列互不影响。
     </div>
 
     <label class="f" style="display:block;font-size:12px;color:var(--muted);margin:0 0 5px">选择知识库</label>
     <select id="shareKb" onchange="loadShareUsers()" style="width:100%"></select>
 
-    <label class="f" style="display:block;font-size:12px;color:var(--muted);margin:14px 0 5px">
+    <div style="font-size:12px;color:var(--muted);margin:14px 0 5px;line-height:1.9">
       分给哪些人（可多选）
       <span style="float:right;font-weight:400">
-        <a onclick="shareSelAll(true)" style="cursor:pointer;color:var(--accent)">全选</a> ·
-        <a onclick="shareSelAll(false)" style="cursor:pointer;color:var(--accent)">清空</a>
+        问答：<a onclick="shareSelAll(true,'qa')" style="cursor:pointer;color:var(--accent)">全选</a> ·
+        <a onclick="shareSelAll(false,'qa')" style="cursor:pointer;color:var(--accent)">清空</a>
+        &nbsp; 答辩：<a onclick="shareSelAll(true,'defense')" style="cursor:pointer;color:var(--accent)">全选</a> ·
+        <a onclick="shareSelAll(false,'defense')" style="cursor:pointer;color:var(--accent)">清空</a>
       </span>
-    </label>
+    </div>
+    <div style="display:flex;gap:8px;padding:5px 10px;font-size:12px;color:var(--muted);
+         border:1px solid var(--line);border-bottom:0;border-radius:8px 8px 0 0;background:#f8fafc">
+      <span style="flex:1">用户</span><span style="width:70px;text-align:center">智能问答</span>
+      <span style="width:70px;text-align:center">模拟答辩</span>
+    </div>
     <div id="shareUsers"
-         style="max-height:38vh;overflow-y:auto;border:1px solid var(--line);
-                border-radius:8px;padding:6px"></div>
+         style="max-height:36vh;overflow-y:auto;border:1px solid var(--line);
+                border-radius:0 0 8px 8px;padding:6px"></div>
 
     <div id="shareMsg" style="font-size:12.5px;margin-top:10px;color:var(--accent);min-height:18px"></div>
     <div class="foot">
@@ -1778,7 +1785,8 @@ async function delUser(uid, name){
 // 只读分享：对方能提问、能看引用，但不能改名/删除/上传。
 // 权限以服务端为准（写接口会 403），这里只负责勾选界面。
 let shareKbId = '';
-let shareChecked = new Set();
+let shareCheckedQa = new Set();
+let shareCheckedDefense = new Set();
 
 function openShare(kbId){
   $('#shareModal').classList.add('show');
@@ -1797,7 +1805,7 @@ function openShare(kbId){
       }
       sel.innerHTML = list.map(k => {
         const owner = k.owner_name ? '（' + k.owner_name + '）' : '';
-        const sc = k.shared_count ? ' · 已分享 ' + k.shared_count + ' 人' : '';
+        const sc = ' · 问答 ' + (k.shared_count_qa || 0) + ' / 答辩 ' + (k.shared_count_defense || 0) + ' 人';
         return `<option value="${k.id}">${esc(k.name)}${esc(owner)}${sc}</option>`;
       }).join('');
       const prefer = (kbId && list.some(k => k.id === kbId)) ? kbId
@@ -1959,22 +1967,35 @@ async function loadShareUsers(){
     if (!kd.ok){ box.innerHTML = '<div style="padding:12px;color:#b91c1c;font-size:13px">' + esc(kd.msg || '读取失败') + '</div>'; return; }
     const kb = (kbs || []).find(k => k.id === kid) || {};
     const owner = kb.owner || '';
-    shareChecked = new Set(kd.shared_with || []);
+    shareCheckedQa = new Set(kd.shared_with || []);
+    shareCheckedDefense = new Set(kd.shared_with_defense || kd.shared_with || []);
     const users = (ud.users || []).filter(u => u.role !== 'admin' && u.id !== owner);
     if (!users.length){
       box.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:13px">没有可分配的用户（管理员本身可见全部知识库）</div>';
       return;
     }
     box.innerHTML = users.map(u => `
-      <label style="display:flex;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);cursor:pointer">
-        <input type="checkbox" data-uid="${u.id}" ${shareChecked.has(u.id) ? 'checked' : ''}>
-        <span style="flex:1">${esc(u.name)}${u.username ? ' <span style="color:var(--muted);font-weight:400">@' + esc(u.username) + '</span>' : ''}</span>
-        <span style="color:var(--muted);font-size:12px">${u.kb_count || 0} 个自有库</span>
-      </label>`).join('');
-    box.querySelectorAll('input[type=checkbox]').forEach(cb => {
+      <div style="display:flex;gap:8px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line)">
+        <span style="flex:1">${esc(u.name)}${u.username ? ' <span style="color:var(--muted);font-weight:400">@' + esc(u.username) + '</span>' : ''}
+          <span style="color:var(--muted);font-size:12px;margin-left:8px">${u.kb_count || 0} 个自有库</span></span>
+        <label style="width:70px;text-align:center;cursor:pointer">
+          <input type="checkbox" data-qa="${u.id}" ${shareCheckedQa.has(u.id) ? 'checked' : ''}>
+        </label>
+        <label style="width:70px;text-align:center;cursor:pointer">
+          <input type="checkbox" data-def="${u.id}" ${shareCheckedDefense.has(u.id) ? 'checked' : ''}>
+        </label>
+      </div>`).join('');
+    box.querySelectorAll('input[data-qa]').forEach(cb => {
       cb.onchange = () => {
-        if (cb.checked) shareChecked.add(cb.dataset.uid);
-        else shareChecked.delete(cb.dataset.uid);
+        if (cb.checked) shareCheckedQa.add(cb.dataset.qa);
+        else shareCheckedQa.delete(cb.dataset.qa);
+        syncShareCount();
+      };
+    });
+    box.querySelectorAll('input[data-def]').forEach(cb => {
+      cb.onchange = () => {
+        if (cb.checked) shareCheckedDefense.add(cb.dataset.def);
+        else shareCheckedDefense.delete(cb.dataset.def);
         syncShareCount();
       };
     });
@@ -1985,18 +2006,22 @@ async function loadShareUsers(){
 }
 
 function syncShareCount(saved){
-  const n = shareChecked.size;
-  if (!n){ $('#shareMsg').textContent = '当前未分享给任何人'; return; }
+  const qa = shareCheckedQa.size, df = shareCheckedDefense.size;
+  if (!qa && !df){ $('#shareMsg').textContent = '当前未分享给任何人'; return; }
   $('#shareMsg').textContent = saved
-    ? '当前已分享给 ' + n + ' 人'
-    : '已选 ' + n + ' 人（点「保存分配」生效）';
+    ? `当前：智能问答 ${qa} 人 / 模拟答辩 ${df} 人`
+    : `已选：智能问答 ${qa} 人 / 模拟答辩 ${df} 人（点「保存分配」生效）`;
 }
 
-function shareSelAll(on){
-  $('#shareUsers').querySelectorAll('input[type=checkbox]').forEach(cb => {
+function shareSelAll(on, mode){
+  const isDef = mode === 'defense';
+  const sel = isDef ? 'input[data-def]' : 'input[data-qa]';
+  const set = isDef ? shareCheckedDefense : shareCheckedQa;
+  $('#shareUsers').querySelectorAll(sel).forEach(cb => {
     cb.checked = !!on;
-    if (on) shareChecked.add(cb.dataset.uid);
-    else shareChecked.delete(cb.dataset.uid);
+    const uid = isDef ? cb.dataset.def : cb.dataset.qa;
+    if (on) set.add(uid);
+    else set.delete(uid);
   });
   syncShareCount(false);
 }
@@ -2006,12 +2031,16 @@ async function saveShare(){
   if (!kid){ alert('请先选择知识库'); return; }
   const d = await api('/api/kb/' + encodeURIComponent(kid) + '/share', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ users: Array.from(shareChecked) })
+    body: JSON.stringify({
+      users_qa: Array.from(shareCheckedQa),
+      users_defense: Array.from(shareCheckedDefense)
+    })
   });
   if (!d.ok){ alert(d.msg || '保存失败'); return; }
-  const savedMsg = '✅ 已保存：' + (d.shared_names || '（无）');
+  const savedMsg = '✅ 已保存：问答 ' + (d.shared_names || '（无）') +
+    '；答辩 ' + (d.shared_defense_names || '（无）');
   await loadKbs();
-  await loadShareUsers();          // 刷新勾选状态和"已分享 N 人"
+  await loadShareUsers();          // 刷新勾选状态和已分享人数
   $('#shareMsg').textContent = savedMsg;
 }
 

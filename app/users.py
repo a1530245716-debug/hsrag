@@ -358,17 +358,38 @@ def resolve_owner_of_kb(kb, user):
 # 权限记在知识库记录自己的 "shared_with" 字段里（用户 id 列表），
 # 不另建表——库没了权限自然没了，不用同步清理。
 
-def shared_ids(kb):
-    """这个库分给了哪些用户（只返回存在的 id）。"""
-    raw = (kb or {}).get("shared_with") or []
+def _norm_ids(raw):
     if isinstance(raw, str):
         raw = [raw]
-    return [str(x) for x in raw if x]
+    seen, out = set(), []
+    for x in (raw or []):
+        x = str(x or "").strip()
+        if x and x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
 
 
-def can_read_kb(kb, user):
-    """能不能"看"这个库（提问、看引用）。
+def shared_ids(kb):
+    """智能问答共享给哪些用户。"""
+    return _norm_ids((kb or {}).get("shared_with"))
 
+
+def shared_defense_ids(kb):
+    """模拟答辩共享给哪些用户。
+
+    老数据没有 shared_with_defense 字段，沿用 shared_with，
+    避免升级后已分享的库在答辩里突然不可见。
+    """
+    if "shared_with_defense" not in (kb or {}) or (kb or {}).get("shared_with_defense") is None:
+        return shared_ids(kb)
+    return _norm_ids(kb.get("shared_with_defense"))
+
+
+def can_read_kb(kb, user, mode="qa"):
+    """能不能"看"这个库。
+
+    mode=qa（默认）看问答共享；mode=defense 看答辩共享。
     注意和 resolve_owner_of_kb 的区别：
     那个是"能不能改"，这个只管"能不能用"。
     """
@@ -378,16 +399,13 @@ def can_read_kb(kb, user):
         return True
     if (kb or {}).get("owner") == user.get("id"):
         return True
-    return user.get("id") in shared_ids(kb)
+    ids = shared_defense_ids(kb) if mode == "defense" else shared_ids(kb)
+    return user.get("id") in ids
 
 
-def set_shared_with(kb, user_ids):
-    """设置这个库分给谁。去重、只留字符串。"""
-    seen, out = set(), []
-    for x in (user_ids or []):
-        x = str(x or "").strip()
-        if x and x not in seen:
-            seen.add(x)
-            out.append(x)
-    kb["shared_with"] = out
+def set_shared_with(kb, user_ids, mode="qa"):
+    """设置这个库分给谁（mode=qa 问答 / defense 答辩）。"""
+    out = _norm_ids(user_ids)
+    key = "shared_with_defense" if mode == "defense" else "shared_with"
+    kb[key] = out
     return out

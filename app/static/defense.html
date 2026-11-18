@@ -471,7 +471,7 @@ async function loadKbOptions(){
   KB_REC = null; KB_REC_SEQ++; KB_USER_CHANGED = false;
   let d;
   try {
-    const r = await fetch('/api/kb', withAuth({ credentials:'same-origin' }));
+    const r = await fetch('/api/kb?mode=defense', withAuth({ credentials:'same-origin' }));
     d = await r.json();
   } catch(e){ d = { kbs: [] }; }
   const kbs = (d.kbs || []).filter(k => k.name);

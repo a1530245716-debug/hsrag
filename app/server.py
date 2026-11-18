@@ -614,7 +614,9 @@ async def auth_gate(request: Request, call_next):
                 # 这里用白名单而不是黑名单——漏写一个读接口最多是"用不了"，
                 # 漏写一个写接口就是越权，方向不能搞反。
                 if _kb_readonly_path(path):
-                    if not users.can_read_kb(kb_, request.state.user):
+                    # 只读路径对问答/答辩两种共享都放行；具体入口由业务接口再区分
+                    if not (users.can_read_kb(kb_, request.state.user) or
+                            users.can_read_kb(kb_, request.state.user, "defense")):
                         return JSONResponse(
                             {"ok": False, "msg": "无权访问该知识库（它属于其他用户）"},
                             status_code=403)
@@ -838,8 +840,8 @@ def register_domains_set(request: Request, domains: str = ""):
 _DEFAULT_SHARE_LOCK = threading.Lock()
 
 
-def _grant_kb(uid, kid):
-    """把指定知识库只读共享给用户（已是 owner 或已共享则跳过）。"""
+def _grant_kb(uid, kid, mode="qa"):
+    """把指定知识库只读共享给用户（mode=qa 问答 / defense 答辩）。"""
     uid = str(uid or "")
     kid = str(kid or "")
     if not uid or not kid:
@@ -849,14 +851,14 @@ def _grant_kb(uid, kid):
             kb_ = indexer.get_kb(kid)
             if not kb_ or kb_.get("owner") == uid:
                 return
-            ids = users.shared_ids(kb_)
+            ids = users.shared_defense_ids(kb_) if mode == "defense" else users.shared_ids(kb_)
             if uid in ids:
                 return
             ids.append(uid)
-            users.set_shared_with(kb_, ids)
+            users.set_shared_with(kb_, ids, mode=mode)
             indexer._update_registry(kb_)
     except Exception as e:
-        print(f"[users] 默认知识库分享失败({kid}): {e}", file=sys.stderr)
+        print(f"[users] 默认知识库分享失败({kid}/{mode}): {e}", file=sys.stderr)
 
 
 def _grant_manual_kb(uid):
@@ -907,7 +909,7 @@ def _share_defense_kbs(user, kb_ids=None):
         except Exception:
             kb_ids = []
     for kid in kb_ids:
-        _grant_kb(user.get("id"), kid)
+        _grant_kb(user.get("id"), kid, mode="defense")
 
 
 @app.post("/api/register")
@@ -1399,16 +1401,17 @@ def fs_drives():
 # ---------------- API: 知识库 ----------------
 
 @app.get("/api/kb")
-def kb_list(request: Request):
-    """列出知识库。管理员看全部(带归属信息), 普通用户只看自己的。"""
+def kb_list(request: Request, mode: str = "qa"):
+    """列出知识库。mode=qa 看问答共享；mode=defense 看答辩共享。"""
     u = _current_user(request)
     admin = users.is_admin(u)
+    read_mode = "defense" if mode == "defense" else "qa"
     reg = indexer.load_registry()
     owner_names = {x["id"]: x.get("name", "") for x in users.load_users()}
     out = []
     for kb_ in reg:
-        # 管理员看全部；普通用户看自己的 + 别人分享给他的
-        if not admin and not users.can_read_kb(kb_, u):
+        # 管理员看全部；普通用户看自己的 + 对应入口分享给他的
+        if not admin and not users.can_read_kb(kb_, u, read_mode):
             continue
         # 异步索引队列的真实状态在 index_status.json（indexer.get_index_status），
         # 旧的 STATUS 只覆盖 sync=True 的排障路径。不合并的话前端轮询 /api/kb
@@ -1436,7 +1439,11 @@ def kb_list(request: Request):
         # 不是自己的、又能看到 → 是别人分享的。前端据此显示"只读"标记、隐藏改名/删除
         kb_["shared"] = bool(not admin and not kb_["mine"])
         kb_["readonly"] = bool(kb_["shared"])
-        kb_["shared_count"] = len(users.shared_ids(kb_))
+        qa_ids = set(users.shared_ids(kb_))
+        def_ids = set(users.shared_defense_ids(kb_))
+        kb_["shared_count_qa"] = len(qa_ids)
+        kb_["shared_count_defense"] = len(def_ids)
+        kb_["shared_count"] = len(qa_ids | def_ids)
         out.append(kb_)
     return {"kbs": out, "is_admin": admin}
 
@@ -1511,19 +1518,21 @@ def kb_files(kb_id: str, request: Request):
     if not kb_:
         return JSONResponse({"ok": False, "msg": "知识库不存在"}, status_code=404)
     u = _current_user(request)
-    if not users.can_read_kb(kb_, u):
+    if not (users.can_read_kb(kb_, u) or users.can_read_kb(kb_, u, "defense")):
         return JSONResponse({"ok": False, "msg": "无权查看该知识库"}, status_code=403)
     r = indexer.list_kb_files(kb_id)
     return r or {"ok": False, "msg": "知识库不存在"}
 
 
 class KbShareIn(BaseModel):
-    users: list = []          # 要分享给哪些用户（id 列表，可多选；空 = 收回全部）
+    users: list = []          # 兼容旧接口：只设置问答共享
+    users_qa: list = None     # 智能问答共享
+    users_defense: list = None  # 模拟答辩共享
 
 
 @app.post("/api/kb/{kb_id}/share")
 def kb_set_share(kb_id: str, body: KbShareIn, request: Request):
-    """管理员把知识库分享给多个人（只读：能提问、能看引用，不能改）。"""
+    """管理员把知识库分别分享给问答/答辩用户（只读，不能改）。"""
     u, err = _require_admin(request)
     if err:
         return err
@@ -1531,28 +1540,37 @@ def kb_set_share(kb_id: str, body: KbShareIn, request: Request):
     if not kb_:
         return JSONResponse({"ok": False, "msg": "知识库不存在"}, status_code=404)
 
-    # 只接受真实存在的用户；顺便挡掉"分享给库的主人"这种没意义的项
-    valid, skipped = [], []
     owner = kb_.get("owner")
     all_users = {x["id"]: x for x in users.load_users()}
-    for uid in (body.users or []):
-        uid = str(uid or "").strip()
-        if not uid:
-            continue
-        if uid not in all_users:
-            skipped.append(uid)
-            continue
-        if uid == owner:
-            skipped.append(uid)
-            continue
-        if uid not in valid:
-            valid.append(uid)
+    skipped = []
 
-    users.set_shared_with(kb_, valid)
+    def clean(raw):
+        valid = []
+        for uid in (raw or []):
+            uid = str(uid or "").strip()
+            if not uid:
+                continue
+            if uid not in all_users or uid == owner:
+                skipped.append(uid)
+                continue
+            if uid not in valid:
+                valid.append(uid)
+        return valid
+
+    legacy = body.users_qa is None and body.users_defense is None
+    qa = clean(body.users if legacy else body.users_qa)
+    users.set_shared_with(kb_, qa, mode="qa")
+    if not legacy:
+        users.set_shared_with(kb_, clean(body.users_defense), mode="defense")
     indexer._update_registry(kb_)
-    names = "、".join(all_users[x].get("name", x) for x in valid) or "（无）"
-    print(f"[kb] 分享 {kb_id} -> {names} by {u.get('name')}")
-    return {"ok": True, "shared_with": valid, "shared_names": names,
+    qa_names = "、".join(all_users[x].get("name", x) for x in users.shared_ids(kb_)) or "（无）"
+    def_names = "、".join(all_users[x].get("name", x) for x in users.shared_defense_ids(kb_)) or "（无）"
+    print(f"[kb] 分享 {kb_id} 问答={qa_names} 答辩={def_names} by {u.get('name')}")
+    return {"ok": True,
+            "shared_with": users.shared_ids(kb_),
+            "shared_with_defense": users.shared_defense_ids(kb_),
+            "shared_names": qa_names,
+            "shared_defense_names": def_names,
             "skipped": skipped, "kb": kb_}
 
 
@@ -1563,12 +1581,16 @@ def kb_get_share(kb_id: str, request: Request):
     kb_ = indexer.get_kb(kb_id)
     if not kb_:
         return JSONResponse({"ok": False, "msg": "知识库不存在"}, status_code=404)
-    if not users.can_read_kb(kb_, u):
+    if not (users.can_read_kb(kb_, u) or users.can_read_kb(kb_, u, "defense")):
         return JSONResponse({"ok": False, "msg": "无权访问"}, status_code=403)
-    ids = users.shared_ids(kb_)
+    qa_ids = users.shared_ids(kb_)
+    def_ids = users.shared_defense_ids(kb_)
     names = {x["id"]: x.get("name", "") for x in users.load_users()}
-    return {"ok": True, "shared_with": ids,
-            "shared": [{"id": i, "name": names.get(i, i)} for i in ids],
+    return {"ok": True,
+            "shared_with": qa_ids,
+            "shared_with_defense": def_ids,
+            "shared": [{"id": i, "name": names.get(i, i)} for i in qa_ids],
+            "shared_defense": [{"id": i, "name": names.get(i, i)} for i in def_ids],
             "can_edit": users.resolve_owner_of_kb(kb_, u)}
 
 
@@ -3971,7 +3993,7 @@ async def defense_start(request: Request):
     if kb_id:
         import defense_coach
         kb_ = indexer.get_kb(kb_id)
-        if not kb_ or not users.can_read_kb(kb_, _current_user(request)):
+        if not kb_ or not users.can_read_kb(kb_, _current_user(request), "defense"):
             kb_id = defense_coach.manual_kb_id()
     else:
         import defense_coach

@@ -310,7 +310,7 @@ def recommend_kb_for_ppt(meta, user=None, cfg=None, user_key="", timeout=45):
     candidates = []
     for kb in reg:
         kid = str(kb.get("id") or "")
-        if not kid or not users.can_read_kb(kb, user):
+        if not kid or not users.can_read_kb(kb, user, "defense"):
             continue
         n = int(kb.get("chunk_count") or
                 (kb.get("stats") or {}).get("total_chunks") or 0)

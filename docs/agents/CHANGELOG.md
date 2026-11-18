@@ -6,6 +6,20 @@
 
 ---
 
+### 14:57（11-18） | Claude Code | `app/users.py`、`app/server.py`、`app/defense_api.py`、`app/static/index.html`、`defense.html` | 用户管理的知识库分配拆成智能问答/模拟答辩 | 人要求分配知识库权限也分开
+
+- 知识库记录新增 `shared_with_defense`；`shared_with` 保留为问答；
+  老数据没有 defense 字段时沿用 QA 列表，避免升级后答辩看不到已分享库；
+- `users.can_read_kb(kb,user,mode)` 支持 qa/defense；`/api/kb?mode=defense`
+  只列答辩共享，答辩页改用它；答辩 start/推荐库也按 defense 校验；
+- `/api/kb/{id}/share` GET/POST 同时返回/保存两套；
+- 用户管理「分配知识库权限」每个用户两列勾选：智能问答 / 模拟答辩；
+  问答/答辩可各选不同的人；
+- 实测：u1 只分问答、u2 只分答辩；u1 问答列表有 etf、答辩列表无；
+  u2 相反；弹窗每用户两个勾选框，无 JS 错误。
+
+---
+
 ### 13:55（11-18） | Claude Code | `app/static/index.html` | 系统参数改为“左侧参数列表 + 右侧详情” | 人反馈参数变多后弹窗排版会飞出去
 
 - 弹窗宽度 820px、固定最大高度，左侧 2 个参数项，右侧只显示当前项；
