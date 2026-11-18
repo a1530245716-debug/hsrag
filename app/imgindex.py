@@ -77,6 +77,59 @@ _SUMMARY_PROMPT = """分析这张图，按下面的 JSON 格式输出（只输�
 """
 
 
+# ---------------- 图片角色 / 架构图结构化 ----------------
+# 用户决定：只有“明确问架构/拓扑/流程”时才展示图，最多 2 张；
+# 操作演示截图保留 OCR 文字，但不展示。
+_DIAGRAM_WORDS = (
+    "架构", "拓扑", "网络结构", "网络拓扑", "应用部署", "部署图", "应用图",
+    "流程图", "时序图", "数据流", "组件关系", "调用关系", "系统结构", "系统图",
+)
+
+
+def image_role(rec: dict) -> str:
+    """从已有 kind/summary/keywords 推断图片角色，供展示策略使用。"""
+    text = " ".join([
+        str((rec or {}).get("kind") or ""),
+        str((rec or {}).get("summary") or ""),
+        str((rec or {}).get("ocr") or "")[:300],
+        " ".join(str(x) for x in ((rec or {}).get("keywords") or [])),
+    ])
+    if (rec or {}).get("useful") is False:
+        return "decorative"
+    if any(w in text for w in _DIAGRAM_WORDS):
+        return "diagram"
+    k = str((rec or {}).get("kind") or "")
+    if "截图" in k or "界面" in k:
+        return "operation"
+    return "text"
+
+
+_DIAGRAM_SYSTEM = (
+    "你是技术文档架构图分析助手。只根据图中真实存在的节点和连线输出 JSON，"
+    "不要补充图里看不到的背景知识。"
+)
+
+_DIAGRAM_PROMPT = """分析这张技术图，按下面的 JSON 输出（只输出 JSON，不要解释）：
+
+{
+  "title": "图标题（没有就写图上最显眼的系统/模块名）",
+  "diagram_type": "架构图|网络拓扑|部署图|流程图|时序图|数据流图|其他",
+  "components": [{"name": "组件名", "type": "服务/数据库/中间件/外部系统/人员/其他", "notes": "图上的关键标注"}],
+  "links": [{"from": "组件A", "to": "组件B", "label": "连线文字/协议/方向"}],
+  "layers": ["层次或分组名称"],
+  "flows": ["按图中箭头总结的一条完整流程，例如：下单请求 → 风控 → 交易网关 → 交易所"],
+  "aliases": ["用户可能用来搜这张图的说法，例如：OTrade架构图、应用架构、网络结构"],
+  "confidence": "high|medium|low"
+}
+
+要求：
+- components/links 只写图上真实出现的；看不清就不要编。
+- 连线没有文字时 label 写“箭头方向/未知”。
+- flows 按箭头方向写，最多 6 条。
+- 图里文字很多时，仍优先输出结构，不要把整段 OCR 塞进来。
+"""
+
+
 # ---------------- 基础设施 ----------------
 
 def kb_dir(kb_id: str) -> Path:
@@ -449,6 +502,185 @@ def summarize_image(data: bytes, timeout: int = 180, retries: int = 3) -> dict:
         return {}
 
 
+def extract_diagram(data: bytes, timeout: int = 180, retries: int = 2) -> dict:
+    """对架构/流程图做结构化：组件、连线、流程、别名。失败返回 {}。"""
+    try:
+        import llm
+        b64 = _to_jpeg_b64(data)
+        s = llm.llm_settings()
+        url = s["base_url"].rstrip("/") + "/v1/messages"
+        hdr = {"Authorization": f"Bearer {s['api_key']}",
+               "anthropic-version": s.get("anthropic_version", "2023-06-01"),
+               "Content-Type": "application/json"}
+        payload = {"model": s["model"], "max_tokens": 6000, "temperature": 0.2,
+                   "system": _DIAGRAM_SYSTEM,
+                   "messages": [{"role": "user", "content": [
+                       {"type": "image", "source": {"type": "base64",
+                                                   "media_type": "image/jpeg", "data": b64}},
+                       {"type": "text", "text": _DIAGRAM_PROMPT},
+                   ]}]}
+        last = ""
+        for attempt in range(retries + 1):
+            try:
+                import httpx
+                with httpx.Client(timeout=float(timeout)) as c:
+                    r = c.post(url, json=payload, headers=hdr)
+                if r.status_code != 200:
+                    last = f"HTTP {r.status_code} {r.text[:120]}"
+                    if attempt < retries:
+                        time.sleep(3 * (attempt + 1))
+                        continue
+                    break
+                j = r.json()
+                txt = "".join(b.get("text", "") for b in (j.get("content") or [])
+                              if b.get("type") == "text")
+                d = _parse_summary(txt)
+                if not isinstance(d, dict) or not d:
+                    last = f"解析不出 JSON（text {len(txt)} 字）"
+                    if attempt < retries:
+                        time.sleep(2 + attempt * 3)
+                        continue
+                    return {}
+                comps = []
+                for x in (d.get("components") or [])[:30]:
+                    if isinstance(x, dict) and str(x.get("name") or "").strip():
+                        comps.append({
+                            "name": str(x.get("name"))[:80],
+                            "type": str(x.get("type") or "")[:20],
+                            "notes": str(x.get("notes") or "")[:120],
+                        })
+                links = []
+                for x in (d.get("links") or [])[:40]:
+                    if isinstance(x, dict):
+                        a = str(x.get("from") or "").strip()
+                        b = str(x.get("to") or "").strip()
+                        if a or b:
+                            links.append({"from": a[:80], "to": b[:80],
+                                          "label": str(x.get("label") or "")[:80]})
+                return {
+                    "title": str(d.get("title") or "")[:120],
+                    "diagram_type": str(d.get("diagram_type") or "")[:24],
+                    "components": comps,
+                    "links": links,
+                    "layers": [str(x)[:40] for x in (d.get("layers") or [])][:12],
+                    "flows": [str(x)[:200] for x in (d.get("flows") or [])][:6],
+                    "aliases": [str(x)[:60] for x in (d.get("aliases") or [])][:10],
+                    "confidence": str(d.get("confidence") or "")[:10],
+                }
+            except Exception as e:
+                last = f"{type(e).__name__}: {str(e)[:100]}"
+                if attempt < retries:
+                    time.sleep(2 + attempt * 3)
+        print(f"[imgindex] 架构图结构化失败: {last}")
+        return {}
+    except Exception as e:
+        print(f"[imgindex] 架构图结构化异常: {type(e).__name__} {str(e)[:120]}")
+        return {}
+
+
+def diagram_text(v: dict) -> str:
+    """把结构化图转成可检索/可喂模型的文字。"""
+    if not isinstance(v, dict):
+        return ""
+    g = v.get("graph") or {}
+    parts = []
+    title = g.get("title") or v.get("summary") or v.get("kind") or ""
+    if title:
+        parts.append("图：" + str(title))
+    if g.get("diagram_type"):
+        parts.append("类型：" + str(g["diagram_type"]))
+    comps = [c.get("name") for c in (g.get("components") or []) if c.get("name")]
+    if comps:
+        parts.append("组件：" + "、".join(comps[:20]))
+    links = [f"{x.get('from','')}→{x.get('to','')}" +
+             (f"（{x.get('label')}）" if x.get("label") else "")
+             for x in (g.get("links") or [])]
+    if links:
+        parts.append("关系：" + "；".join(links[:20]))
+    if g.get("flows"):
+        parts.append("流程：" + "；".join(g["flows"][:6]))
+    if g.get("aliases"):
+        parts.append("别名：" + "、".join(g["aliases"][:8]))
+    if v.get("summary"):
+        parts.append("摘要：" + str(v["summary"]))
+    if v.get("keywords"):
+        parts.append("关键词：" + "、".join(str(x) for x in v["keywords"][:8]))
+    return "\n".join(parts)
+
+
+def search_diagrams(kb_id: str, query: str, topk: int = 2) -> list:
+    """按问题检索架构/流程图，最多 topk 张。返回含 url/text 的记录。"""
+    if not (query or "").strip():
+        return []
+    try:
+        d = load_index(kb_id)
+        imgs = d.get("images") or {}
+        cands = []
+        for h, v in imgs.items():
+            if not isinstance(v, dict) or v.get("useful") is False:
+                continue
+            role = v.get("role") or image_role(v)
+            if role != "diagram":
+                continue
+            text = diagram_text(v)
+            if not text:
+                continue
+            cands.append((h, v, text))
+        if not cands:
+            return []
+        import numpy as np
+        import embeddings
+        vecs = embeddings.embed_texts([query] + [t for _, _, t in cands])
+        if vecs is None:
+            raise RuntimeError("embedding unavailable")
+        qv = vecs[0]
+        qn = float(np.linalg.norm(qv)) or 1.0
+        scored = []
+        for i, (h, v, text) in enumerate(cands):
+            vv = vecs[i + 1]
+            vn = float(np.linalg.norm(vv)) or 1.0
+            sem = float(np.dot(qv, vv) / (qn * vn))
+            lexical = 1.0 if any(w in text for w in _DIAGRAM_WORDS) else 0.0
+            scored.append((sem + lexical * 0.05, h, v, text, sem))
+        scored.sort(key=lambda x: -x[0])
+        out = []
+        for score, h, v, text, sem in scored[:max(1, int(topk))]:
+            if sem < 0.28:
+                continue
+            doc = (v.get("docs") or [{}])[0]
+            out.append({
+                "hash": h,
+                "path": doc.get("path", ""),
+                "name": doc.get("name", ""),
+                "summary": v.get("summary", ""),
+                "kind": v.get("kind", ""),
+                "role": "diagram",
+                "graph": v.get("graph") or {},
+                "score": round(float(score), 3),
+                "sim": round(float(sem), 3),
+                "text": text,
+                "url": (f"/api/kb/{kb_id}/img?path={__import__('urllib.parse').parse.quote(doc.get('path',''))}"
+                        f"&name={__import__('urllib.parse').parse.quote(doc.get('name',''))}"),
+            })
+        return out
+    except Exception as e:
+        print(f"[imgindex] 架构图检索失败: {type(e).__name__} {e}")
+        return []
+
+
+def diagram_blocks(kb_id: str, query: str, topk: int = 2) -> list:
+    """给前端 figures 事件的 block：最多 2 张架构图。"""
+    ds = search_diagrams(kb_id, query, topk=topk)
+    if not ds:
+        return []
+    imgs = [{
+        "hash": d["hash"], "path": d["path"], "name": d["name"],
+        "url": d["url"], "summary": d["summary"], "kind": d["kind"],
+        "sim": d["sim"], "role": "diagram",
+    } for d in ds]
+    return [{"para_index": 0, "para": "", "images": imgs}]
+
+
 # ---------------- 建索引主流程 ----------------
 
 def _process_one(args):
@@ -456,7 +688,7 @@ def _process_one(args):
 
     返回 (hash, rec, 是否OCR, 是否摘要成功, 是否无内容)
     """
-    kb_id, h, docs, size, need_ocr, need_sum = args
+    kb_id, h, docs, size, need_ocr, need_sum, need_graph, prev = args
     try:
         import imgserve
         raw, _ext = imgserve.extract(kb_id, docs[0]["path"], docs[0]["name"])
@@ -490,11 +722,19 @@ def _process_one(args):
             else:
                 rec["summary"] = ""
 
+    role = image_role({**(prev or {}), **rec})
+    rec["role"] = role
+    if need_graph and role == "diagram":
+        g = extract_diagram(raw)
+        if g:
+            rec["graph"] = g
+            rec["role"] = "diagram"
+
     return h, rec, did_ocr, did_sum, unuseful
 
 
 def build(kb_id: str, limit: int = 0, workers: int = 6,
-          do_ocr: bool = True, do_summary: bool = True,
+          do_ocr: bool = True, do_summary: bool = True, do_graph: bool = True,
           progress=None, save_every: int = 40):
     """建图片索引，支持断点续跑。
 
@@ -521,10 +761,14 @@ def build(kb_id: str, limit: int = 0, workers: int = 6,
         prev = images.get(h) or {}
         need_ocr = do_ocr and not prev.get("ocr")
         need_sum = do_summary and not prev.get("summary")
-        if not need_ocr and not need_sum:
+        prev_role = image_role(prev)
+        need_graph = (do_graph and (need_sum or prev_role == "diagram")
+                      and not prev.get("graph"))
+        if not need_ocr and not need_sum and not need_graph:
             skip += 1
             continue
-        todo.append((kb_id, h, it["docs"], it["bytes"], need_ocr, need_sum))
+        todo.append((kb_id, h, it["docs"], it["bytes"], need_ocr, need_sum,
+                     need_graph, prev))
     say(f"本次需处理 {len(todo)} 张，已完成的跳过 {skip} 张")
 
     stat = {"total": len(items), "skip": skip, "ocr": 0, "sum": 0, "fail": 0,
@@ -582,13 +826,15 @@ def build(kb_id: str, limit: int = 0, workers: int = 6,
 
     # ---- 补跑：并发下总有几张因为网关抖动失败 ----
     # 串行、低压力地再试一遍，成功率明显更高（实测并发失败的图单独跑一次就过）。
-    retry_list = [a for a in todo if "useful" not in (images.get(a[1]) or {})]
+    retry_list = [a for a in todo
+                  if "useful" not in (images.get(a[1]) or {})
+                  or (a[6] and not (images.get(a[1]) or {}).get("graph"))]
     if retry_list:
         say(f"\n补跑 {len(retry_list)} 张并发时失败的图（串行）…")
         fixed = 0
         for n, a in enumerate(retry_list, 1):
             h, rec, did_ocr, did_sum, unuseful = _process_one(
-                (a[0], a[1], a[2], a[3], a[4], a[5]))
+                (a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]))
             if rec and "useful" in rec:
                 old = images.get(h) or {}
                 images[h] = {**old, **{k: v for k, v in rec.items() if v not in (None, "")}}
@@ -623,6 +869,8 @@ def stats(kb_id: str):
         "待处理(摘要失败)": sum(1 for v in vals if "useful" not in v),
         "有OCR": sum(1 for v in vals if v.get("ocr")),
         "有摘要": sum(1 for v in vals if v.get("summary")),
+        "架构/流程图": sum(1 for v in vals if image_role(v) == "diagram"),
+        "已结构化": sum(1 for v in vals if v.get("graph")),
         "更新时间": d.get("updated"),
     }
 

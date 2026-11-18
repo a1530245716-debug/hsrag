@@ -3449,8 +3449,11 @@ function relatedFiguresHtml(kbId, blocks){
     }
   }
   all.sort((a, b) => (Number(b.sim) || 0) - (Number(a.sim) || 0));
-  const top = all.slice(0, 8);
+  const top = all.slice(0, 2);
   if (!top.length) return '';
+  const isDiagram = top.some(im =>
+    im.role === 'diagram' ||
+    /架构|拓扑|流程|部署|时序|数据流/.test((im.kind || '') + (im.summary || '')));
   const items = top.map(im => {
     const u = figUrl(kbId, im.path, im.name);
     const cap = (im.summary || im.name || '').slice(0, 160);
@@ -3466,7 +3469,7 @@ function relatedFiguresHtml(kbId, blocks){
     </div>`;
   }).join('');
   return `<div class="figbox relfigs">
-    <div class="figlabel">📷 相关截图（来自检索到的文档，仅供参考）</div>
+    <div class="figlabel">${isDiagram ? '🏗 相关架构图（来自检索到的文档）' : '📷 相关截图（来自检索到的文档，仅供参考）'}</div>
     <div class="relfig-list">${items}</div>
   </div>`;
 }

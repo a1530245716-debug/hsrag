@@ -84,6 +84,7 @@
     ]
   },
   "figures": {
-    "enabled": false
+    "enabled": true,
+    "mode": "diagram_only"
   }
 }

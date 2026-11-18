@@ -530,6 +530,55 @@ def _figures_enabled() -> bool:
         return False
 
 
+_DIAGRAM_Q_RE = re.compile(
+    r"架构|拓扑|网络结构|网络拓扑|部署图|应用图|应用架构|流程图|时序图|"
+    r"数据流|组件关系|调用关系|系统结构|系统图")
+
+def _diagram_intent(q: str) -> bool:
+    """只有明确问架构/流程图类问题时才展示图。"""
+    return bool(_DIAGRAM_Q_RE.search(str(q or "")))
+
+
+def _append_diagram_sources(sources, kb_id, q):
+    """把命中的架构图结构化文本加入本轮上下文，最多 2 张。"""
+    if not _diagram_intent(q) or not _figures_enabled():
+        return sources
+    try:
+        import imgindex
+        ds = imgindex.search_diagrams(kb_id, q, topk=2)
+    except Exception as e:
+        print(f"[figures] 架构图上下文失败: {type(e).__name__} {e}", file=sys.stderr)
+        return sources
+    seen = {(s.get("path"), (s.get("text") or "")[:80]) for s in sources}
+    for d in ds:
+        key = (d.get("path"), (d.get("text") or "")[:80])
+        if key in seen:
+            continue
+        seen.add(key)
+        sources.append({
+            "id": "diagram-" + str(d.get("hash") or ""),
+            "path": d.get("path") or "",
+            "chunk": 0,
+            "text": d.get("text") or "",
+            "text_full": d.get("text") or "",
+            "score": d.get("score") or 0,
+            "kind": "架构图",
+            "diagram": True,
+        })
+    return sources
+
+
+def _diagram_figure_block(kb_id, q):
+    if not _diagram_intent(q) or not _figures_enabled():
+        return []
+    try:
+        import imgindex
+        return imgindex.diagram_blocks(kb_id, q, topk=2)
+    except Exception as e:
+        print(f"[figures] 架构图展示失败: {type(e).__name__} {e}", file=sys.stderr)
+        return []
+
+
 def _token_of(request: Request) -> str:
     """取请求里的 token。**请求头优先于 cookie**。
 
@@ -2662,6 +2711,7 @@ def kb_ask(kb_id: str, body: AskIn, request: Request):
         return {"ok": True, "answer": "知识库中未检索到相关内容,且大模型兜底失败。", "sources": [], "source_type": "none"}
 
     sources = _reorder_for_listing(q, _build_sources(results, kb_id=kb_id))
+    sources = _append_diagram_sources(sources, kb_id, q_eff or q)
     lcfg = llm.llm_settings(cfg)
 
     if not llm.llm_enabled(cfg=lcfg):
@@ -3184,6 +3234,7 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
             return
 
         sources = _reorder_for_listing(q_eff, _build_sources(results, kb_id=kb_id))
+        sources = _append_diagram_sources(sources, kb_id, q_eff)
         yield sse("sources", {"sources": sources,
                               "planning": {"split": plan_["split"], "queries": queries,
                                            "reason": plan_["reason"]},
@@ -3347,22 +3398,10 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
         # 这一步要 10~30 秒（每张候选图都要上传给模型核对），**不能挡在文字流前面**，
         # 所以扔到独立线程里算，文字照常先流完；算完再补推 figures。
         fig_fut = None
-        if _figures_enabled() and full and len(full) >= 60:
+        if _figures_enabled() and full and len(full) >= 60 and _diagram_intent(q_eff):
             try:
-                import imgindex
-                paths = {s.get("path") for s in (sources or []) if s.get("path")}
-                _full, _srcs, _paths, _kb = full, list(sources or []), paths, kb_id
-                _pool = _FIG_POOL
-
-                def _calc():
-                    try:
-                        return imgindex.bind_to_answer(_kb, _full, source_paths=_paths,
-                                                       sources=_srcs)
-                    except Exception as _e:
-                        print(f"[figures] 异常 {type(_e).__name__}: {_e}", file=sys.stderr)
-                        return []
-
-                fig_fut = _pool.submit(_calc)
+                _kb, _q = kb_id, q_eff
+                fig_fut = _FIG_POOL.submit(_diagram_figure_block, _kb, _q)
             except Exception as _e:
                 print(f"[figures] 提交失败 {type(_e).__name__}: {_e}", file=sys.stderr)
 
@@ -3497,6 +3536,7 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
             return
 
         sources = _reorder_for_listing(q_eff, _build_sources(results, kb_id=kb_id))
+        sources = _append_diagram_sources(sources, kb_id, q_eff)
         yield sse("sources", {"sources": sources,
                               "planning": {"split": plan_["split"], "queries": queries,
                                            "reason": plan_["reason"]},
@@ -3660,22 +3700,10 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
         # 这一步要 10~30 秒（每张候选图都要上传给模型核对），**不能挡在文字流前面**，
         # 所以扔到独立线程里算，文字照常先流完；算完再补推 figures。
         fig_fut = None
-        if _figures_enabled() and full and len(full) >= 60:
+        if _figures_enabled() and full and len(full) >= 60 and _diagram_intent(q_eff):
             try:
-                import imgindex
-                paths = {s.get("path") for s in (sources or []) if s.get("path")}
-                _full, _srcs, _paths, _kb = full, list(sources or []), paths, kb_id
-                _pool = _FIG_POOL
-
-                def _calc():
-                    try:
-                        return imgindex.bind_to_answer(_kb, _full, source_paths=_paths,
-                                                       sources=_srcs)
-                    except Exception as _e:
-                        print(f"[figures] 异常 {type(_e).__name__}: {_e}", file=sys.stderr)
-                        return []
-
-                fig_fut = _pool.submit(_calc)
+                _kb, _q = kb_id, q_eff
+                fig_fut = _FIG_POOL.submit(_diagram_figure_block, _kb, _q)
             except Exception as _e:
                 print(f"[figures] 提交失败 {type(_e).__name__}: {_e}", file=sys.stderr)
 
