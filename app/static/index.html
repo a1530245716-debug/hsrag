@@ -601,21 +601,25 @@
 <div class="modal" id="sysCfgModal">
   <div class="card" style="width:min(640px,94vw)">
     <h3>系统参数设置</h3>
-    <div class="field">
-      <label>首次注册默认权限（可多选）</label>
+    <div class="field" style="border:1px solid var(--line);border-radius:8px;padding:12px 14px">
+      <label style="font-weight:600">新账号默认知识库</label>
       <label style="display:inline-flex;align-items:center;gap:6px;margin-right:18px;font-weight:400">
-        <input type="checkbox" id="sysPermKb"> 知识库
+        <input type="checkbox" id="sysPermKb"> 开通知识库入口
       </label>
-      <label style="display:inline-flex;align-items:center;gap:6px;font-weight:400">
-        <input type="checkbox" id="sysPermDefense"> 模拟答辩
-      </label>
-    </div>
-    <div class="field">
-      <label>首次注册默认只读共享的知识库</label>
-      <div id="sysKbList" style="max-height:280px;overflow:auto;border:1px solid var(--line);
+      <div style="font-size:12.5px;color:var(--muted);margin:8px 0 6px">默认只读共享的知识库</div>
+      <div id="sysKbList" style="max-height:240px;overflow:auto;border:1px solid var(--line);
            border-radius:8px;padding:8px;font-weight:400"></div>
       <div style="font-size:12px;color:var(--muted);margin-top:6px">
-        全部不选 = 不自动分配；未设置过时默认业务手册。
+        只有开通知识库入口时才自动共享；全部不选 = 不分配；未设置过时默认业务手册。
+      </div>
+    </div>
+    <div class="field" style="border:1px solid var(--line);border-radius:8px;padding:12px 14px">
+      <label style="font-weight:600">新账号默认模拟答辩</label>
+      <label style="display:inline-flex;align-items:center;gap:6px;font-weight:400">
+        <input type="checkbox" id="sysPermDefense"> 开通模拟答辩入口
+      </label>
+      <div style="font-size:12px;color:var(--muted);margin-top:6px">
+        与知识库权限独立；模拟答辩会话和知识库依据单独管理。
       </div>
     </div>
     <div id="sysCfgMsg" style="font-size:12.5px;min-height:20px"></div>

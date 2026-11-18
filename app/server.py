@@ -869,8 +869,14 @@ def _grant_manual_kb(uid):
 
 
 def _share_default_kb(user, kb_ids=None):
-    """新账号默认只读共享哪些库；未配置时沿用业务手册。"""
+    """新账号默认只读共享哪些库；未配置时沿用业务手册。
+
+    默认共享库只服务“知识库”入口；模拟答辩权限是独立开关，
+    不应该因为给了知识库就顺带开通答辩，反之亦然。
+    """
     if not user or users.is_admin(user):
+        return
+    if not users.perms_of(user).get("kb"):
         return
     if kb_ids is None:
         kb_ids = system_settings.registration_defaults().get("kb_ids")
@@ -913,6 +919,9 @@ def register(body: RegisterIn, response: Response):
     except ValueError as e:
         return JSONResponse({"ok": False, "msg": str(e)}, status_code=400)
     _share_default_kb(u, defs.get("kb_ids"))
+    if (defs.get("perms") or {}).get("defense"):
+        # 模拟答辩是独立权限；只为答辩补上业务手册，不作为“知识库默认共享”
+        _grant_manual_kb(u["id"])
     tk = auth.make_token(u["id"], acfg["ttl"])
     response.set_cookie(value=tk, **auth.cookie_kwargs(acfg["ttl"]))
     # token 也要回给前端（和 /api/login 一致）：前端把它存 sessionStorage，
