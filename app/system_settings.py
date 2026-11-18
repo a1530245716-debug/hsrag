@@ -17,7 +17,8 @@ _LOCK = threading.RLock()
 DEFAULT = {
     "registration": {
         "perms": {"kb": True, "defense": False},
-        "kb_ids": None,
+        "kb_ids": None,              # 问答入口默认共享库
+        "defense_kb_ids": None,      # 模拟答辩默认共享库（None=业务手册）
     }
 }
 
@@ -70,6 +71,7 @@ def load():
                 "defense": bool(perms.get("defense", DEFAULT["registration"]["perms"]["defense"])),
             },
             "kb_ids": _norm_kb_ids(reg.get("kb_ids")),
+            "defense_kb_ids": _norm_kb_ids(reg.get("defense_kb_ids")),
         }
     }
 
@@ -81,6 +83,7 @@ def save(data):
         "registration": {
             "perms": {"kb": bool(perms.get("kb")), "defense": bool(perms.get("defense"))},
             "kb_ids": _norm_kb_ids(reg.get("kb_ids")),
+            "defense_kb_ids": _norm_kb_ids(reg.get("defense_kb_ids")),
         }
     }
     p = _path()

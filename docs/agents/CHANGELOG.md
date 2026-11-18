@@ -6,6 +6,18 @@
 
 ---
 
+### 13:24（11-18） | Claude Code | `app/system_settings.py`、`app/server.py`、`app/static/index.html` | 问答知识库与模拟答辩的知识库权限完全分开 | 人要求两套默认库分别配置
+
+- settings 新增 `registration.defense_kb_ids`；
+- 注册时：问答权限开 → 共享 `kb_ids`；答辩权限开 → 共享 `defense_kb_ids`；
+  两套都未配置才分别回退业务手册；
+- 管理员建号/改答辩权限也走答辩默认库，不再固定只补业务手册；
+- 系统参数 UI 两块各有独立知识库多选；
+- 实测：问答关+答辩开（kb=[业务手册], defense=[etf]）新号只看到 etf；
+  问答开+答辩关只看到业务手册；两者都开看到两者。
+
+---
+
 ### 10:56（11-18） | Claude Code | `app/server.py`、`app/docpreview.py` | 预览页改为文档标题目录 + 引用片段定位增强 | 人反馈不是文件目录，要文档大标题/小标题目录，且点开要能看命中上下文
 
 - 预览页左侧从“文件树”改为**当前文档标题树**：

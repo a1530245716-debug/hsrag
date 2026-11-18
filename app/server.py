@@ -891,6 +891,25 @@ def _share_default_kb(user, kb_ids=None):
         _grant_kb(user.get("id"), kid)
 
 
+def _share_defense_kbs(user, kb_ids=None):
+    """模拟答辩的默认依据库，和问答知识库分别配置、分别共享。"""
+    if not user or users.is_admin(user):
+        return
+    if not users.perms_of(user).get("defense"):
+        return
+    if kb_ids is None:
+        kb_ids = system_settings.registration_defaults().get("defense_kb_ids")
+    if kb_ids is None:
+        try:
+            import defense_coach
+            kid = defense_coach.manual_kb_id()
+            kb_ids = [kid] if kid else []
+        except Exception:
+            kb_ids = []
+    for kid in kb_ids:
+        _grant_kb(user.get("id"), kid)
+
+
 @app.post("/api/register")
 def register(body: RegisterIn, response: Response):
     """自助注册: 邮箱就是账号, 只允许指定域名。注册即登录。"""
@@ -919,9 +938,7 @@ def register(body: RegisterIn, response: Response):
     except ValueError as e:
         return JSONResponse({"ok": False, "msg": str(e)}, status_code=400)
     _share_default_kb(u, defs.get("kb_ids"))
-    if (defs.get("perms") or {}).get("defense"):
-        # 模拟答辩是独立权限；只为答辩补上业务手册，不作为“知识库默认共享”
-        _grant_manual_kb(u["id"])
+    _share_defense_kbs(u, defs.get("defense_kb_ids"))
     tk = auth.make_token(u["id"], acfg["ttl"])
     response.set_cookie(value=tk, **auth.cookie_kwargs(acfg["ttl"]))
     # token 也要回给前端（和 /api/login 一致）：前端把它存 sessionStorage，
@@ -1048,9 +1065,10 @@ class UserPatch(BaseModel):
 
 
 class SysSettingsIn(BaseModel):
-    kb: bool = True              # 首次注册默认知识库权限
+    kb: bool = True              # 首次注册默认知识库（问答）权限
     defense: bool = False        # 首次注册默认模拟答辩权限
-    kb_ids: list = []            # 首次注册自动只读共享的知识库
+    kb_ids: list = []            # 问答默认共享知识库
+    defense_kb_ids: list = []    # 模拟答辩默认共享知识库
 
 
 def _require_admin(request: Request):
@@ -1110,8 +1128,7 @@ def users_create(body: UserIn, request: Request):
     except ValueError as e:
         return JSONResponse({"ok": False, "msg": str(e)}, status_code=400)
     _share_default_kb(nu)
-    if (body.perms or {}).get("defense"):
-        _grant_manual_kb(nu["id"])
+    _share_defense_kbs(nu)
     return {"ok": True, "user": nu}
 
 
@@ -1129,8 +1146,11 @@ def admin_settings_get(request: Request):
     except Exception:
         pass
     effective = reg["kb_ids"] if reg["kb_ids"] is not None else ([manual] if manual else [])
+    effective_def = (reg["defense_kb_ids"] if reg.get("defense_kb_ids") is not None
+                     else ([manual] if manual else []))
     return {"ok": True, "registration": reg, "manual_kb_id": manual,
-            "effective_kb_ids": effective}
+            "effective_kb_ids": effective,
+            "effective_defense_kb_ids": effective_def}
 
 
 @app.post("/api/admin/settings")
@@ -1138,15 +1158,18 @@ def admin_settings_set(body: SysSettingsIn, request: Request):
     u, err = _require_admin(request)
     if err:
         return err
-    ids = []
-    for x in (body.kb_ids or []):
-        kid = str(x or "").strip()
-        if kid and kid not in ids and indexer.get_kb(kid):
-            ids.append(kid)
+    def _clean(raw):
+        ids = []
+        for x in (raw or []):
+            kid = str(x or "").strip()
+            if kid and kid not in ids and indexer.get_kb(kid):
+                ids.append(kid)
+        return ids
     out = system_settings.save({
         "registration": {
             "perms": {"kb": bool(body.kb), "defense": bool(body.defense)},
-            "kb_ids": ids,
+            "kb_ids": _clean(body.kb_ids),
+            "defense_kb_ids": _clean(body.defense_kb_ids),
         }
     })
     return {"ok": True, **out}
@@ -1172,7 +1195,7 @@ def users_patch(uid: str, body: UserPatch, request: Request):
     if body.perms is not None:
         out = users.set_perms(uid, body.perms)
         if out and (out.get("perms") or {}).get("defense"):
-            _grant_manual_kb(uid)
+            _share_defense_kbs(out)
         return {"ok": True, "user": out}
     out = users.update_user(uid, name=body.name or None,
                             role=body.role or None,

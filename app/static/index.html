@@ -615,11 +615,14 @@
     </div>
     <div class="field" style="border:1px solid var(--line);border-radius:8px;padding:12px 14px">
       <label style="font-weight:600">新账号默认模拟答辩</label>
-      <label style="display:inline-flex;align-items:center;gap:6px;font-weight:400">
+      <label style="display:inline-flex;align-items:center;gap:6px;margin-right:18px;font-weight:400">
         <input type="checkbox" id="sysPermDefense"> 开通模拟答辩入口
       </label>
+      <div style="font-size:12.5px;color:var(--muted);margin:8px 0 6px">答辩默认只读共享的知识库</div>
+      <div id="sysDefKbList" style="max-height:240px;overflow:auto;border:1px solid var(--line);
+           border-radius:8px;padding:8px;font-weight:400"></div>
       <div style="font-size:12px;color:var(--muted);margin-top:6px">
-        与知识库权限独立；模拟答辩会话和知识库依据单独管理。
+        与问答知识库分开配置；全部不选 = 不分配；未设置过时默认业务手册。
       </div>
     </div>
     <div id="sysCfgMsg" style="font-size:12.5px;min-height:20px"></div>
@@ -1832,10 +1835,20 @@ async function openKbFiles(id){
 
 // ---- 系统参数设置（仅管理员） ----
 function closeSysCfg(){ $('#sysCfgModal').classList.remove('show'); }
+function renderKbChecks(el, list, effectiveIds){
+  if (!el) return;
+  const eff = new Set(effectiveIds || []);
+  el.innerHTML = list.length ? list.map(k =>
+    `<label style="display:flex;align-items:center;gap:8px;padding:5px 4px;font-weight:400">
+       <input type="checkbox" value="${esc(k.id)}" ${eff.has(k.id) ? 'checked' : ''}>
+       <span>${esc(k.name)}${k.readonly ? '（只读分享）' : ''}</span>
+     </label>`).join('') : '<div style="color:var(--muted);padding:6px">暂无知识库</div>';
+}
 async function openSysCfg(){
   $('#sysCfgModal').classList.add('show');
   $('#sysCfgMsg').textContent = '';
   $('#sysKbList').innerHTML = '<div style="color:var(--muted)">加载中…</div>';
+  $('#sysDefKbList').innerHTML = '<div style="color:var(--muted)">加载中…</div>';
   try{
     const [s, kd] = await Promise.all([
       api('/api/admin/settings'),
@@ -1845,27 +1858,26 @@ async function openSysCfg(){
     const perms = (s.registration || {}).perms || {};
     $('#sysPermKb').checked = !!perms.kb;
     $('#sysPermDefense').checked = !!perms.defense;
-    const effective = new Set(s.effective_kb_ids || []);
     const list = ((kd && kd.kbs) || []).filter(k => k.name);
-    $('#sysKbList').innerHTML = list.length ? list.map(k =>
-      `<label style="display:flex;align-items:center;gap:8px;padding:5px 4px;font-weight:400">
-         <input type="checkbox" value="${esc(k.id)}" ${effective.has(k.id) ? 'checked' : ''}>
-         <span>${esc(k.name)}${k.readonly ? '（只读分享）' : ''}</span>
-       </label>`).join('') : '<div style="color:var(--muted);padding:6px">暂无知识库</div>';
+    renderKbChecks($('#sysKbList'), list, s.effective_kb_ids);
+    renderKbChecks($('#sysDefKbList'), list, s.effective_defense_kb_ids);
   }catch(e){
-    $('#sysKbList').innerHTML = '<div style="color:#b91c1c;padding:6px">' + esc(e.message) + '</div>';
+    const msg = '<div style="color:#b91c1c;padding:6px">' + esc(e.message) + '</div>';
+    $('#sysKbList').innerHTML = msg;
+    $('#sysDefKbList').innerHTML = msg;
   }
 }
 async function saveSysCfg(){
   const kb = !!$('#sysPermKb').checked;
   const defense = !!$('#sysPermDefense').checked;
   const ids = Array.from(document.querySelectorAll('#sysKbList input:checked')).map(x => x.value);
+  const defIds = Array.from(document.querySelectorAll('#sysDefKbList input:checked')).map(x => x.value);
   const msg = $('#sysCfgMsg');
   msg.textContent = '保存中…'; msg.style.color = 'var(--muted)';
   try{
     const r = await api('/api/admin/settings', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({kb, defense, kb_ids: ids})
+      body: JSON.stringify({kb, defense, kb_ids: ids, defense_kb_ids: defIds})
     });
     if (!r || !r.ok) throw new Error((r && r.msg) || '保存失败');
     msg.textContent = '✅ 已保存，后续新注册账号按此分配。';
