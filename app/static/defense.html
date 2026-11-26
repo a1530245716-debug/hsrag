@@ -261,6 +261,13 @@
   .fbkind.on { border-color:#93c5fd; background:#eff6ff; color:#1d4ed8; font-weight:600; }
   .betaTag { display:inline-block; background:#fff7ed; color:#b45309; border:1px solid #fed7aa;
              border-radius:999px; padding:2px 9px; font-size:12px; font-weight:600; margin-bottom:6px; }
+  /* 模型思考过程 */
+  .thinkbox { margin:8px 0 12px; border:1px solid #e5e7eb; border-radius:8px; background:#f8fafc;
+              font-size:12.5px; overflow:hidden; }
+  .thinkbox summary { cursor:pointer; padding:7px 10px; color:#475569; font-weight:600; }
+  .thinkbox pre { margin:0; padding:8px 10px; max-height:220px; overflow:auto;
+                  white-space:pre-wrap; word-break:break-word; color:#64748b;
+                  font-family:inherit; line-height:1.7; border-top:1px solid #eef2f7; }
 
   @media (max-width:640px){
     .dlg { padding:16px; }
@@ -281,6 +288,7 @@
     <div id="progressBar"><i></i></div>
     <span id="progText">0 / 10</span>
   </div>
+  <button class="btn ghost sm" id="thinkBtn" onclick="toggleThink()" title="开启后先展示模型思考过程（更慢）；关闭直接出答案（更快）">🧠 思考：关</button>
   <button class="btn ghost sm" onclick="openFb()" title="提建议 / 说需求">💬 反馈</button>
   <a class="btn ghost sm" href="/" onclick="return backToQa(event)" title="回到项目问答">← 返回问答</a>
 </div>
@@ -509,6 +517,25 @@ function toast(msg, ms){
   const t = $('#toast'); t.textContent = msg; t.classList.add('show');
   clearTimeout(t._h); t._h = setTimeout(()=>t.classList.remove('show'), ms || 2600);
 }
+// 思考开关：与知识库共用同一个偏好
+let thinkOn = false;
+try{ thinkOn = localStorage.getItem('rag.think') === '1'; }catch(e){}
+function syncThinkBtn(){
+  const b = $('#thinkBtn'); if (!b) return;
+  const short = window.innerWidth <= 640;
+  b.textContent = short ? (thinkOn ? '🧠开' : '🧠关')
+                        : (thinkOn ? '🧠 思考：开' : '🧠 思考：关');
+  b.classList.toggle('primary', thinkOn);
+  b.title = thinkOn ? '已开启：响应会附带模型思考过程，速度会慢一些。点一下关闭'
+                    : '已关闭：直接生成，速度更快。点一下开启看思考过程';
+}
+function toggleThink(){
+  thinkOn = !thinkOn;
+  try{ localStorage.setItem('rag.think', thinkOn ? '1' : '0'); }catch(e){}
+  syncThinkBtn();
+  toast(thinkOn ? '思考已开启：会显示模型思考过程，速度会慢一些'
+                : '思考已关闭：直接生成，速度更快');
+}
 async function api(url, opt){
   const r = await fetch(url, withAuth(opt));
   if (r.status === 401){
@@ -522,6 +549,12 @@ async function api(url, opt){
 // 等待中的状态卡：阶段文案 + 已等待秒数 + 动态进度条。
 // 大模型调用无法知道真实进度，但把“正在检索 / 正在组织问题 / 模型思考”
 // 分阶段显示出来，用户能看到页面一直在动，不会以为卡死。
+function thinkBoxHtml(t){
+  if (!t) return '';
+  return '<details class="thinkbox" open>' +
+    '<summary>🧠 模型思考过程（' + t.length + ' 字）</summary>' +
+    '<pre>' + esc(t) + '</pre></details>';
+}
 function waitHtml(sec, phases, extra){
   let text = phases[0][1];
   for (const p of phases){ if (sec >= p[0]) text = p[1]; }
@@ -718,6 +751,7 @@ async function startKeywords(){
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ keywords: kw, mode: MODE, total: KW_N,
                              difficulty: KW_DIFF,
+                             thinking: thinkOn,
                              kb_id: $('#kwKbSel').value || '' })
     });
   }catch(e){ d = { ok:false, msg:'网络错误，请重试' }; }
@@ -745,7 +779,7 @@ async function startKeywords(){
     (d.matched ? `（命中 ${d.matched} 段）` : '') +
     ` · 关键词：${esc(kw)}`;
   box.appendChild(tip);
-  showQuestion(d.question, d.no || 1);
+  showQuestion(d.question, d.no || 1, d.thinking);
 }
 
 // 知识库下拉：默认选业务手册，上传后根据 PPT 内容推荐一个（用户仍可改）
@@ -984,7 +1018,7 @@ async function startDefense(){
   const d = await api('/api/defense/start', {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ ppt_id: PPT.id, mode: MODE, total: PICK_N, kb_id: KB_ID,
-                           difficulty: DIFF })
+                           difficulty: DIFF, thinking: thinkOn })
   });
   clearInterval(tick);
   BUSY = false;
@@ -1000,7 +1034,7 @@ async function startDefense(){
   TOTAL = d.total || PICK_N;
   REVEAL_OK = (d.reveal !== false);
   box.innerHTML = '';
-  showQuestion(d.question, d.no || 1);
+  showQuestion(d.question, d.no || 1, d.thinking);
 }
 
 function updateProgress(n){
@@ -1014,14 +1048,14 @@ function markPage(t){
     '<span class="pageRef">第$1页</span>');
 }
 
-function showQuestion(q, no){
+function showQuestion(q, no, thinking){
   QNO = no;
   CURRENT_Q = q;
   const box = $('#chat');
   const div = document.createElement('div');
   div.className = 'qa';
   div.id = 'qa' + no;
-  div.innerHTML =
+  div.innerHTML = thinkBoxHtml(thinking) +
     `<div class="qhead"><span class="qno">${no}</span>
        <span class="qtag">评委提问 · 第 ${no} / ${TOTAL} 题</span></div>
      <div class="qtext">${markPage(q)}</div>`;
@@ -1088,7 +1122,8 @@ async function submitAnswer(){
 
   const d = await api('/api/defense/answer', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ session: SESSION, question: CURRENT_Q, answer: a })
+    body: JSON.stringify({ session: SESSION, question: CURRENT_Q, answer: a,
+                           thinking: thinkOn })
   });
   clearInterval(tick);
   BUSY = false;
@@ -1123,7 +1158,7 @@ async function submitAnswer(){
   REVEAL_OK = newRevealOk;
   renderAnswerActions(revealRow, QNO, newRevealOk);
 
-  showQuestion(d.question, d.no || (QNO + 1));
+  showQuestion(d.question, d.no || (QNO + 1), d.thinking);
 }
 
 // ---------------- 看参考答案 ----------------
@@ -1160,7 +1195,7 @@ async function loadReveal(holder, no){
   holder.innerHTML = waitHtml(0, phases, '答案通常已在题目出现时预生成');
   const d = await api('/api/defense/reveal', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ session: SESSION, index: no - 1 })
+    body: JSON.stringify({ session: SESSION, index: no - 1, thinking: thinkOn })
   });
   clearInterval(tick);
   if (!d.ok){
@@ -1176,7 +1211,7 @@ async function loadReveal(holder, no){
 }
 
 function revealHtml(d){
-  let h = '<div class="card">';
+  let h = thinkBoxHtml(d.thinking) + '<div class="card">';
   h += '<h4>📖 标准答案</h4><div class="body">' + esc(d.answer) + '</div>';
 
   if ((d.basis || []).length){
@@ -1242,7 +1277,7 @@ async function showReport(){
 
   const d = await api('/api/defense/report', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ session: SESSION })
+    body: JSON.stringify({ session: SESSION, thinking: thinkOn })
   });
   clearInterval(tick);
   if (!d.ok){
@@ -1342,7 +1377,7 @@ async function loadAnalysis(){
   try{
     const d = await api('/api/defense/analysis', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ session: SESSION })
+      body: JSON.stringify({ session: SESSION, thinking: thinkOn })
     });
     clearInterval(timer);
     if (!d.ok){
@@ -1442,6 +1477,7 @@ $('#fbMask').addEventListener('click', e => { if (e.target === $('#fbMask')) clo
 
 // 登录态确认后再弹提醒，避免未登录时闪一下又被重定向
 READY.then(ok => { if (ok) setTimeout(maybeBetaNotice, 400); }).catch(() => {});
+syncThinkBtn();
 </script>
 </body>
 </html>

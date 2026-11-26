@@ -536,6 +536,7 @@ def reveal(question, user_answer=None, material="", ppt=None, history=None,
     return {
         "ok": True,
         "answer": str(data.get("answer") or "").strip(),
+        "thinking": str(last_md.get("thinking") or "")[:4000],
         "basis": basis[:4],
         "key_points": [str(x) for x in (data.get("key_points") or [])][:5],
         "manual_files": manual_files[:4],
@@ -1083,7 +1084,7 @@ def _ppt_image_blocks(ppt_meta, page_no=None, limit=6):
 def next_question(material, history, user_answer=None, rtype=None,
                   cfg=None, user_key="", timeout=90, ppt=None, focus_page=None,
                   kb_id="", ctx=None, difficulty="basic",
-                  material_label=None, scene_note=""):
+                  material_label=None, scene_note="", out_meta=None):
     """生成下一个问题。
 
     history: [{"q": 问题, "a": 学员回答}]，本轮对话已发生的往来。
@@ -1184,7 +1185,7 @@ def next_question(material, history, user_answer=None, rtype=None,
     if blocks:
         content = [{"type": "text", "text": content}] + blocks
 
-    md = {}
+    md = out_meta if out_meta is not None else {}
     ans = llm.chat([{"role": "user", "content": content}],
                    cfg=cfg, system=system, timeout=timeout, user_key=user_key,
                    meta=md)

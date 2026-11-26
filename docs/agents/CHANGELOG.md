@@ -6,6 +6,30 @@
 
 ---
 
+### 17:23（11-26） | Claude Code | `app/llm.py`、`app/server.py`、`app/static/index.html`、`app/static/defense.html`、`app/defense_coach.py`、`app/defense_api.py` | 知识库 + 模拟答辩的「思考」开关与思考过程展示 | 人要求按钮控制思考；开启时展示思考过程，避免用户觉得卡；两边都要有
+
+- **知识库**：输入栏新增「🧠 思考：开/关」，默认关（按 A/B 更快），偏好存
+  `localStorage.rag.think`；`ask` 请求带 `thinking` 布尔值。
+  SSE 新增 `thinking` 事件（`text`/`reset`）；前端用可折叠 `.thinkbox` 实时展示，
+  最终答案上方保留思考过程。
+- **llm.py**：新增 `stream_events_async` + `_stream_anthropic_events_async`，
+  thinking/text 分离；重试时发 `thinking_reset`；`stream_async` 保留纯文本包装，
+  原有调用方不受影响。
+- **模拟答辩**：顶栏新增「🧠 思考：开/关」（与知识库共用偏好）；`start` /
+  `start_keywords` / `answer` / `reveal` / `report` / `analysis` 请求都带 `thinking`，
+  后端用 `_apply_thinking_choice` 覆盖 cfg。
+  答辩模型调用是非流式的：开启思考时等待卡继续显示秒数；返回后
+  `start`/`answer`/`reveal` 把捕获的 thinking 放在题目/参考答案上方展示
+  （`_chat_anthropic` 现在会把 thinking 块写进 `meta["thinking"]`）。
+  `next_question` 增加 `out_meta`；`make_question` 把 thinking 存到
+  `sess["last_thinking"]`；`reveal` 返回值增加 `thinking`。
+- 本地用 mock LLM 验证：知识库开=10 个 thinking + 4 个 text，关=0 thinking；
+  两种模式 UI 均无 JS 报错；答辩 start/answer 返回 thinking；375px 顶栏无溢出。
+- 生产未发版；默认关闭思考（A/B：6 条模块用例 5/6 对 5/6，首字 0.4~0.9s
+  vs 1.8~20.2s）。
+
+---
+
 ### 17:10（11-26） | RAG-Agent | `.dockerignore` | 修 `__pycache__` 过滤不生效，验证生产镜像可离线构建 | 本机 Docker 此前只跑 demo，生产镜像从未在本机验证过
 
 ### 问题

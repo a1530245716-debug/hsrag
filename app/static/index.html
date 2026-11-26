@@ -309,6 +309,13 @@
               max-height:150px; overflow:auto; white-space:pre-wrap; word-break:break-word; }
   .ecase .src { margin-top:6px; font-size:12px; color:var(--muted); line-height:1.8; }
   .ecase .ops { display:flex; gap:8px; justify-content:flex-end; margin-top:8px; flex-wrap:wrap; }
+  /* 模型思考过程 */
+  .thinkbox { margin:6px 0 10px; border:1px solid #e5e7eb; border-radius:8px; background:#f8fafc;
+              font-size:12.5px; overflow:hidden; }
+  .thinkbox summary { cursor:pointer; padding:7px 10px; color:#475569; font-weight:600; }
+  .thinkbox pre { margin:0; padding:8px 10px; max-height:220px; overflow:auto;
+                  white-space:pre-wrap; word-break:break-word; color:#64748b;
+                  font-family:inherit; line-height:1.7; border-top:1px solid #eef2f7; }
   /* 答案里的配图：跟在对应段落后，缩略图集 */
   .figbox { margin:10px 0 4px; }
   .figlabel { font-size:12px; color:var(--muted); margin-bottom:6px; }
@@ -619,6 +626,7 @@
     <textarea id="q" rows="1" placeholder="输入问题：Enter 发送，Shift+Enter 换行（可 Ctrl+V 贴图）" disabled></textarea>
     <button class="btn" id="ctxBtn" onclick="toggleCtx()" title="默认关闭：每次提问独立理解。开启后会把最近几轮对话带进去，方便追问">💬 上下文：关</button>
     <button class="btn" id="lenBtn" onclick="cycleLen()" title="控制回答详略：简答适合现场演示快速看结论，详细适合做资料">📏 标准</button>
+    <button class="btn" id="thinkBtn" onclick="toggleThink()" title="开启后先展示模型思考过程（更慢）；关闭直接出答案（更快）">🧠 思考：关</button>
 <button class="btn" id="newChatBtn" style="display:none" onclick="resetChat()" title="清空上下文，开始新话题">🆕 新会话</button>
     <button class="btn primary" id="sendBtn" onclick="ask()">发送</button>
   </div>
@@ -2490,6 +2498,30 @@ function cycleLen(){
   syncLenBtn();
 }
 try{ lenMode = localStorage.getItem('rag.len') || 'normal'; }catch(e){}
+// 思考开关：默认关（更快）；开启后把模型思考过程流式展示出来
+let thinkOn = false;
+try{ thinkOn = localStorage.getItem('rag.think') === '1'; }catch(e){}
+function syncThinkBtn(){
+  const b = $('#thinkBtn'); if (!b) return;
+  b.textContent = thinkOn ? '🧠 思考：开' : '🧠 思考：关';
+  b.classList.toggle('primary', thinkOn);
+  b.title = thinkOn ? '已开启：先展示模型思考过程，速度会慢一些。点一下关闭'
+                    : '已关闭：直接生成答案，速度更快。点一下开启看思考过程';
+}
+function toggleThink(){
+  thinkOn = !thinkOn;
+  try{ localStorage.setItem('rag.think', thinkOn ? '1' : '0'); }catch(e){}
+  syncThinkBtn();
+  const box = $('#chat');
+  if (box){
+    const tip = document.createElement('div');
+    tip.className = 'msg';
+    tip.innerHTML = '<div style="color:#6b7280;font-size:13px;line-height:1.7">' +
+      (thinkOn ? '🧠 思考已开启：回答前会先展示模型思考过程，速度会慢一些。'
+               : '🧠 思考已关闭：直接生成答案，速度更快。') + '</div>';
+    box.appendChild(tip); box.scrollTop = box.scrollHeight;
+  }
+}
 function toggleCtx(){
   ctxOn = !ctxOn;
   try{ localStorage.setItem('rag.ctx', ctxOn ? '1' : '0'); }catch(e){}
@@ -2588,6 +2620,29 @@ async function ask(retryQ, reuseNode, fbMode){
   // 停止/重试控件
   const ctrl = document.createElement('div');
   ctrl.style.cssText = 'margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;';
+  // 思考过程：thinkEl 在上、ansEl 在下，避免每来一个 token 就重绘整段思考
+  let text = '', thinkText = '', thinkEl = null, ansEl = null, thinkRenderAt = 0;
+  function ensureThinkAns(){
+    if (thinkEl && thinkEl.isConnected && ansEl && ansEl.isConnected) return;
+    msg.innerHTML = '';
+    thinkEl = document.createElement('div');
+    ansEl = document.createElement('div');
+    msg.appendChild(thinkEl); msg.appendChild(ansEl); msg.appendChild(ctrl);
+  }
+  function renderThink(force){
+    ensureThinkAns();
+    const now = Date.now();
+    if (!force && now - thinkRenderAt < 150) return;
+    thinkRenderAt = now;
+    thinkEl.innerHTML = thinkBoxHtml(thinkText);
+    scrollChat();
+  }
+  function renderAns(){
+    ensureThinkAns();
+    ansEl.innerHTML = (ansTimeout ? '<div class="tmobox">' : '') + md(text) +
+      (ansTimeout ? '</div>' : '') + '<span class="caret"></span>';
+    scrollChat();
+  }
   const stopBtn = document.createElement('button');
   stopBtn.className = 'btn'; stopBtn.textContent = '⏹ 停止';
   stopBtn.onclick = () => { if (askAbort && !askAbort.signal.aborted) askAbort.abort(); stopBtn.disabled = true; stopBtn.textContent = '已停止'; };
@@ -2658,6 +2713,7 @@ async function ask(retryQ, reuseNode, fbMode){
         no_cache: isRetry || demoMode(),     // 换个回答 / 演示模式：强制现算，不读缓存
         fallback_mode: fbMode || '',         // 知识库没命中时用户选的那条兜底路
         answer_len: lenMode,                 // 简答 / 标准 / 详细
+        thinking: thinkOn,                   // 前端按钮：开/关模型思考
         images: imgs}),                      // 本轮贴的图（历史轮次不带图）
       signal: ac.signal }));
     if (resp.status === 401){ showLogin('登录已过期，请重新登录'); return; }
@@ -2677,7 +2733,7 @@ async function ask(retryQ, reuseNode, fbMode){
       return;
     }
     const reader = resp.body.getReader(); const dec = new TextDecoder();
-    let text = '', buf = '', caseSources = [];   // caseSources: 点赞时随反馈提交，供评测集
+    let buf = '', caseSources = [];   // caseSources: 点赞时随反馈提交，供评测集
     while (true){
       const {done, value} = await reader.read();
       if (done) break;
@@ -2727,12 +2783,16 @@ async function ask(retryQ, reuseNode, fbMode){
             msg.innerHTML = '<span class="waiting"><span class="spin"></span> ' + esc(ev.status) + '</span>'; msg.appendChild(ctrl);
           }
         }
-        else if (ev.type === 'delta'){ firstTokenAt = firstTokenAt || Date.now(); text += ev.text; msg.innerHTML = md(text) + '<span class="caret"></span>'; msg.appendChild(ctrl); scrollChat(); }
+        else if (ev.type === 'thinking'){
+          if (ev.reset){ thinkText = ''; renderThink(true); }
+          else if (ev.text){ thinkText += ev.text; renderThink(false); }
+        }
+        else if (ev.type === 'delta'){ firstTokenAt = firstTokenAt || Date.now(); text += ev.text; renderAns(); }
         else if (ev.type === 'answer'){
           text = ev.text || '';
           ansTimeout = !!ev.timeout;
           if (ev.sources) caseSources = ev.sources;
-          msg.innerHTML = (ansTimeout ? '<div class="tmobox">' : '') + md(text) + (ansTimeout ? '</div>' : '');
+          renderAns();
           if (ev.sources) renderRefs(ev.sources);
         }
         else if (ev.type === 'qid'){ qaId = ev.id; }
@@ -2758,7 +2818,8 @@ async function ask(retryQ, reuseNode, fbMode){
     msg.appendChild(newMsg);
     // 答案配图：html 里带上每段图集，再交给 md 渲染会破坏结构，
     // 所以先渲染正文，图片再用 DOM 插到对应段落后面
-    newMsg.innerHTML = `<div class="srcbar">${badge}</div><div class="ansBody">` +
+    newMsg.innerHTML = (thinkText ? thinkBoxHtml(thinkText) : '') +
+      `<div class="srcbar">${badge}</div><div class="ansBody">` +
       (ansTimeout ? `<div class="tmobox">${md(body)}</div>` : md(body)) + `</div>` +
       (qaId ? `<div class="fbbox" data-id="${qaId}">
         <span class="fblabel">这个回答有用吗？</span>
@@ -2944,6 +3005,12 @@ $('#chat').addEventListener('click', e => {
 
 // markdown 渲染：标题 / 有序无序列表 / 表格 / 引用块 / 代码块 / 粗斜体 / 行内代码 / 链接 / 分隔线
 // 之前只把 "- " 换成 "• " 字符、不认三级标题和表格，模型输出的表格和 ### 会原样漏出来
+function thinkBoxHtml(t){
+  if (!t) return '';
+  return '<details class="thinkbox" open>' +
+    '<summary>🧠 模型思考过程（' + t.length + ' 字）</summary>' +
+    '<pre>' + esc(t) + '</pre></details>';
+}
 function md(t){
   if (!t) return '';
   // 1. 代码块先摘出来，避免里面的 # * | 被当成语法
@@ -4446,6 +4513,7 @@ async function boot(){
   refreshLlmBadge();
   syncCtxBtn();
   syncLenBtn();       // 回答详略的记忆状态
+  syncThinkBtn();     // 思考开关的记忆状态
   syncDemoItem();     // 演示模式开关的记忆状态
   syncPermsUI();
   if (!sessionStorage.getItem('rag.homePicked')) showHome();

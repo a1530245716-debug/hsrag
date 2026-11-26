@@ -132,6 +132,7 @@ class AskIn(BaseModel):
     question: str
     top_k: int = 0
     model: str = ""      # 可选覆盖配置文件里的模型
+    thinking: bool | None = None   # 前端按钮：开/关思考；None=沿用配置
     history: list = []   # 最近几轮对话 [{"q": 问, "a": 答}], 用于多轮上下文(仅存前端内存)
     no_cache: bool = False   # True = 跳过答案缓存, 强制重新检索+生成(演示用)
     fallback_mode: str = ""  # "" 正常 | "web"/"llm" 用户选了兜底来源 | "none" 用户说不用
@@ -1614,6 +1615,21 @@ def _cfg_with_user_key(request):
     um = _user_llm_model(request)
     if um:
         llmd["model"] = um
+    cfg["llm"] = llmd
+    return cfg
+
+
+def _apply_thinking_choice(cfg, choice):
+    """按前端按钮覆盖 llm.thinking；choice=None 表示沿用配置文件。"""
+    if choice is None:
+        return cfg
+    cfg = dict(cfg)
+    llmd = dict(cfg.get("llm") or {})
+    if choice:
+        budget = int(llmd.get("thinking_budget", 2048) or 2048)
+        llmd["thinking"] = {"type": "enabled", "budget_tokens": budget}
+    else:
+        llmd["thinking"] = {"type": "disabled"}
     cfg["llm"] = llmd
     return cfg
 
@@ -3254,7 +3270,8 @@ def kb_ask(kb_id: str, body: AskIn, request: Request):
     _t0 = time.time()
     # 带上当前用户自己的 key：planner（改写/拆解）和 fallback 都只吃 cfg，
     # 用同一把 key 才不会出现"主问答用自己的 key、拆解仍挤公共 key"的割裂。
-    cfg = _cfg_with_user_key(request)
+    cfg = _apply_thinking_choice(_cfg_with_user_key(request),
+                                 getattr(body, "thinking", None))
 
     # 用户主动选了「联网搜索 / 大模型本地回答」：不检索知识库、不走缓存
     fb_mode = (body.fallback_mode or "").strip().lower()
@@ -3830,7 +3847,8 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
     # 各用各的 key，就不会全挤在公司网关那 2 路通道上互相排队。
     _ukeys = _user_llm_key(request)
     # planner（改写/拆解）和 fallback 只吃 cfg，这里一并带上，避免主问答与拆解用不同 key
-    cfg = _cfg_with_user_key(request)
+    cfg = _apply_thinking_choice(_cfg_with_user_key(request),
+                                 getattr(body, "thinking", None))
 
     def sse(tag, payload):
         return f"data: {_json.dumps({'type': tag, **payload}, ensure_ascii=False)}\n\n"
@@ -4457,10 +4475,18 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
         buf = []
         got = False
         meta = {}
-        async for token in llm.stream_async(msgs, cfg=cfg, system=system, meta=meta, user_key=_ukeys):
-            got = True
-            buf.append(token)
-            yield sse("delta", {"text": token})
+        async for ev in llm.stream_events_async(msgs, cfg=cfg, system=system,
+                                                meta=meta, user_key=_ukeys):
+            _typ = ev.get("type")
+            if _typ == "thinking":
+                yield sse("thinking", {"text": ev.get("text") or ""})
+            elif _typ == "thinking_reset":
+                yield sse("thinking", {"reset": True})
+            elif _typ == "text":
+                got = True
+                token = ev.get("text") or ""
+                buf.append(token)
+                yield sse("delta", {"text": token})
 
         # 撞上单次输出上限别把半截话丢给用户——自动接着写。
         # 用户的原话是"有回答就答完呀"：答案写到一半停住，比答得长难受得多。
@@ -4478,11 +4504,18 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
             ]
             meta = {}
             try:
-                async for token in llm.stream_async(cont, cfg=cfg, system=system, meta=meta,
-                                        user_key=_ukeys):
-                    got = True
-                    buf.append(token)
-                    yield sse("delta", {"text": token})
+                async for ev in llm.stream_events_async(cont, cfg=cfg, system=system,
+                                                        meta=meta, user_key=_ukeys):
+                    _typ = ev.get("type")
+                    if _typ == "thinking":
+                        yield sse("thinking", {"text": ev.get("text") or ""})
+                    elif _typ == "thinking_reset":
+                        yield sse("thinking", {"reset": True})
+                    elif _typ == "text":
+                        got = True
+                        token = ev.get("text") or ""
+                        buf.append(token)
+                        yield sse("delta", {"text": token})
             except Exception as _e:
                 print(f"[ask] 续写失败: {_e}", file=sys.stderr)
                 break
@@ -4971,11 +5004,14 @@ async def defense_start(request: Request):
     sess = defense_api.new_session("anon", meta, mode=mode, total=total,
                                    kb_id=kb_id, difficulty=difficulty)
     q, err = await _run_blocking(defense_api.make_first_question, sess,
-                                 cfg=_cfg_with_user_key(request), user_key=ukey)
+                                 cfg=_apply_thinking_choice(
+                                     _cfg_with_user_key(request), body.get("thinking")),
+                                 user_key=ukey)
     if err:
         defense_api.drop_session(sess["id"])
         return {"ok": False, "msg": err}
     return {"ok": True, "session": sess["id"], "question": q, "no": 1,
+            "thinking": str(sess.get("last_thinking") or "")[:4000],
             "total": sess["total"], "mode": sess["mode"],
             "reveal": defense_api.MODES[sess["mode"]]["reveal"],
             "difficulty": sess["difficulty"],
@@ -5030,12 +5066,14 @@ async def defense_start_keywords(request: Request):
         difficulty=difficulty, material=material, keywords=keywords,
         source="keywords")
     q, err = await _run_blocking(defense_api.make_first_question, sess,
-                                 cfg=_cfg_with_user_key(request),
+                                 cfg=_apply_thinking_choice(
+                                     _cfg_with_user_key(request), body.get("thinking")),
                                  user_key=_user_llm_key(request))
     if err:
         defense_api.drop_session(sess["id"])
         return {"ok": False, "msg": err}
     return {"ok": True, "session": sess["id"], "question": q, "no": 1,
+            "thinking": str(sess.get("last_thinking") or "")[:4000],
             "total": sess["total"], "mode": sess["mode"],
             "reveal": defense_api.MODES[sess["mode"]]["reveal"],
             "difficulty": sess["difficulty"],
@@ -5061,7 +5099,8 @@ async def defense_answer(request: Request):
     defense_api.add_answer(sess, q, a)
     total = defense_api.total_of(sess)
     answered = len(sess["history"]) - 1
-    cfg = _cfg_with_user_key(request)
+    cfg = _apply_thinking_choice(_cfg_with_user_key(request),
+                                 body.get("thinking") if isinstance(body, dict) else None)
     ukey = _user_llm_key(request)
 
     if len(sess["history"]) >= total:
@@ -5078,6 +5117,7 @@ async def defense_answer(request: Request):
         return {"ok": True, "done": True, "no": len(sess["history"]), "total": total}
     return {"ok": True, "done": False, "question": nq,
             "no": len(sess["history"]) + 1, "total": total,
+            "thinking": str(sess.get("last_thinking") or "")[:4000],
             "reveal": defense_api.MODES[sess.get("mode") or "practice"]["reveal"]}
 
 
@@ -5097,7 +5137,8 @@ async def defense_reveal(request: Request):
     except Exception:
         idx = 0
     return await _run_blocking(defense_api.explain, sess, idx,
-                               cfg=_cfg_with_user_key(request),
+                               cfg=_apply_thinking_choice(
+                                   _cfg_with_user_key(request), body.get("thinking")),
                                user_key=_user_llm_key(request))
 
 
@@ -5113,7 +5154,8 @@ async def defense_report(request: Request):
     if not sess:
         return {"ok": False, "msg": "演练会话已过期，请刷新页面重新开始"}
     return await _run_blocking(defense_api.make_report, sess,
-                               cfg=_cfg_with_user_key(request),
+                               cfg=_apply_thinking_choice(
+                                   _cfg_with_user_key(request), body.get("thinking")),
                                user_key=_user_llm_key(request))
 
 
@@ -5131,7 +5173,8 @@ async def defense_analysis(request: Request):
     if len(sess.get("history") or []) < defense_api.total_of(sess):
         return {"ok": False, "msg": "还没答完全部题目，答完后再生成解析报告"}
     return await _run_blocking(defense_api.make_analysis, sess,
-                               cfg=_cfg_with_user_key(request),
+                               cfg=_apply_thinking_choice(
+                                   _cfg_with_user_key(request), body.get("thinking")),
                                user_key=_user_llm_key(request))
 
 

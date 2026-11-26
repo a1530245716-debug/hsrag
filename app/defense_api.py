@@ -319,12 +319,14 @@ def make_question(sess, user_answer=None, images=None,
             "匹配到的学习内容。请像导师带新人一样，围绕这些内容提问；"
             "不要提“第几页”或 PPT，也不要用“你讲到/你说过”开头。")
         material_label = "【学员关键词匹配到的学习内容】"
+    _meta = {}
     q = defense_coach.next_question(
         material, history, user_answer=user_answer, cfg=cfg,
         user_key=user_key, timeout=timeout, ppt=ppt, focus_page=focus,
         kb_id=sess.get("kb_id") or "", ctx=ctx,
         difficulty=sess.get("difficulty") or "basic",
-        material_label=material_label, scene_note=scene_note)
+        material_label=material_label, scene_note=scene_note, out_meta=_meta)
+    sess["last_thinking"] = str(_meta.get("thinking") or "")[:4000]
 
     if not q:
         return "", ("生成问题失败：大模型这次没有返回内容"

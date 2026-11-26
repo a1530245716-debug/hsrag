@@ -221,6 +221,11 @@ def _chat_anthropic(s, msgs, timeout=None, meta=None):
     if meta is not None and data.get("stop_reason"):
         meta["stop_reason"] = data["stop_reason"]
     if isinstance(data.get("content"), list):
+        if meta is not None:
+            th = "".join(b.get("thinking", "") for b in data["content"]
+                         if isinstance(b, dict) and b.get("type") == "thinking")
+            if th:
+                meta["thinking"] = th
         return "".join(b.get("text", "") for b in data["content"] if b.get("type") == "text")
     err = data.get("error", {}).get("message", str(data))
     raise RuntimeError(f"{data.get('error')}: {err}")
@@ -489,6 +494,11 @@ async def _chat_anthropic_async(s, msgs, timeout=None, meta=None):
     if meta is not None and data.get("stop_reason"):
         meta["stop_reason"] = data["stop_reason"]
     if isinstance(data.get("content"), list):
+        if meta is not None:
+            th = "".join(b.get("thinking", "") for b in data["content"]
+                         if isinstance(b, dict) and b.get("type") == "thinking")
+            if th:
+                meta["thinking"] = th
         return "".join(b.get("text", "") for b in data["content"] if b.get("type") == "text")
     err = data.get("error", {}).get("message", str(data))
     raise RuntimeError(f"{data.get('error')}: {err}")
@@ -645,12 +655,65 @@ async def _stream_openai_async(s, msgs, meta=None):
                 yield delta["content"]
 
 
-async def stream_async(messages, cfg=None, system=None, meta=None, retries=3,
-                       user_key=""):
-    """`stream` 的异步版。重试语义一致：只在"一个字都没吐出来"时重试。
+async def _stream_anthropic_events_async(s, msgs, meta=None):
+    """Anthropic 流式事件：thinking / text 分开产出。
 
-    这是阶段 2 的核心：SSE 走事件循环，不再占线程池线程。
+    返回事件:
+      {"type":"thinking","text":...}   模型思考增量
+      {"type":"text","text":...}       正文增量
     """
+    url = s["base_url"].rstrip("/") + "/v1/messages"
+    payload = {"model": s["model"], "max_tokens": int(s.get("max_tokens", 1500)),
+               "temperature": float(s.get("temperature", 0.3)),
+               "messages": msgs, "stream": True}
+    th = _thinking_param(s)
+    if th:
+        payload["thinking"] = th
+    headers = {"Authorization": f"Bearer {s['api_key']}",
+               "anthropic-version": s.get("anthropic_version", "2023-06-01"),
+               "Content-Type": "application/json"}
+    limit = total_timeout()
+    t0 = time.time()
+    client = get_async_client()
+    async with client.stream("POST", url, json=payload, headers=headers,
+                             timeout=_sse_timeout()) as r:
+        if r.status_code >= 400:
+            body = (await r.aread()).decode("utf-8", "replace")[:300]
+            raise RuntimeError(f"HTTP {r.status_code}: {body}")
+        async for line in r.aiter_lines():
+            if time.time() - t0 > limit:
+                if meta is not None:
+                    meta["timeout"] = "total"
+                print(f"[llm] 流式生成超过 {limit:.0f}s 上限, 提前结束", file=sys.stderr)
+                return
+            obj = _sse_obj(line)
+            if not obj:
+                continue
+            t = obj.get("type")
+            if t == "content_block_delta":
+                d = obj.get("delta") or {}
+                if d.get("type") == "thinking_delta" and d.get("thinking"):
+                    yield {"type": "thinking", "text": d["thinking"]}
+                elif d.get("type") == "text_delta" and d.get("text"):
+                    yield {"type": "text", "text": d["text"]}
+            elif t == "message_delta":
+                sr = (obj.get("delta") or {}).get("stop_reason")
+                if sr and meta is not None:
+                    meta["stop_reason"] = sr
+            elif t == "error":
+                msg = (obj.get("error") or {}).get("message") or json.dumps(
+                    obj, ensure_ascii=False)
+                raise RuntimeError(f"流中错误: {msg[:200]}")
+
+
+async def _stream_openai_events_async(s, msgs, meta=None):
+    async for piece in _stream_openai_async(s, msgs, meta):
+        yield {"type": "text", "text": piece}
+
+
+async def stream_events_async(messages, cfg=None, system=None, meta=None, retries=3,
+                              user_key=""):
+    """流式事件版：thinking/text 分开；重试时发 thinking_reset 让前端清空。"""
     import asyncio
     s = llm_settings(cfg, user_key=user_key)
     if not llm_enabled(cfg=s):
@@ -669,12 +732,13 @@ async def stream_async(messages, cfg=None, system=None, meta=None, retries=3,
         got = False
         try:
             if s.get("protocol", "openai") == "anthropic":
-                gen = _stream_anthropic_async(s, msgs, meta)
+                gen = _stream_anthropic_events_async(s, msgs, meta)
             else:
-                gen = _stream_openai_async(s, msgs, meta)
-            async for piece in gen:
-                got = True
-                yield piece
+                gen = _stream_openai_events_async(s, msgs, meta)
+            async for ev in gen:
+                if ev.get("type") == "text":
+                    got = True
+                yield ev
             if got or (meta is not None and meta.get("timeout")):
                 return
             last_err = RuntimeError("网关返回空流(没有任何文本)")
@@ -696,6 +760,7 @@ async def stream_async(messages, cfg=None, system=None, meta=None, retries=3,
             return
 
         if attempt < retries:
+            yield {"type": "thinking_reset"}
             wait = 2.0 * (attempt + 1)
             print(f"[llm] 异步第 {attempt + 1} 次失败: {last_err}；{wait:.1f}s 后重试",
                   file=sys.stderr)
@@ -704,6 +769,19 @@ async def stream_async(messages, cfg=None, system=None, meta=None, retries=3,
     if meta is not None and not meta.get("error"):
         meta["error"] = f"{type(last_err).__name__}: {last_err}"
     print(f"[llm] 异步流式最终失败(已重试 {retries} 次): {last_err}", file=sys.stderr)
+
+
+async def stream_async(messages, cfg=None, system=None, meta=None, retries=3,
+                       user_key=""):
+    """`stream` 的异步版。重试语义一致：只在"一个字都没吐出来"时重试。
+
+    这是阶段 2 的核心：SSE 走事件循环，不再占线程池线程。
+    """
+    async for ev in stream_events_async(
+            messages, cfg=cfg, system=system, meta=meta,
+            retries=retries, user_key=user_key):
+        if ev.get("type") == "text":
+            yield ev.get("text") or ""
 
 
 if __name__ == "__main__":
