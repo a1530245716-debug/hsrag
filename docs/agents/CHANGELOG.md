@@ -6,6 +6,29 @@
 
 ---
 
+### 16:48（11-26） | Claude Code | 诊断（未改代码） | 生产"网关慢"根因：模型思考阶段 + 空流重试，不是网关网络/排队 | 单人问答 sources 后 60s 才出首字
+
+- 网关本身响应正常：`/v1/models` 约 109ms；非流式最小请求 482ms；
+  直连 DNS 11ms、HTTP 200。
+- 流式响应先给 `thinking` 块（`delta.type=thinking_delta`），再给正文
+  （`text_delta`）。应用只统计 `text_delta`，所以用户看到的首字 =
+  模型思考时长；思考期间页面没有任何内容。
+- 用真实检索上下文（约 2.9k 字符 / 1600 input tokens）直连网关实测：
+  - 首 `thinking_delta` **0.8s**；首 `text_delta` **18.0s**；总 19.6s；
+  - thinking 2,162 块 / 4,081 字；正文 296 块 / 491 字；`stop_reason=end_turn`。
+- 另一次全链路：`sources` 后 8.26s 出首字；更早一次 60.45s。
+  当日日志出现两次 `[llm] 异步第 N 次失败: 网关返回空流(没有任何文本)`，
+  间隔 2s/4s 重试；说明部分请求只返回 thinking、没有 text（尤其 `max_tokens`
+  很小时思考吃满额度），应用判定"空流"并重试，进一步放大首字时间。
+- 结论：不是 GPU/检索，也不是网关网络；主要是 **推理模型思考时间 + 空流重试**。
+  可做的方向（未实施）：
+  1. 答案生成限/关 thinking（需网关支持 `thinking`/`reasoning_effort` 等参数）；
+  2. 把 `thinking_delta` 透传成"模型思考中…"进度，避免用户以为卡死；
+  3. `stream_async` 的重试判定区分"收到过 thinking"和"完全空流"，避免重复思考；
+  4. 复核 `read_timeout=30s` 与思考阶段是否匹配。
+
+---
+
 ### 16:40（11-26） | Claude Code | `app/server.py`、`app/config.example.json` | 手册定向检索 `_manual_hits` 减负：主链路已有手册页则跳过，否则先过滤再只重排少量候选 | 单人 how-to 问题仅 `_manual_hits` 就约 30s，58 个候选全量重排只取 2 条
 
 - 实测根因：`_manual_hits` → `backend.retrieve(enable_rerank=True)` → `hybrid_search`
@@ -22,6 +45,15 @@
 - 本地 CPU 验证（比例参考）：本问题 `auto`/`filtered` 2~3s，`full` 10.5s；
   待生产 4 核容器 A/B 与模块评测确认引用质量。
 - 保留 `mode=full` 可一键回滚；`app/config.json` 不必改，代码默认 `auto`。
+
+**16:48 生产部署与实测**（`rag-bff:20261126-manual-hits`，回滚 `20261126-feedback`）：
+- 同一问题（交易所指令怎么下单，业务手册，no_cache，单用户）：
+  - 检索 `0 -> sources`：**34.76s → 5.66s**；日志显示
+    `[manual] skip: main candidates already have 5 manual pages`。
+  - 端到端：**95.95s → 14.63s**；LLM 首字 8.26s（前一次 60.45s，网关思考时长波动大），
+    生成 0.71s；引用 7 → 5 条（都是 O3.2 手册页，auto 跳过后的主链路结果）。
+- 生产镜像已 healthy；配置无需改（代码默认 auto）。
+- 质量验证待跑 `eval/run_module_eval.py`（生成 token 后可对生产跑 6 条模块用例）。
 
 ---
 
