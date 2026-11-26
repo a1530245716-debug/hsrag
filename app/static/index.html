@@ -26,7 +26,23 @@
   .kb.locked:hover { border-color:var(--line); }
   .kb.locked .name { color:#64748b; }
   .kb .row { display:flex; justify-content:space-between; align-items:center; }
-  .kb .name { font-weight:600; font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .kb .name { font-weight:600; font-size:14px; overflow:hidden; text-overflow:ellipsis;
+              white-space:nowrap; flex:1; min-width:0; }
+  .kb .kbdots { flex:none; margin-left:8px; width:27px; height:27px; border:1px solid var(--line);
+                background:#fff; border-radius:7px; cursor:pointer; font-size:17px; line-height:1;
+                color:#475569; font-family:inherit; padding:0; }
+  .kb .kbdots:hover { background:var(--soft); border-color:#bfdbfe; color:var(--accent); }
+  .kbmenu { position:fixed; z-index:3000; width:190px; background:#fff; border:1px solid var(--line);
+            border-radius:10px; box-shadow:0 12px 34px rgba(15,23,42,.20); padding:4px; }
+  .kbmenu .hd { font-size:11.5px; color:var(--muted); padding:6px 9px 6px; margin-bottom:3px;
+                border-bottom:1px solid var(--line); white-space:nowrap; overflow:hidden;
+                text-overflow:ellipsis; }
+  .kbmenu button { display:block; width:100%; border:0; background:none; text-align:left;
+                   padding:8px 10px; border-radius:6px; font-size:13px; cursor:pointer;
+                   color:#334155; font-family:inherit; }
+  .kbmenu button:hover { background:var(--soft); }
+  .kbmenu button.danger { color:#b91c1c; }
+  .kbmenu button.danger:hover { background:#fef2f2; }
   /* 项目路径往往很长，只显示一行、超出省略，鼠标悬停看完整路径(title) */
   .kb .meta { font-size:12px; color:var(--muted); margin-top:4px;
               white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -945,7 +961,7 @@
       <li><b>模拟答辩</b>：按关键词或上传 PPT，AI 导师提问并评价，帮助查漏补缺。</li>
       <li><b>深度思考</b>：默认关闭更快；复杂问题可以打开，查看模型思考过程。</li>
       <li><b>反馈</b>：加内容、提建议、说需求，在「⚙ 更多 → 💬 反馈 / 提需求」提交；管理员在「📊 统计与反馈」统一查看。</li>
-      <li><b>文件权重</b>：选中自己的知识库后，点库名右侧的 ⚖️，或「⚙ 更多 → ⚖️ 文件权重」；默认 1.0，仅库归属人/管理员可设。</li>
+      <li><b>文件权重</b>：选中自己的知识库后，点库名右侧的 ⋯ 菜单 → ⚖️ 文件权重，或「⚙ 更多 → ⚖️ 文件权重」；默认 1.0，仅库归属人/管理员可设。</li>
     </ul>
     <div class="foot">
       <button class="btn" onclick="closeOnboard(false)">先开始使用</button>
@@ -1623,7 +1639,49 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
+function closeKbMenus(){
+  document.querySelectorAll('.kbmenu').forEach(m => m.remove());
+}
+function toggleKbMenu(ev, id){
+  ev.preventDefault();
+  ev.stopPropagation();
+  const k = (kbs || []).find(x => x.id === id);
+  if (!k) return;
+  const existing = document.querySelector('.kbmenu[data-kb="' + id + '"]');
+  closeKbMenus();
+  if (existing) return;
+  const canWeight = window.__isAdmin || k.mine;
+  const actions = [
+    ['📂 查看文件', `openKbFiles('${id}')`],
+    canWeight ? ['⚖️ 文件权重', `openKbWeightsFor('${id}')`] : null,
+    window.__isAdmin ? ['📤 分配权限', `openShare('${id}')`] : null,
+    ['✎ 重命名', `promptRename('${id}')`],
+    ['✕ 删除', `delKb('${id}')`, 'danger'],
+  ].filter(Boolean);
+  const menu = document.createElement('div');
+  menu.className = 'kbmenu';
+  menu.dataset.kb = id;
+  menu.innerHTML = '<div class="hd">' + esc(k.name || '') + '</div>' +
+    actions.map(a => `<button class="${a[2] || ''}" onclick="event.stopPropagation();closeKbMenus();${a[1]}">${a[0]}</button>`).join('');
+  menu.addEventListener('click', e => e.stopPropagation());
+  document.body.appendChild(menu);
+  const r = ev.currentTarget.getBoundingClientRect();
+  const mw = menu.offsetWidth, mh = menu.offsetHeight;
+  let left = Math.min(window.innerWidth - mw - 8, Math.max(8, r.right - mw));
+  let top = r.bottom + 6;
+  if (top + mh > window.innerHeight - 8) top = Math.max(8, r.top - mh - 6);
+  menu.style.left = left + 'px';
+  menu.style.top = top + 'px';
+}
+document.addEventListener('click', e => {
+  if (!e.target.closest('.kbmenu') && !e.target.closest('.kbdots')) closeKbMenus();
+});
+window.addEventListener('resize', closeKbMenus);
+window.addEventListener('scroll', closeKbMenus, true);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeKbMenus(); });
+
 function renderKbs(){
+  closeKbMenus();
   const el = $('#kbList');
   el.innerHTML = '';
   if (!kbs.length){ el.innerHTML = '<div class="empty" style="margin-top:30px">暂无知识库</div>'; return; }
@@ -1637,14 +1695,8 @@ function renderKbs(){
                     (locked ? ' locked' : '');
     const indexing = k.status === 'indexing';
     const idxBad = k.index_status === 'failed' || k.index_status === 'interrupted';
-    const mgr = locked ? '' : `
-        <span class="kbmgr">
-          <button class="rm" title="查看文件列表" onclick="event.stopPropagation();openKbFiles('${k.id}')">📂</button>
-          ${(window.__isAdmin || k.mine) ? `<button class="rm" title="设置这个知识库的文件权重" onclick="event.stopPropagation();openKbWeightsFor('${k.id}')">⚖️</button>` : ''}
-          ${window.__isAdmin ? `<button class="rm" title="分配知识库权限（多选只读）" onclick="event.stopPropagation();openShare('${k.id}')">📤</button>` : ''}
-          <button class="rm" title="重命名" onclick="event.stopPropagation();promptRename('${k.id}')">✎</button>
-          <button class="del" title="删除" onclick="event.stopPropagation();delKb('${k.id}')">✕</button>
-        </span>`;
+    const mgr = locked ? '' :
+      `<button class="kbdots" title="更多操作" onclick="event.stopPropagation();toggleKbMenu(event,'${k.id}')">⋯</button>`;
     const meta = locked ? '🔒 未授权 · 请联系管理员开通'
       : `${k.folder ? '' : '纯上传型 · '}${
         indexing ? '索引中…' : idxBad ? '<span style="color:#b91c1c">索引失败/中断</span>'
@@ -1785,6 +1837,7 @@ async function promptRename(id){
 }
 
 function select(k){
+  closeKbMenus();
   if (k && k.can_read === false){
     alert('该知识库未授权，请联系管理员开通');
     return;
