@@ -288,9 +288,9 @@
     <div id="progressBar"><i></i></div>
     <span id="progText">0 / 10</span>
   </div>
-  <button class="btn ghost sm" id="thinkBtn" onclick="toggleThink()" title="开启后先展示模型思考过程（更慢）；关闭直接出答案（更快）">🧠 思考：关</button>
-  <button class="btn ghost sm" onclick="openFb()" title="提建议 / 说需求">💬 反馈</button>
-  <a class="btn ghost sm" href="/" onclick="return backToQa(event)" title="回到项目问答">← 返回问答</a>
+  <button class="btn ghost sm" id="thinkBtn" onclick="toggleThink()" title="开启后先展示模型深度思考过程（更慢）；关闭直接出答案（更快）">🧠 深度思考：关</button>
+  <button class="btn ghost sm" id="fbBtn" onclick="openFb()" title="提建议 / 说需求">💬 反馈</button>
+  <a class="btn ghost sm" id="backQaBtn" href="/" onclick="return backToQa(event)" title="回到项目问答">← 返回问答</a>
 </div>
 
 <div id="main">
@@ -524,18 +524,22 @@ try{ thinkOn = localStorage.getItem('rag.think') === '1'; }catch(e){}
 function syncThinkBtn(){
   const b = $('#thinkBtn'); if (!b) return;
   const short = window.innerWidth <= 640;
-  b.textContent = short ? (thinkOn ? '🧠开' : '🧠关')
-                        : (thinkOn ? '🧠 思考：开' : '🧠 思考：关');
+  b.textContent = short ? (thinkOn ? '🧠深开' : '🧠深关')
+                        : (thinkOn ? '🧠 深度思考：开' : '🧠 深度思考：关');
   b.classList.toggle('primary', thinkOn);
-  b.title = thinkOn ? '已开启：响应会附带模型思考过程，速度会慢一些。点一下关闭'
-                    : '已关闭：直接生成，速度更快。点一下开启看思考过程';
+  b.title = thinkOn ? '已开启：响应会附带模型深度思考过程，速度会慢一些。点一下关闭'
+                    : '已关闭：直接生成，速度更快。点一下开启看深度思考过程';
+  const back = document.getElementById('backQaBtn');
+  if (back) back.textContent = short ? '← 问答' : '← 返回问答';
+  const fb = document.getElementById('fbBtn');
+  if (fb) fb.textContent = short ? '💬' : '💬 反馈';
 }
 function toggleThink(){
   thinkOn = !thinkOn;
   try{ localStorage.setItem('rag.think', thinkOn ? '1' : '0'); }catch(e){}
   syncThinkBtn();
-  toast(thinkOn ? '思考已开启：会显示模型思考过程，速度会慢一些'
-                : '思考已关闭：直接生成，速度更快');
+  toast(thinkOn ? '深度思考已开启：会显示模型思考过程，速度会慢一些'
+                : '深度思考已关闭：直接生成，速度更快');
 }
 async function api(url, opt){
   const r = await fetch(url, withAuth(opt));
@@ -600,6 +604,7 @@ READY.then(() => {
       MY_PERMS = d.user.perms || { kb: false, defense: false };
       if (d.user.role === 'admin') MY_PERMS = { kb: true, defense: true };
     }
+    if (d && d.ok) setTimeout(maybeBetaNotice, 400);
   }).catch(() => {});
 }).catch(() => {});
 
@@ -1429,10 +1434,7 @@ document.addEventListener('keydown', e => {
 
 // ---------------- 实验推广提醒 / 反馈 ----------------
 async function maybeBetaNotice(){
-  try{
-    if (sessionStorage.getItem('rag.betaTip')) return;
-    sessionStorage.setItem('rag.betaTip', '1');
-  }catch(e){}
+  // 每次进入都提示（管理员可在「进入提示」里关闭）；不再按标签页只弹一次
   try{
     const d = await api('/api/notice');
     const n = (d && d.notice && d.notice.defense) || {};
@@ -1490,9 +1492,9 @@ async function submitFb(){
 // 点遮罩空白处关闭反馈弹窗
 $('#fbMask').addEventListener('click', e => { if (e.target === $('#fbMask')) closeFb(); });
 
-// 登录态确认后再弹提醒，避免未登录时闪一下又被重定向
-READY.then(ok => { if (ok) setTimeout(maybeBetaNotice, 400); }).catch(() => {});
+// 登录态确认后（/api/me 成功）再弹提醒，避免未登录时闪一下又被重定向
 syncThinkBtn();
+window.addEventListener('resize', syncThinkBtn);
 </script>
 </body>
 </html>

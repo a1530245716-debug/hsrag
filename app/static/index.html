@@ -351,6 +351,8 @@
                        font-size:11px; cursor:pointer; }
   .ask-imgs .ai span:hover { background:rgba(220,38,38,.95); }
   .ask-imgs .cnt { font-size:12px; color:var(--muted); }
+  #inputbar.ask-drop, #askImgs.ask-drop { outline:2px dashed var(--accent); outline-offset:-2px;
+                                          background:#f0f9ff; border-radius:8px; }
 
   .note-imgs { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0; }
   .note-imgs .ni { position:relative; width:84px; height:84px; border-radius:8px; overflow:hidden; border:1px solid var(--line); }
@@ -589,7 +591,7 @@
           <div onclick="closeAddMenu();openZipPicker('add')">🗜 上传压缩包（zip）</div>
         </div>
       </div>
-      <a class="btn" id="defenseLink" href="/defense" onclick="return openDefense(event)" title="基于学习的关键字，AI 模拟导师提问并评价">🧑‍🏫 新人AI导师</a>
+      <a class="btn" id="defenseLink" href="/defense" onclick="return openDefense(event)" title="基于学习的关键字，AI 模拟导师提问并评价">🎓 模拟答辩</a>
       <div class="menu-wrap">
         <button class="btn" onclick="toggleMoreMenu(event)" title="更多操作">⚙ 更多</button>
         <div class="menu" id="moreMenu">
@@ -625,12 +627,10 @@
   </div>
   <div id="askImgs" class="ask-imgs" style="display:none"></div>
   <div id="inputbar">
-    <button class="btn" id="imgBtn" onclick="pickAskImages()" title="添加图片（也可以直接 Ctrl+V 粘贴截图）">🖼</button>
-    <input type="file" id="askImgFile" accept="image/*" multiple style="display:none" onchange="onAskImgPick(this)">
-    <textarea id="q" rows="1" placeholder="输入问题：Enter 发送，Shift+Enter 换行（可 Ctrl+V 贴图）" disabled></textarea>
+    <textarea id="q" rows="1" placeholder="输入问题：Enter 发送，Shift+Enter 换行（可 Ctrl+V 贴图，或拖图片到输入框）" disabled></textarea>
     <button class="btn" id="ctxBtn" onclick="toggleCtx()" title="默认关闭：每次提问独立理解。开启后会把最近几轮对话带进去，方便追问">💬 上下文：关</button>
     <button class="btn" id="lenBtn" onclick="cycleLen()" title="控制回答详略：简答适合现场演示快速看结论，详细适合做资料">📏 标准</button>
-    <button class="btn" id="thinkBtn" onclick="toggleThink()" title="开启后先展示模型思考过程（更慢）；关闭直接出答案（更快）">🧠 思考：关</button>
+    <button class="btn" id="thinkBtn" onclick="toggleThink()" title="开启后先展示模型深度思考过程（更慢）；关闭直接出答案（更快）">🧠 深度思考：关</button>
 <button class="btn" id="newChatBtn" style="display:none" onclick="resetChat()" title="清空上下文，开始新话题">🆕 新会话</button>
     <button class="btn primary" id="sendBtn" onclick="ask()">发送</button>
   </div>
@@ -828,6 +828,27 @@
     <div id="homeMsg" style="font-size:12px;color:var(--muted);margin-top:12px;min-height:18px"></div>
     <div class="foot">
       <button class="btn" onclick="doLogout()">退出登录</button>
+    </div>
+  </div>
+</div>
+
+<!-- 首次使用引导 -->
+<div class="modal" id="onboardModal">
+  <div class="card" style="width:min(620px,94vw)">
+    <h3>👋 欢迎使用新人AI导师</h3>
+    <div style="font-size:13.5px;line-height:1.9;color:#334155;margin:2px 0 10px">
+      第一次使用，建议先花 2 分钟看一遍使用文档；也可以直接开始，随时在
+      「⚙ 更多 → 📖 使用文档」里查看。
+    </div>
+    <ul style="font-size:13px;line-height:1.9;color:#475569;margin:0 0 12px;padding-left:20px">
+      <li><b>知识库</b>：选项目库直接提问，回答带引用，可点开原文核对。</li>
+      <li><b>模拟答辩</b>：按关键词或上传 PPT，AI 导师提问并评价，帮助查漏补缺。</li>
+      <li><b>深度思考</b>：默认关闭更快；复杂问题可以打开，查看模型思考过程。</li>
+      <li><b>反馈</b>：加内容、提建议、说需求，在「⚙ 更多 → 💬 反馈」提交。</li>
+    </ul>
+    <div class="foot">
+      <button class="btn" onclick="closeOnboard(false)">先开始使用</button>
+      <button class="btn primary" onclick="closeOnboard(true)">📖 查看使用文档</button>
     </div>
   </div>
 </div>
@@ -1093,14 +1114,18 @@
   <div class="card wide">
     <h3>使用文档</h3>
     <div class="tabs">
-      <button class="tab on" data-tab="tab-manual" onclick="switchTab('tab-manual')">用户手册</button>
+      <button class="tab on" data-tab="tab-manual" onclick="switchTab('tab-manual')">快速上手</button>
+      <button class="tab" data-tab="tab-full" onclick="switchTab('tab-full')">完整手册</button>
       <button class="tab" data-tab="tab-bg" onclick="switchTab('tab-bg')">项目背景与说明</button>
+    </div>
+    <div class="tabpane" id="tab-full">
+      <div id="manualFull" style="max-height:62vh;overflow:auto;line-height:1.8">加载中…</div>
     </div>
     <div class="tabpane on" id="tab-manual">
       <div class="box">
         <b>两个独立场景：</b>
         <b>知识库问答</b>用于接手项目、查部署/环境/操作，入口在左侧知识库；
-        <b>模拟答辩</b>用于培训后的考核、导师模拟提问和自测，入口在右上角「🧑‍🏫 新人AI导师」。
+        <b>模拟答辩</b>用于培训后的考核、导师模拟提问和自测，入口在右上角「🎓 模拟答辩」。
         两者权限分开，不是一条流水线。
       </div>
       <h4>一、3 分钟快速开始</h4>
@@ -1212,7 +1237,7 @@
 
       <h4>五、模拟答辩（AI 扮演评委）</h4>
       <ol>
-        <li>点右上角「🧑‍🏫 新人AI导师」。</li>
+        <li>点右上角「🎓 模拟答辩」。</li>
         <li>选一种入口：<b>上传 PPT 演练</b>（.pptx / .ppt，最大 60MB），或 <b>关键词直练</b>（不用 PPT）。</li>
         <li>选择模式、<b>出题难度</b>、题目数量和出题依据的知识库。</li>
         <li>点「开始演练」，逐题作答；底部输入答案，Ctrl+Enter 或点「提交回答」。</li>
@@ -1556,8 +1581,6 @@ async function doRegister(){
     $('#regPwd').value=''; $('#regCode').value=''; errEl.textContent='';
     renderMe();
     await boot();
-    // 新用户第一次进来是空的，告诉他下一步干嘛，别让他对着空白页发呆
-    showFirstRunTip();
   } catch(e){ errEl.textContent = '网络错误: ' + e.message; }
   finally{ btn.disabled = false; }
 }
@@ -1698,7 +1721,10 @@ function renderKbs(){
   const el = $('#kbList');
   el.innerHTML = '';
   if (!kbs.length){ el.innerHTML = '<div class="empty" style="margin-top:30px">暂无知识库</div>'; return; }
-  kbs.forEach(k => {
+  // 有权限的排上面，置灰的排下面（组内保持原顺序）
+  const ordered = kbs.slice().sort((a, b) =>
+    (a.can_read === false ? 1 : 0) - (b.can_read === false ? 1 : 0));
+  ordered.forEach(k => {
     const div = document.createElement('div');
     const locked = k.can_read === false;
     div.className = 'kb' + (!locked && cur && cur.id === k.id ? ' active' : '') +
@@ -2547,10 +2573,10 @@ let thinkOn = false;
 try{ thinkOn = localStorage.getItem('rag.think') === '1'; }catch(e){}
 function syncThinkBtn(){
   const b = $('#thinkBtn'); if (!b) return;
-  b.textContent = thinkOn ? '🧠 思考：开' : '🧠 思考：关';
+  b.textContent = thinkOn ? '🧠 深度思考：开' : '🧠 深度思考：关';
   b.classList.toggle('primary', thinkOn);
-  b.title = thinkOn ? '已开启：先展示模型思考过程，速度会慢一些。点一下关闭'
-                    : '已关闭：直接生成答案，速度更快。点一下开启看思考过程';
+  b.title = thinkOn ? '已开启：先展示模型深度思考过程，速度会慢一些。点一下关闭'
+                    : '已关闭：直接生成答案，速度更快。点一下开启看深度思考过程';
 }
 function toggleThink(){
   thinkOn = !thinkOn;
@@ -2561,8 +2587,8 @@ function toggleThink(){
     const tip = document.createElement('div');
     tip.className = 'msg';
     tip.innerHTML = '<div style="color:#6b7280;font-size:13px;line-height:1.7">' +
-      (thinkOn ? '🧠 思考已开启：回答前会先展示模型思考过程，速度会慢一些。'
-               : '🧠 思考已关闭：直接生成答案，速度更快。') + '</div>';
+      (thinkOn ? '🧠 深度思考已开启：回答前会先展示模型思考过程，速度会慢一些。'
+               : '🧠 深度思考已关闭：直接生成答案，速度更快。') + '</div>';
     box.appendChild(tip); box.scrollTop = box.scrollHeight;
   }
 }
@@ -3551,10 +3577,29 @@ async function saveLlmCfg(){
   if (d.ok){ refreshLlmBadge(); closeModal('llmModal'); alert('已保存并生效' + (d.configured ? '：' + d.model : '（仍缺 key）')); }
   else alert('保存失败');
 }
-function openDoc(){ $('#docModal').classList.add('show'); }
+let MANUAL_LOADED = false;
+async function loadFullManual(){
+  if (MANUAL_LOADED) return;
+  const el = $('#manualFull');
+  if (!el) return;
+  el.innerHTML = '加载中…';
+  try{
+    const d = await api('/api/manual');
+    if (!d || !d.ok) throw new Error((d && d.msg) || '加载失败');
+    el.innerHTML = md(d.markdown || '');
+    MANUAL_LOADED = true;
+  }catch(e){
+    el.innerHTML = '<div style="color:#b91c1c">手册加载失败：' + esc(e.message || '网络错误') + '</div>';
+  }
+}
+function openDoc(tab){
+  $('#docModal').classList.add('show');
+  if (tab === 'full') switchTab('tab-full');
+}
 function switchTab(id){
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.dataset.tab === id));
   document.querySelectorAll('.tabpane').forEach(p => p.classList.toggle('on', p.id === id));
+  if (id === 'tab-full') loadFullManual();
 }
 function refreshLlmBadge(){
   api('/api/health').then(h => {
@@ -3981,16 +4026,51 @@ async function dropIntoNew(files){
   }
 }
 // 鼠标拖拽整个页面
-window.addEventListener('dragenter', e => { e.preventDefault(); dropDepth++; $('#droplay').classList.add('show'); });
+function dragHasImageFiles(e){
+  const items = Array.from((e && e.dataTransfer && e.dataTransfer.items) || []);
+  return items.length > 0 &&
+    items.every(it => it.kind === 'file' && (it.type || '').startsWith('image/'));
+}
+function bindAskImageDrop(el){
+  if (!el) return;
+  const has = e => dragHasImageFiles(e);
+  el.addEventListener('dragover', e => {
+    if (!has(e)) return;
+    e.preventDefault(); e.stopPropagation();
+    el.classList.add('ask-drop');
+  });
+  el.addEventListener('dragleave', () => el.classList.remove('ask-drop'));
+  el.addEventListener('drop', e => {
+    if (!has(e)) return;
+    e.preventDefault(); e.stopPropagation();
+    el.classList.remove('ask-drop');
+    if (!cur){ alert('请先在左侧选择一个知识库，再把图片拖进来提问'); return; }
+    addAskImages(e.dataTransfer.files);
+  });
+}
+window.addEventListener('dragenter', e => {
+  if (dragHasImageFiles(e)) return;          // 图片用于提问，不弹“上传到知识库”遮罩
+  e.preventDefault(); dropDepth++; $('#droplay').classList.add('show');
+});
 window.addEventListener('dragleave', e => { e.preventDefault(); dropDepth--; if (dropDepth <= 0){ dropDepth = 0; $('#droplay').classList.remove('show'); } });
-window.addEventListener('dragover', e => e.preventDefault());
+window.addEventListener('dragover', e => {
+  e.preventDefault();
+  if (dragHasImageFiles(e)){ dropDepth = 0; $('#droplay').classList.remove('show'); }
+});
 window.addEventListener('drop', async e => {
   e.preventDefault(); dropDepth = 0; $('#droplay').classList.remove('show');
   if (!e.dataTransfer) return;
+  if (dragHasImageFiles(e)){
+    if (!cur){ alert('请先在左侧选择一个知识库，再把图片拖进来提问'); return; }
+    addAskImages(e.dataTransfer.files);
+    return;
+  }
   const files = await collectEntries(e.dataTransfer);
   if (!files.length) return;
   if (cur) await dropIntoKb(cur, files); else await dropIntoNew(files);
 });
+bindAskImageDrop(document.getElementById('inputbar'));
+bindAskImageDrop(document.getElementById('askImgs'));
 // 文件选择框：files = 普通多选（能看见文件名）；folder = 整个文件夹（保留相对路径）。
 // 之前两个入口都硬编码 webkitdirectory=true，系统选择框只允许选文件夹，
 // 用户既看不到单个文件，也没法只传几个文件。
@@ -4240,8 +4320,6 @@ function renderAskImgs(){
 function delAskImg(i){ askImages.splice(i, 1); renderAskImgs(); }
 function clearAskImgs(){ askImages = []; renderAskImgs(); }
 
-function pickAskImages(){ $('#askImgFile').click(); }
-function onAskImgPick(el){ addAskImages(el.files); el.value = ''; }
 
 // 点缩略图看大图（同样走页内弹层，不开新窗口）
 function previewAskImg(i){
@@ -4621,6 +4699,24 @@ async function boot(){
   syncPermsUI();
   if (!sessionStorage.getItem('rag.homePicked')) showHome();
   else maybeShowNotice();
+  maybeShowOnboarding();
+}
+
+// 首次使用引导：每个账号在本浏览器第一次进入时弹一次
+function onboardKey(){
+  const u = AUTH.user || {};
+  return 'rag.onboard.v1.' + (u.id || u.username || 'anon');
+}
+function maybeShowOnboarding(){
+  try{ if (localStorage.getItem(onboardKey())) return; }catch(e){}
+  const m = $('#onboardModal');
+  if (m) m.classList.add('show');
+}
+function closeOnboard(openManual){
+  try{ localStorage.setItem(onboardKey(), '1'); }catch(e){}
+  const m = $('#onboardModal');
+  if (m) m.classList.remove('show');
+  if (openManual) openDoc('full');
 }
 
 // 上下文开关的记忆：上次开着的仍开着，默认关
@@ -4631,6 +4727,8 @@ initAuth().then(ok => { if (ok) boot(); });
   const el = document.getElementById(id);
   if (el) el.addEventListener('click', e => { if (e.target === el) el.classList.remove('show'); });
 });
+const ob = document.getElementById('onboardModal');
+if (ob) ob.addEventListener('click', e => { if (e.target === ob) closeOnboard(false); });
 
 // 看大图：点背景关、Esc 关。点图片本身不关（用户可能想按住看细节）
 (function(){

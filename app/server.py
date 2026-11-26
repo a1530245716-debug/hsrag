@@ -1432,6 +1432,17 @@ def admin_settings_set(body: SysSettingsIn, request: Request):
     return {"ok": True, **out}
 
 
+@app.get("/api/manual")
+def api_manual(request: Request):
+    """内置使用手册（Markdown）。放 app/static/manual.md，登录后可读。"""
+    p = APP_DIR / "static" / "manual.md"
+    try:
+        return {"ok": True, "markdown": p.read_text(encoding="utf-8")}
+    except Exception as e:
+        print(f"[manual] 读取失败: {type(e).__name__}", file=sys.stderr)
+        return {"ok": False, "msg": "使用手册暂不可用"}
+
+
 @app.get("/api/notice")
 def notice_get(request: Request):
     """进入知识库 / 模拟答辩时展示的提示文案（登录用户都可读）。"""
