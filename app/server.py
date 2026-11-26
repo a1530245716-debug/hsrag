@@ -23,6 +23,7 @@ APP_DIR = Path(__file__).parent
 sys.path.insert(0, str(APP_DIR))
 import indexer, kb, llm, auth, fallback, planner, users, qa_log, cache, imgserve, mailer, system_settings
 import module_router
+import feedback_store
 # 阶段 3：检索内核抽象。业务层只认 backend.retrieve，底下换 BM25/RAGFlow/Mock 都不改这里。
 import backend
 
@@ -1149,6 +1150,53 @@ class FeedbackIn(BaseModel):
 def api_feedback(body: FeedbackIn, request: Request):
     u = _current_user(request)
     ok = qa_log.feedback(body.id, body.vote, u, comment=body.comment)
+    return {"ok": ok}
+
+
+# ---- 用户反馈 / 提需求（自由文本，不是答案的 👍/👎）----
+class SuggestionIn(BaseModel):
+    kind: str = "improve"       # content / improve / feature / other
+    content: str = ""
+    contact: str = ""           # 选填，方便回访
+    source: str = "qa"          # qa / defense
+    page: str = ""              # 当前知识库 id 或 defense
+
+
+@app.post("/api/suggestion")
+def api_suggestion(body: SuggestionIn, request: Request):
+    """任何登录用户都可以提交反馈/需求。"""
+    u = _current_user(request)
+    try:
+        rec = feedback_store.add(
+            u, kind=body.kind, content=body.content, contact=body.contact,
+            source=body.source, page=body.page)
+    except ValueError as e:
+        return JSONResponse({"ok": False, "msg": str(e)}, status_code=400)
+    except Exception as e:
+        print(f"[suggestion] 保存失败: {type(e).__name__} {e}", file=sys.stderr)
+        return JSONResponse({"ok": False, "msg": "保存失败，请稍后再试"}, status_code=500)
+    return {"ok": True, "id": rec["id"], "msg": "已收到，谢谢你的反馈！"}
+
+
+@app.get("/api/suggestions")
+def api_suggestions(request: Request, days: int = 90, limit: int = 300,
+                    unhandled: bool = False):
+    """管理员查看反馈列表。"""
+    u, err = _require_admin(request)
+    if err:
+        return err
+    items = feedback_store.list_all(limit=limit, days=days, only_unhandled=unhandled)
+    return {"ok": True, "items": items,
+            "summary": feedback_store.summary(days=days),
+            "kinds": feedback_store.KINDS, "sources": feedback_store.SOURCES}
+
+
+@app.post("/api/suggestions/{fid}/handled")
+def api_suggestion_handled(fid: str, request: Request):
+    u, err = _require_admin(request)
+    if err:
+        return err
+    ok = feedback_store.mark_handled(fid, u)
     return {"ok": ok}
 
 

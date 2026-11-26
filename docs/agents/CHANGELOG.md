@@ -6,6 +6,30 @@
 
 ---
 
+### 15:16（11-26） | Claude Code | `app/feedback_store.py`、`app/server.py`、`app/static/index.html`、`app/static/defense.html` | 新增「反馈 / 提需求」入口 + 登录提示 + 答辩页实验推广提醒 | 人明确要求：登录进入知识库时提示可在「更多 → 反馈」加内容/提建议/说需求；进入模拟答辩也要提醒实验阶段排队与反馈入口
+
+- 新增 `app/feedback_store.py`：反馈写 `app/data/feedback.jsonl`（追加写、20MB 轮转、可按 `RAG_FEEDBACK_DIR` 覆盖）；
+  字段 `kind`（内容补充/改进建议/新需求/其他）、`source`（qa/defense）、`content`、`contact`、`page`；
+  管理员「标记已处理」写 `{"t":"done"}` 记录，不改原反馈。
+- `server.py` 新增 3 个接口：`POST /api/suggestion`（登录用户）、`GET /api/suggestions`（管理员，
+  支持 days/limit/unhandled）、`POST /api/suggestions/{id}/handled`（管理员）。原有 `/api/feedback`
+  （答案 👍/👎）保持不变。
+- `index.html`：「更多」菜单新增「💬 反馈 / 提需求」（所有人）和「📝 用户反馈」（管理员）；
+  反馈弹窗支持类型、1000 字上限、选填联系方式；管理员弹窗按待处理/全部/类型筛选；
+  进入知识库时**复用已有的「实验推广阶段」提示弹窗**，在其中加入反馈说明和
+  「💬 反馈 / 提需求」按钮（不另加横幅，避免双重打扰）。
+- 注意：答案的 👍/👎 已有同名函数 `submitFeedback(box,id,vote,comment)`，新的弹窗提交
+  命名为 `submitUserFeedback()`，避免覆盖旧逻辑（已加回归检查）。
+- `defense.html`：进入答辩页弹一次「实验推广阶段 / 服务器有限 / 多人提问排队 / 请耐心等待」提醒
+  （含「去反馈」按钮）；顶栏新增「💬 反馈」入口。
+- 自测：Playwright(Edge) 走通主页面登录→入口选择→实验提示里的反馈按钮→提交→
+  管理员查看/标记已处理，答辩页提醒→去反馈→提交；桌面/375px 无 JS 报错、顶栏无横向溢出。
+  测试反馈写到临时目录（`RAG_FEEDBACK_DIR`），未污染共享 `app/data`。
+- 合并：main 上 11-19~11-26 的已上线改动先提交为 `bd1c4b0`（checkpoint），
+  再把 `claude/rerank-tune` 合入 main；冲突仅限 import、入口提示调用和 defense CSS 三处。
+
+---
+
 ### 16:25（11-18） | Claude Code | `app/imgindex.py`、`app/server.py`、`app/static/index.html`、`app/config.example.json` | 架构图/流程图结构化 + 明确意图展示最多 2 张 | 人拍板：最多 2 张、明确问、操作图只留文字、架构/流程/拓扑/时序都纳入
 
 - 图片新增 `role`：diagram / operation / text / decorative；从已有 `kind/summary/keywords/ocr` 推断；
