@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 """管理员可调的系统参数（存 data/system_settings.json，不写只读 config.json）。
 
-目前只有注册默认值：
+目前有两类：
   registration.perms = {"kb": bool, "defense": bool}
   registration.kb_ids = [kb_id, ...] | None
       None = 未配置，沿用旧行为（自动共享业务手册）
       []   = 明确不自动共享
+  notice.kb / notice.defense = {"enabled", "title", "body"}
+      用户进入知识库 / 模拟答辩时看到的提醒文案，管理员可改。
 """
 import json
 import os
@@ -14,12 +16,38 @@ import time
 from pathlib import Path
 
 _LOCK = threading.RLock()
+
+_DEFAULT_NOTICE = {
+    "kb": {
+        "enabled": True,
+        "title": "📢 使用提示",
+        "body": (
+            "本项目目前处于实验推广阶段，服务器性能有限：多人同时提问时会自动排队，"
+            "回答速度会明显变慢。请耐心等待，不要重复点击发送。\n\n"
+            "如果大模型回答不好，欢迎点 👎 并填写原因（例如“希望补充审核/分发步骤”），"
+            "我们会据此补充资料、修复问题。\n\n"
+            "加内容、觉得系统有改进的地方，或者你的需求，可以点下面的「💬 反馈 / 提需求」填写，"
+            "也可以随时在右上角「⚙ 更多 → 💬 反馈」里提交。"
+        ),
+    },
+    "defense": {
+        "enabled": True,
+        "title": "📣 温馨提示",
+        "body": (
+            "本项目目前处于实验推广阶段，服务器性能有限：多人同时提问时会自动排队，"
+            "回答速度会明显变慢，请耐心等待。\n\n"
+            "有问题、改进建议或新需求，可以点右上角「💬 反馈」提交。"
+        ),
+    },
+}
+
 DEFAULT = {
     "registration": {
         "perms": {"kb": True, "defense": False},
         "kb_ids": None,              # 问答入口默认共享库
         "defense_kb_ids": None,      # 模拟答辩默认共享库（None=业务手册）
-    }
+    },
+    "notice": _DEFAULT_NOTICE,
 }
 
 
@@ -53,6 +81,20 @@ def _norm_kb_ids(v):
     return out
 
 
+def _norm_notice(v):
+    v = v if isinstance(v, dict) else {}
+    out = {}
+    for key in ("kb", "defense"):
+        d = _DEFAULT_NOTICE[key]
+        x = v.get(key) if isinstance(v.get(key), dict) else {}
+        out[key] = {
+            "enabled": bool(x.get("enabled", d["enabled"])),
+            "title": str(x.get("title") or d["title"]).strip()[:120],
+            "body": str(x.get("body") or d["body"])[:4000],
+        }
+    return out
+
+
 def load():
     data = {}
     p = _path()
@@ -72,19 +114,27 @@ def load():
             },
             "kb_ids": _norm_kb_ids(reg.get("kb_ids")),
             "defense_kb_ids": _norm_kb_ids(reg.get("defense_kb_ids")),
-        }
+        },
+        "notice": _norm_notice(data.get("notice")),
     }
 
 
 def save(data):
-    reg = (data or {}).get("registration") or {}
+    """保存传入的段落；未传入的段落保留当前值（避免注册设置覆盖提示文案）。"""
+    cur = load()
+    data = data if isinstance(data, dict) else {}
+    reg_in = data.get("registration")
+    notice_in = data.get("notice")
+    reg = reg_in if isinstance(reg_in, dict) else cur["registration"]
+    notice = notice_in if isinstance(notice_in, dict) else cur["notice"]
     perms = reg.get("perms") or {}
     out = {
         "registration": {
             "perms": {"kb": bool(perms.get("kb")), "defense": bool(perms.get("defense"))},
             "kb_ids": _norm_kb_ids(reg.get("kb_ids")),
             "defense_kb_ids": _norm_kb_ids(reg.get("defense_kb_ids")),
-        }
+        },
+        "notice": _norm_notice(notice),
     }
     p = _path()
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -98,5 +148,13 @@ def save(data):
     return out
 
 
+def save_notice(notice):
+    return save({"notice": notice})
+
+
 def registration_defaults():
     return load()["registration"]
+
+
+def notice_defaults():
+    return load()["notice"]

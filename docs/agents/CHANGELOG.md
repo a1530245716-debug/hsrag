@@ -6,6 +6,28 @@
 
 ---
 
+### 17:31（11-26） | Claude Code | `app/system_settings.py`、`app/server.py`、`app/static/index.html`、`app/static/defense.html` | 进入界面的提醒文案改为管理员可编辑（知识库 + 模拟答辩） | 人要求"进入界面的提醒里面可以修改内容"
+
+- `system_settings` 新增 `notice.kb` / `notice.defense`：`enabled / title / body`，
+  存 `app/data/system_settings.json`；`save()` 改为"只覆盖传入的段落"，
+  保存注册默认值时不会清掉提示文案，反之亦然。
+- 新增 `GET /api/notice`（登录用户可读）与 `POST /api/notice`（管理员保存）。
+- 知识库管理员「⚙ 更多 → 📢 进入提示」：可分别编辑知识库/模拟答辩的启用、
+  标题、正文（支持换行）；知识库和答辩页进入时都从该配置读取。
+- 默认文案保持原样（实验推广阶段、排队/性能、反馈入口），首次部署行为不变。
+- 本地验证：GET 默认文案；保存后注册设置不被覆盖、保存注册设置后提示不被覆盖；
+  Playwright 走通管理员编辑 → 保存 → 重新进入知识库看到新文案；答辩页读取同一
+  配置显示新文案；关闭启用后答辩不再弹；无 JS 报错。
+
+**17:30 生产验证（`20261126-thinking-toggle`，healthy）**：
+同一问题（交易所指令怎么下单）单用户、no_cache：
+- 关思考：总 **7.3s**、首字 **6.6s**、无 thinking 事件；
+- 开思考：总 **18.3s**、首字 17.3s、1,449 个 thinking 增量。
+前端默认关，用户可手动开启查看思考过程；从最初的 95.95s 降到 7.3s。
+（`20261126-notice-edit` 待发版。）
+
+---
+
 ### 17:23（11-26） | Claude Code | `app/llm.py`、`app/server.py`、`app/static/index.html`、`app/static/defense.html`、`app/defense_coach.py`、`app/defense_api.py` | 知识库 + 模拟答辩的「思考」开关与思考过程展示 | 人要求按钮控制思考；开启时展示思考过程，避免用户觉得卡；两边都要有
 
 - **知识库**：输入栏新增「🧠 思考：开/关」，默认关（按 A/B 更快），偏好存

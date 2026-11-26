@@ -595,6 +595,7 @@
           <div id="qaStatsItem" style="display:none" onclick="openQaStats();closeMoreMenu()">📊 问答统计</div>
           <div id="fbAdminItem" style="display:none" onclick="openFeedbackAdmin();closeMoreMenu()">📝 用户反馈</div>
           <div id="evalAdminItem" style="display:none" onclick="openEvalCandidates();closeMoreMenu()">📋 测试集候选</div>
+          <div id="noticeCfgItem" style="display:none" onclick="openNoticeCfg();closeMoreMenu()">📢 进入提示</div>
           <div onclick="openDoc();closeMoreMenu()">📖 使用文档</div>
           <div onclick="openFeedback('qa');closeMoreMenu()">💬 反馈 / 提需求</div>
           <div onclick="openMyKey();closeMoreMenu()">🔑 我的大模型 Key</div>
@@ -828,20 +829,8 @@
 <!-- 进入知识库的使用提示（实验推广阶段） -->
 <div class="modal" id="noticeModal">
   <div class="card" style="width:min(620px,94vw)">
-    <h3>📢 使用提示</h3>
-    <div style="font-size:13.5px;line-height:1.9;color:#334155;margin:2px 0 12px">
-      本项目目前处于 <b style="color:#b45309">实验推广阶段</b>，服务器性能有限：
-      多人同时提问时会自动排队，回答速度会明显变慢。请耐心等待，
-      <b>不要重复点击发送</b>。
-    </div>
-    <div style="font-size:13.5px;line-height:1.9;color:#334155;margin-bottom:14px">
-      如果大模型回答不好，欢迎点 <b>👎</b> 并填写原因（例如“希望补充审核/分发步骤”），
-      我们会据此补充资料、修复问题。
-    </div>
-    <div style="font-size:13.5px;line-height:1.9;color:#334155;margin-bottom:14px">
-      加内容、觉得系统有改进的地方，或者你的需求，可以点下面的「💬 反馈 / 提需求」填写，
-      也可以随时在右上角「⚙ 更多 → 💬 反馈」里提交。
-    </div>
+    <h3 id="noticeTitle">📢 使用提示</h3>
+    <div id="noticeBody" style="font-size:13.5px;line-height:1.9;color:#334155;margin:2px 0 14px">本项目目前处于实验推广阶段，服务器性能有限：多人同时提问时会自动排队，回答速度会明显变慢。请耐心等待，不要重复点击发送。<br><br>如果大模型回答不好，欢迎点 👎 并填写原因（例如“希望补充审核/分发步骤”），我们会据此补充资料、修复问题。<br><br>加内容、觉得系统有改进的地方，或者你的需求，可以点下面的「💬 反馈 / 提需求」填写，也可以随时在右上角「⚙ 更多 → 💬 反馈」里提交。</div>
     <label style="display:flex;align-items:center;gap:7px;font-size:13px;color:#475569;cursor:pointer;margin-bottom:14px">
       <input type="checkbox" id="noticeNoMore"> 不再显示这条提示
     </label>
@@ -1033,6 +1022,40 @@
       <button class="btn" onclick="downloadEvalCandidates()">⬇ 导出 JSON</button>
       <button class="btn" onclick="loadEvalCandidates()">刷新</button>
       <button class="btn primary" onclick="closeModal('evalModal')">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- 进入提示文案（管理员） -->
+<div class="modal" id="noticeCfgModal">
+  <div class="card" style="width:min(760px,96vw);max-height:88vh;display:flex;flex-direction:column">
+    <h3>📢 进入提示文案</h3>
+    <div style="font-size:12px;color:var(--muted);line-height:1.7;margin:-4px 0 10px">
+      用户进入知识库 / 模拟答辩时看到的提醒；正文支持换行。保存后，用户下一次进入时生效。
+    </div>
+    <div style="overflow:auto;flex:1;padding-right:4px">
+      <div style="font-weight:600;font-size:13.5px;color:#334155;margin:4px 0 6px">知识库</div>
+      <label style="display:flex;align-items:center;gap:7px;font-size:13px;color:#475569;cursor:pointer;margin-bottom:4px">
+        <input type="checkbox" id="noticeKbEnabled"> 显示此提示
+      </label>
+      <label class="f">标题</label>
+      <input id="noticeKbTitle" type="text" maxlength="120">
+      <label class="f">正文</label>
+      <textarea id="noticeKbBody" rows="6" maxlength="4000"></textarea>
+      <hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
+      <div style="font-weight:600;font-size:13.5px;color:#334155;margin:4px 0 6px">模拟答辩</div>
+      <label style="display:flex;align-items:center;gap:7px;font-size:13px;color:#475569;cursor:pointer;margin-bottom:4px">
+        <input type="checkbox" id="noticeDefEnabled"> 显示此提示
+      </label>
+      <label class="f">标题</label>
+      <input id="noticeDefTitle" type="text" maxlength="120">
+      <label class="f">正文</label>
+      <textarea id="noticeDefBody" rows="5" maxlength="4000"></textarea>
+    </div>
+    <div id="noticeCfgMsg" style="font-size:12.5px;min-height:18px;margin-top:8px"></div>
+    <div class="foot">
+      <button class="btn" onclick="closeModal('noticeCfgModal')">取消</button>
+      <button class="btn primary" onclick="saveNoticeCfg()">保存</button>
     </div>
   </div>
 </div>
@@ -1589,6 +1612,8 @@ function renderMe(){
   if (fba) fba.style.display = isAdmin ? 'block' : 'none';
   const eva = $('#evalAdminItem');
   if (eva) eva.style.display = isAdmin ? 'block' : 'none';
+  const ncfg = $('#noticeCfgItem');
+  if (ncfg) ncfg.style.display = isAdmin ? 'block' : 'none';
   // 全局大模型设置会改到所有人，只给管理员看
   const lc = $('#llmCfgItem');
   if (lc) lc.style.display = isAdmin ? 'block' : 'none';
@@ -4422,10 +4447,69 @@ function noticeKey(){
   const u = AUTH.user || {};
   return 'rag.notice.experimental.v1.' + (u.id || u.username || 'anon');
 }
-function maybeShowNotice(){
+let NOTICE_CFG = null;
+async function loadNoticePublic(){
+  if (NOTICE_CFG) return NOTICE_CFG;
+  try{
+    const d = await api('/api/notice');
+    if (d && d.ok) NOTICE_CFG = d.notice;
+  }catch(e){}
+  return NOTICE_CFG || {};
+}
+async function maybeShowNotice(){
   try{ if (localStorage.getItem(noticeKey()) === '1') return; }catch(e){}
+  const n = await loadNoticePublic();
+  const k = (n && n.kb) || {};
+  if (k.enabled === false) return;
+  const t = document.getElementById('noticeTitle');
+  const b = document.getElementById('noticeBody');
+  if (t && k.title) t.textContent = k.title;
+  if (b && k.body) b.innerHTML = esc(k.body).replace(/\n/g, '<br>');
   const el = document.getElementById('noticeModal');
   if (el) el.classList.add('show');
+}
+async function openNoticeCfg(){
+  const msg = $('#noticeCfgMsg');
+  if (msg) msg.textContent = '';
+  $('#noticeCfgModal').classList.add('show');
+  try{
+    const d = await api('/api/notice');
+    const n = (d && d.notice) || {};
+    const kb = n.kb || {}, df = n.defense || {};
+    $('#noticeKbEnabled').checked = kb.enabled !== false;
+    $('#noticeKbTitle').value = kb.title || '';
+    $('#noticeKbBody').value = kb.body || '';
+    $('#noticeDefEnabled').checked = df.enabled !== false;
+    $('#noticeDefTitle').value = df.title || '';
+    $('#noticeDefBody').value = df.body || '';
+    NOTICE_CFG = n;
+  }catch(e){ if (msg) msg.textContent = '加载失败：' + (e.message || '网络错误'); }
+}
+async function saveNoticeCfg(){
+  const msg = $('#noticeCfgMsg');
+  const payload = {
+    kb: {
+      enabled: !!$('#noticeKbEnabled').checked,
+      title: ($('#noticeKbTitle').value || '').trim(),
+      body: $('#noticeKbBody').value || ''
+    },
+    defense: {
+      enabled: !!$('#noticeDefEnabled').checked,
+      title: ($('#noticeDefTitle').value || '').trim(),
+      body: $('#noticeDefBody').value || ''
+    }
+  };
+  try{
+    const d = await api('/api/notice', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
+    if (!d || !d.ok){ if (msg) msg.textContent = (d && d.msg) || '保存失败'; return; }
+    NOTICE_CFG = d.notice;
+    const kb = d.notice.kb || {};
+    if ($('#noticeTitle')) $('#noticeTitle').textContent = kb.title || '';
+    if ($('#noticeBody')) $('#noticeBody').innerHTML = esc(kb.body || '').replace(/\n/g, '<br>');
+    if (msg) msg.textContent = '已保存';
+    setTimeout(() => closeModal('noticeCfgModal'), 400);
+  }catch(e){ if (msg) msg.textContent = '保存失败：' + (e.message || '网络错误'); }
 }
 function closeNotice(){
   try{
@@ -4524,7 +4608,7 @@ async function boot(){
 try{ ctxOn = localStorage.getItem('rag.ctx') === '1'; }catch(e){ ctxOn = false; }
 initAuth().then(ok => { if (ok) boot(); });
 // 点击弹窗遮罩关闭
-['llmModal','docModal','myKeyModal','fbModal','fbAdminModal'].forEach(id => {
+['llmModal','docModal','myKeyModal','fbModal','fbAdminModal','evalModal','noticeCfgModal'].forEach(id => {
   const el = document.getElementById(id);
   if (el) el.addEventListener('click', e => { if (e.target === el) el.classList.remove('show'); });
 });

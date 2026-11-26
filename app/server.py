@@ -1323,6 +1323,11 @@ class SysSettingsIn(BaseModel):
     defense_kb_ids: list = []    # 模拟答辩默认共享知识库
 
 
+class NoticeIn(BaseModel):
+    kb: dict = {}                # {"enabled","title","body"}
+    defense: dict = {}           # {"enabled","title","body"}
+
+
 def _require_admin(request: Request):
     u = _user_of(request)
     if not u:
@@ -1425,6 +1430,21 @@ def admin_settings_set(body: SysSettingsIn, request: Request):
         }
     })
     return {"ok": True, **out}
+
+
+@app.get("/api/notice")
+def notice_get(request: Request):
+    """进入知识库 / 模拟答辩时展示的提示文案（登录用户都可读）。"""
+    return {"ok": True, "notice": system_settings.notice_defaults()}
+
+
+@app.post("/api/notice")
+def notice_set(body: NoticeIn, request: Request):
+    u, err = _require_admin(request)
+    if err:
+        return err
+    out = system_settings.save_notice({"kb": body.kb, "defense": body.defense})
+    return {"ok": True, "notice": out["notice"]}
 
 
 @app.patch("/api/users/{uid}")
