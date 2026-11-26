@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>答辩演练 · 项目智能问答助手</title>
+<title>新人AI导师</title>
 <style>
   :root { --bg:#f5f6f8; --panel:#fff; --line:#e3e6ea; --accent:#2563eb;
           --text:#1f2430; --muted:#6b7280; --ok:#059669; --warn:#b45309;
@@ -281,8 +281,8 @@
 <body>
 
 <div id="top">
-  <h1>🎓 答辩演练</h1>
-  <span class="sub">上传你的答辩 PPT，AI 扮演评委提问</span>
+  <h1>🧑‍🏫 新人AI导师</h1>
+  <span class="sub">基于学习的关键字，AI模拟导师提问并评价 · 帮助新人自检学习效果，助力查漏补缺，释放导师精力</span>
   <span class="sp"></span>
   <div id="progressWrap">
     <div id="progressBar"><i></i></div>
@@ -707,9 +707,11 @@ async function loadKwKbOptions(){
   const manual = kbs.filter(k => k.name.indexOf('业务手册') >= 0);
   const others = kbs.filter(k => k.name.indexOf('业务手册') < 0)
                      .sort((a,b) => (a.name||'').localeCompare(b.name||'', 'zh'));
-  sel.innerHTML = '<option value="">自动匹配知识库</option>' + [...manual, ...others].map(k =>
-    `<option value="${k.id}">${esc(k.name)}${k.readonly ? '（别人分享的·只读）' : ''}</option>`
-  ).join('');
+  sel.innerHTML = '<option value="">自动匹配知识库</option>' + [...manual, ...others].map(k => {
+    const suffix = k.can_read === false ? '（未授权）'
+                 : (k.readonly ? '（别人分享的·只读）' : '');
+    return `<option value="${k.id}" ${k.can_read === false ? 'disabled' : ''}>${esc(k.name)}${suffix}</option>`;
+  }).join('');
   KW_KB_LOADED = true;
 }
 
@@ -806,10 +808,14 @@ async function loadKbOptions(){
   const others = kbs.filter(k => k.name.indexOf('业务手册') < 0)
                      .sort((a,b) => (a.name||'').localeCompare(b.name||'', 'zh'));
   const list = [...manual, ...others];
-  sel.innerHTML = list.map(k =>
-    `<option value="${k.id}">${esc(k.name)}${k.readonly ? '（别人分享的·只读）' : ''}</option>`
-  ).join('');
-  KB_ID = list[0].id;
+  const readable = list.filter(k => k.can_read !== false);
+  const locked = list.filter(k => k.can_read === false);
+  sel.innerHTML = [...readable, ...locked].map(k => {
+    const suffix = k.can_read === false ? '（未授权）'
+                 : (k.readonly ? '（别人分享的·只读）' : '');
+    return `<option value="${k.id}" ${k.can_read === false ? 'disabled' : ''}>${esc(k.name)}${suffix}</option>`;
+  }).join('');
+  KB_ID = readable.length ? readable[0].id : '';
   sel.value = KB_ID;
   updateKbHint();
   sel.onchange = () => {

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>项目智能问答助手</title>
+<title>新人AI导师</title>
 <style>
   :root { --bg:#f5f6f8; --panel:#fff; --line:#e3e6ea; --accent:#2563eb;
           --text:#1f2430; --muted:#6b7280; --user:#2563eb; --user-tx:#fff; }
@@ -22,6 +22,9 @@
         cursor:pointer; background:var(--panel); transition:.15s; }
   .kb:hover { border-color:var(--accent); }
   .kb.active { border-color:var(--accent); background:#eff6ff; }
+  .kb.locked { opacity:.55; cursor:not-allowed; background:#f8fafc; }
+  .kb.locked:hover { border-color:var(--line); }
+  .kb.locked .name { color:#64748b; }
   .kb .row { display:flex; justify-content:space-between; align-items:center; }
   .kb .name { font-weight:600; font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   /* 项目路径往往很长，只显示一行、超出省略，鼠标悬停看完整路径(title) */
@@ -511,7 +514,7 @@
 <!-- 登录遮罩 -->
 <div id="loginMask">
   <div id="loginCard">
-    <h1>🔐 项目智能问答助手</h1>
+    <h1>🔐 新人AI导师</h1>
     <div class="sub">用账号密码登录，每个账号看自己的知识库</div>
     <div id="loginForm">
       <input id="loginUser" type="text" placeholder="账号" autocomplete="username">
@@ -542,8 +545,8 @@
 <div id="sideMask" onclick="toggleSidebar(false)"></div>
 <aside id="sidebar">
   <header>
-    <h1>项目智能问答助手</h1>
-    <div class="sub">按项目建知识库 · 快速上手 · 辅助项目实施</div>
+    <h1>新人AI导师</h1>
+    <div class="sub">帮助新人了解项目情况，助力快速上手</div>
   </header>
   <div id="kbList"></div>
   <div id="kbAdd">
@@ -586,7 +589,7 @@
           <div onclick="closeAddMenu();openZipPicker('add')">🗜 上传压缩包（zip）</div>
         </div>
       </div>
-      <a class="btn" id="defenseLink" href="/defense" onclick="return openDefense(event)" title="上传答辩 PPT，AI 扮演评委提问，答完看报告">🎓 答辩演练</a>
+      <a class="btn" id="defenseLink" href="/defense" onclick="return openDefense(event)" title="基于学习的关键字，AI 模拟导师提问并评价">🧑‍🏫 新人AI导师</a>
       <div class="menu-wrap">
         <button class="btn" onclick="toggleMoreMenu(event)" title="更多操作">⚙ 更多</button>
         <div class="menu" id="moreMenu">
@@ -808,14 +811,17 @@
            style="border:1px solid var(--line);border-radius:10px;padding:18px;text-align:center;cursor:pointer">
         <div style="font-size:30px">📚</div>
         <div style="font-weight:600;margin:6px 0">知识库</div>
-        <div style="font-size:12.5px;color:var(--muted)">按项目提问、看引用</div>
+        <div style="font-size:12.5px;color:var(--muted)">帮助新人了解项目情况，助力快速上手</div>
         <div id="homeKbLock" style="font-size:12px;color:#b45309;margin-top:6px"></div>
       </div>
       <div id="homeDef" onclick="pickHome('defense')"
            style="border:1px solid var(--line);border-radius:10px;padding:18px;text-align:center;cursor:pointer">
         <div style="font-size:30px">🎓</div>
         <div style="font-weight:600;margin:6px 0">模拟答辩</div>
-        <div style="font-size:12.5px;color:var(--muted)">AI 扮演评委，练答辩</div>
+        <div style="font-size:12.5px;color:var(--muted);line-height:1.7">
+          基于学习的关键字，AI模拟导师提问并评价<br>
+          帮助新人自检学习效果，助力查漏补缺，释放导师精力
+        </div>
         <div id="homeDefLock" style="font-size:12px;color:#b45309;margin-top:6px"></div>
       </div>
     </div>
@@ -1094,7 +1100,7 @@
       <div class="box">
         <b>两个独立场景：</b>
         <b>知识库问答</b>用于接手项目、查部署/环境/操作，入口在左侧知识库；
-        <b>模拟答辩</b>用于培训后的考核、导师模拟提问和自测，入口在右上角「🎓 答辩演练」。
+        <b>模拟答辩</b>用于培训后的考核、导师模拟提问和自测，入口在右上角「🧑‍🏫 新人AI导师」。
         两者权限分开，不是一条流水线。
       </div>
       <h4>一、3 分钟快速开始</h4>
@@ -1206,7 +1212,7 @@
 
       <h4>五、模拟答辩（AI 扮演评委）</h4>
       <ol>
-        <li>点右上角「🎓 答辩演练」。</li>
+        <li>点右上角「🧑‍🏫 新人AI导师」。</li>
         <li>选一种入口：<b>上传 PPT 演练</b>（.pptx / .ppt，最大 60MB），或 <b>关键词直练</b>（不用 PPT）。</li>
         <li>选择模式、<b>出题难度</b>、题目数量和出题依据的知识库。</li>
         <li>点「开始演练」，逐题作答；底部输入答案，Ctrl+Enter 或点「提交回答」。</li>
@@ -1694,24 +1700,33 @@ function renderKbs(){
   if (!kbs.length){ el.innerHTML = '<div class="empty" style="margin-top:30px">暂无知识库</div>'; return; }
   kbs.forEach(k => {
     const div = document.createElement('div');
-    div.className = 'kb' + (cur && cur.id === k.id ? ' active' : '');
+    const locked = k.can_read === false;
+    div.className = 'kb' + (!locked && cur && cur.id === k.id ? ' active' : '') +
+                    (locked ? ' locked' : '');
     const indexing = k.status === 'indexing';
     const idxBad = k.index_status === 'failed' || k.index_status === 'interrupted';
-    div.innerHTML = `
-      <div class="row">
-        <span class="name ${indexing?'dim':''}">${esc(k.name)}</span>
+    const mgr = locked ? '' : `
         <span class="kbmgr">
           <button class="rm" title="查看文件列表" onclick="event.stopPropagation();openKbFiles('${k.id}')">📂</button>
           ${window.__isAdmin ? `<button class="rm" title="分配知识库权限（多选只读）" onclick="event.stopPropagation();openShare('${k.id}')">📤</button>` : ''}
           <button class="rm" title="重命名" onclick="event.stopPropagation();promptRename('${k.id}')">✎</button>
           <button class="del" title="删除" onclick="event.stopPropagation();delKb('${k.id}')">✕</button>
-        </span>
-      </div>
-      <div class="meta" title="${esc(k.folder || '（未绑定目录，纯上传型）')}">${k.folder ? '' : '纯上传型 · '}${
+        </span>`;
+    const meta = locked ? '🔒 未授权 · 请联系管理员开通'
+      : `${k.folder ? '' : '纯上传型 · '}${
         indexing ? '索引中…' : idxBad ? '<span style="color:#b91c1c">索引失败/中断</span>'
         : (k.chunk_count ? '已就绪' : '未建索引')}${
-        (window.__isAdmin && k.owner_name && !k.mine) ? ` · <span style="color:#b45309">👤 ${esc(k.owner_name)}</span>` : ''}</div>`;
-    div.onclick = () => select(k);
+        (window.__isAdmin && k.owner_name && !k.mine) ? ` · <span style="color:#b45309">👤 ${esc(k.owner_name)}</span>` : ''}`;
+    div.innerHTML = `
+      <div class="row">
+        <span class="name ${indexing?'dim':''}">${locked ? '🔒 ' : ''}${esc(k.name)}</span>
+        ${mgr}
+      </div>
+      <div class="meta" title="${esc(locked ? '未授权，请联系管理员开通' : (k.folder || '（未绑定目录，纯上传型）'))}">${meta}</div>`;
+    div.onclick = () => {
+      if (locked){ alert('该知识库未授权，请联系管理员开通'); return; }
+      select(k);
+    };
     el.appendChild(div);
   });
 }
@@ -1734,6 +1749,10 @@ async function promptRename(id){
 }
 
 function select(k){
+  if (k && k.can_read === false){
+    alert('该知识库未授权，请联系管理员开通');
+    return;
+  }
   const changed = !cur || cur.id !== k.id;
   const prev = cur;
   if (changed){

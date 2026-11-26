@@ -120,7 +120,7 @@ def _setup_file_logging():
 
 _setup_file_logging()
 
-app = FastAPI(title="项目智能问答助手", version="1.0.0")
+app = FastAPI(title="新人AI导师", version="1.0.0")
 
 # ---------------- 模型 ----------------
 
@@ -1710,9 +1710,9 @@ def kb_list(request: Request, mode: str = "qa"):
     owner_names = {x["id"]: x.get("name", "") for x in users.load_users()}
     out = []
     for kb_ in reg:
-        # 管理员看全部；普通用户看自己的 + 对应入口分享给他的
-        if not admin and not users.can_read_kb(kb_, u, read_mode):
-            continue
+        # 管理员全部可读；普通用户可读自己的 + 对应入口分享的。
+        # 没权限的也返回（前端置灰、不可点），让人知道有这个库、找管理员开通。
+        can_read = bool(admin or users.can_read_kb(kb_, u, read_mode))
         # 异步索引队列的真实状态在 index_status.json（indexer.get_index_status），
         # 旧的 STATUS 只覆盖 sync=True 的排障路径。不合并的话前端轮询 /api/kb
         # 永远看不到 queued/running，上传后进度条会立刻消失。
@@ -1734,11 +1734,18 @@ def kb_list(request: Request, mode: str = "qa"):
         kb_["index_progress"] = str(ist.get("progress") or "")
         kb_["index_error"] = str(ist.get("error") or "")
         kb_["index_attempt"] = ist.get("attempt") or 0
-        kb_["owner_name"] = owner_names.get(kb_.get("owner"), "")
-        kb_["mine"] = (kb_.get("owner") == u.get("id"))
-        # 不是自己的、又能看到 → 是别人分享的。前端据此显示"只读"标记、隐藏改名/删除
-        kb_["shared"] = bool(not admin and not kb_["mine"])
-        kb_["readonly"] = bool(kb_["shared"])
+        kb_["can_read"] = can_read
+        if not can_read:
+            kb_["owner_name"] = ""
+            kb_["mine"] = False
+            kb_["shared"] = False
+            kb_["readonly"] = True
+        else:
+            kb_["owner_name"] = owner_names.get(kb_.get("owner"), "")
+            kb_["mine"] = (kb_.get("owner") == u.get("id"))
+            # 不是自己的、又能看到 → 是别人分享的。前端据此显示"只读"标记、隐藏改名/删除
+            kb_["shared"] = bool(not admin and not kb_["mine"])
+            kb_["readonly"] = bool(kb_["shared"])
         qa_ids = set(users.shared_ids(kb_))
         def_ids = set(users.shared_defense_ids(kb_))
         kb_["shared_count_qa"] = len(qa_ids)
@@ -5294,7 +5301,7 @@ def main():
     cfg = _cfg()["server"]
     port = args.port or int(cfg.get("port", 8000))
     host = cfg.get("host", "127.0.0.1")
-    print(f"项目智能问答助手 已启动: http://{host}:{port}")
+    print(f"新人AI导师 已启动: http://{host}:{port}")
     print(f"LLM 已配置: {llm.llm_enabled()} (model={llm.llm_settings().get('model')})")
     print(f"LLM 未配置 API Key 时也可用(仅返回检索片段)。key 配置: app/config.json 的 llm 段 或 环境变量 RAG_LLM_API_KEY")
     threading.Thread(target=preload_kbs, daemon=True).start()
