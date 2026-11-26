@@ -107,6 +107,24 @@ def _sse_timeout():
                          write=15.0, pool=10.0)
 
 
+def _thinking_param(s):
+    """把 llm.thinking 配置转成网关参数。
+
+    不配置（None/空/False）= 不传，保持网关默认；
+    "disabled"/"off"/"none" = {"type":"disabled"}；
+    其它字符串按 type 传；dict 原样传（如 {"type":"enabled","budget_tokens":1024}）。
+    """
+    t = s.get("thinking")
+    if t in (None, "", False):
+        return None
+    if isinstance(t, str):
+        v = t.strip().lower()
+        if v in ("disabled", "off", "none", "false", "0"):
+            return {"type": "disabled"}
+        return {"type": t.strip()}
+    return t if isinstance(t, dict) else None
+
+
 def load_config():
     with open(CFG_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -191,6 +209,9 @@ def _chat_anthropic(s, msgs, timeout=None, meta=None):
                "max_tokens": int(s.get("max_tokens", 1024)),
                "temperature": float(s.get("temperature", 0.3)),
                "messages": msgs}
+    th = _thinking_param(s)
+    if th:
+        payload["thinking"] = th
     r = httpx.post(url, json=payload,
                    headers={"Authorization": f"Bearer {s['api_key']}",
                             "anthropic-version": s.get("anthropic_version", "2023-06-01"),
@@ -368,6 +389,9 @@ def _stream_anthropic(s, msgs, meta=None):
     payload = {"model": s["model"], "max_tokens": int(s.get("max_tokens", 1500)),
                "temperature": float(s.get("temperature", 0.3)),
                "messages": msgs, "stream": True}
+    th = _thinking_param(s)
+    if th:
+        payload["thinking"] = th
     headers = {"Authorization": f"Bearer {s['api_key']}",
                "anthropic-version": s.get("anthropic_version", "2023-06-01"),
                "Content-Type": "application/json"}
@@ -452,6 +476,9 @@ async def _chat_anthropic_async(s, msgs, timeout=None, meta=None):
                "max_tokens": int(s.get("max_tokens", 1024)),
                "temperature": float(s.get("temperature", 0.3)),
                "messages": msgs}
+    th = _thinking_param(s)
+    if th:
+        payload["thinking"] = th
     r = await get_async_client().post(
         url, json=payload,
         headers={"Authorization": f"Bearer {s['api_key']}",
@@ -549,6 +576,9 @@ async def _stream_anthropic_async(s, msgs, meta=None):
     payload = {"model": s["model"], "max_tokens": int(s.get("max_tokens", 1500)),
                "temperature": float(s.get("temperature", 0.3)),
                "messages": msgs, "stream": True}
+    th = _thinking_param(s)
+    if th:
+        payload["thinking"] = th
     headers = {"Authorization": f"Bearer {s['api_key']}",
                "anthropic-version": s.get("anthropic_version", "2023-06-01"),
                "Content-Type": "application/json"}

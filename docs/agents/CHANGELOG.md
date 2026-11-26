@@ -6,6 +6,26 @@
 
 ---
 
+### 16:57（11-26） | Claude Code | `app/eval_store.py`、`app/server.py`、`app/static/index.html`、`app/llm.py` | 用户点赞的回答进入评测候选；新增 `llm.thinking` 开关 | 人要求"点赞的可以添加到测试集"；并验证思考开/关的业务影响
+
+- 👍 时前端随 `/api/feedback` 带完整问题/答案/引用/kb；👎 不带（减少请求体）。
+- 新增 `app/eval_store.py`：写 `app/data/eval_candidates.jsonl`，按 qa_id + 问答哈希去重；
+  状态 `pending / included / ignored`；自动用问题识别业务模块。
+- 管理员「更多 → 📋 测试集候选」：待核对/已收录/已忽略、复制单条 JSON、导出全部 JSON；
+  导出的 `expected_modules` 自动填、`must_include_any` 留空，需人工核对后补。
+- 新增 `llm.thinking` 配置：`disabled`/`off`/`none` 或 dict（如
+  `{"type":"enabled","budget_tokens":1024}`）；不配置 = 不传，保持网关默认。
+  已接到 sync/async 的 chat/stream 四条 Anthropic 请求路径。
+- 思考开关 A/B（模块评测 6 条，生产真实数据、新手册定向逻辑）：
+  - think：5/6；首字 1.8~20.2s，总 2.7~21.8s。
+  - no-think：5/6；首字 0.4~0.9s，总 0.9~2.4s。
+  - 唯一失败 mod-01 两边都缺"个股指令"（检索内容缺口），不是思考导致。
+  - 结论：本业务以"查文档/给步骤"为主，建议关闭思考；复杂推理是否降质需更大评测集再确认。
+- 本地验证：eval_store 单测（去重/状态/导出）；管理员弹窗、收录过滤、导出、
+  👍/👎 提交负载均通过 Playwright；无 JS 报错。**生产尚未切 thinking，等确认。**
+
+---
+
 ### 16:48（11-26） | Claude Code | 诊断（未改代码） | 生产"网关慢"根因：模型思考阶段 + 空流重试，不是网关网络/排队 | 单人问答 sources 后 60s 才出首字
 
 - 网关本身响应正常：`/v1/models` 约 109ms；非流式最小请求 482ms；

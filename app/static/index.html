@@ -302,6 +302,13 @@
                white-space:pre-wrap; word-break:break-word; }
   .fbfeed .ct { margin-top:6px; font-size:12px; color:var(--muted); }
   .fbfeed .ops { margin-top:7px; display:flex; justify-content:flex-end; }
+  /* 测试集候选 */
+  .ecase .q { font-weight:600; font-size:13.5px; line-height:1.7; color:#1f2430; }
+  .ecase .a { margin-top:6px; padding:8px 10px; background:#f8fafc; border:1px solid #eef2f7;
+              border-radius:7px; font-size:12.5px; line-height:1.7; color:#334155;
+              max-height:150px; overflow:auto; white-space:pre-wrap; word-break:break-word; }
+  .ecase .src { margin-top:6px; font-size:12px; color:var(--muted); line-height:1.8; }
+  .ecase .ops { display:flex; gap:8px; justify-content:flex-end; margin-top:8px; flex-wrap:wrap; }
   /* 答案里的配图：跟在对应段落后，缩略图集 */
   .figbox { margin:10px 0 4px; }
   .figlabel { font-size:12px; color:var(--muted); margin-bottom:6px; }
@@ -580,6 +587,7 @@
           <div id="userMgmtItem" style="display:none" onclick="openUsers();closeMoreMenu()">👥 用户管理</div>
           <div id="qaStatsItem" style="display:none" onclick="openQaStats();closeMoreMenu()">📊 问答统计</div>
           <div id="fbAdminItem" style="display:none" onclick="openFeedbackAdmin();closeMoreMenu()">📝 用户反馈</div>
+          <div id="evalAdminItem" style="display:none" onclick="openEvalCandidates();closeMoreMenu()">📋 测试集候选</div>
           <div onclick="openDoc();closeMoreMenu()">📖 使用文档</div>
           <div onclick="openFeedback('qa');closeMoreMenu()">💬 反馈 / 提需求</div>
           <div onclick="openMyKey();closeMoreMenu()">🔑 我的大模型 Key</div>
@@ -995,6 +1003,28 @@
     <div class="foot">
       <button class="btn" onclick="loadFeedbackAdmin()">刷新</button>
       <button class="btn primary" onclick="closeModal('fbAdminModal')">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- 测试集候选（管理员，来自用户点赞） -->
+<div class="modal" id="evalModal">
+  <div class="card" style="width:min(920px,96vw);max-height:86vh;display:flex;flex-direction:column">
+    <h3>📋 测试集候选 <span id="evalSummary" style="font-size:12px;font-weight:400;color:var(--muted)"></span></h3>
+    <div style="font-size:12px;color:var(--muted);line-height:1.7;margin:-4px 0 10px">
+      用户点赞只代表“觉得有用”，不等于标准答案；收录前请人工核对答案与引用。
+    </div>
+    <div class="qtabs" style="margin-bottom:10px">
+      <button class="qtab on" data-ef="pending" onclick="setEvalFilter(this)">⏳ 待核对</button>
+      <button class="qtab" data-ef="included" onclick="setEvalFilter(this)">✅ 已收录</button>
+      <button class="qtab" data-ef="ignored" onclick="setEvalFilter(this)">🚫 已忽略</button>
+      <button class="qtab" data-ef="all" onclick="setEvalFilter(this)">全部</button>
+    </div>
+    <div id="evalList" style="overflow:auto;flex:1;padding-right:4px"></div>
+    <div class="foot">
+      <button class="btn" onclick="downloadEvalCandidates()">⬇ 导出 JSON</button>
+      <button class="btn" onclick="loadEvalCandidates()">刷新</button>
+      <button class="btn primary" onclick="closeModal('evalModal')">关闭</button>
     </div>
   </div>
 </div>
@@ -1549,6 +1579,8 @@ function renderMe(){
   // 用户反馈列表含其他用户的意见，只给管理员看
   const fba = $('#fbAdminItem');
   if (fba) fba.style.display = isAdmin ? 'block' : 'none';
+  const eva = $('#evalAdminItem');
+  if (eva) eva.style.display = isAdmin ? 'block' : 'none';
   // 全局大模型设置会改到所有人，只给管理员看
   const lc = $('#llmCfgItem');
   if (lc) lc.style.display = isAdmin ? 'block' : 'none';
@@ -2645,7 +2677,7 @@ async function ask(retryQ, reuseNode, fbMode){
       return;
     }
     const reader = resp.body.getReader(); const dec = new TextDecoder();
-    let text = '', buf = '';
+    let text = '', buf = '', caseSources = [];   // caseSources: 点赞时随反馈提交，供评测集
     while (true){
       const {done, value} = await reader.read();
       if (done) break;
@@ -2675,6 +2707,7 @@ async function ask(retryQ, reuseNode, fbMode){
           msg.appendChild(ctrl);
         }
         else if (ev.type === 'sources'){
+          caseSources = ev.sources || [];
           renderRefs(ev.sources);
           if (ev.status){ msg.innerHTML = '<span class="waiting"><span class="spin"></span> ' + esc(ev.status) + '</span>'; msg.appendChild(ctrl); }
         }
@@ -2698,6 +2731,7 @@ async function ask(retryQ, reuseNode, fbMode){
         else if (ev.type === 'answer'){
           text = ev.text || '';
           ansTimeout = !!ev.timeout;
+          if (ev.sources) caseSources = ev.sources;
           msg.innerHTML = (ansTimeout ? '<div class="tmobox">' : '') + md(text) + (ansTimeout ? '</div>' : '');
           if (ev.sources) renderRefs(ev.sources);
         }
@@ -2731,6 +2765,15 @@ async function ask(retryQ, reuseNode, fbMode){
         <button class="fb" onclick="sendFeedback(this, 1)">👍 有用</button>
         <button class="fb" onclick="sendFeedback(this, -1)">👎 没用</button>
       </div>` : '');
+    // 点赞时把完整问答/引用随反馈提交，后台留作评测候选
+    const fbBox = newMsg.querySelector('.fbbox');
+    if (fbBox) fbBox._case = {
+      question: q,
+      answer: body,
+      sources: caseSources,
+      kb: (cur && cur.id) || '',
+      kb_name: (cur && cur.name) || ''
+    };
     if (srcDone && srcDone.source_type === 'web' && srcDone.refs && srcDone.refs.length && !webRefs){
       renderWebRefs(srcDone.refs);
     }
@@ -2843,8 +2886,17 @@ async function sendFeedback(btn, vote){
 async function submitFeedback(box, id, vote, comment){
   box.querySelectorAll('button').forEach(b => b.disabled = true);
   try{
+    const payload = {id, vote, comment: comment || ''};
+    // 👍 时带上完整问答，后台存为评测候选；👎 不需要
+    if (vote > 0 && box._case){
+      payload.question = box._case.question || '';
+      payload.answer = box._case.answer || '';
+      payload.sources = box._case.sources || [];
+      payload.kb = box._case.kb || '';
+      payload.kb_name = box._case.kb_name || '';
+    }
     await api('/api/feedback', {method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({id, vote, comment: comment || ''})});
+      body: JSON.stringify(payload)});
     box.innerHTML = vote > 0
       ? '<span class="fbdone">✅ 感谢反馈</span>'
       : '<span class="fbdone">✅ 已记录，感谢说明问题</span>';
@@ -3137,6 +3189,121 @@ async function markFeedbackHandled(id){
     const sum = $('#fbAdminSummary');
     if (sum) sum.textContent = '最近 90 天 · 共 ' + FB_ADMIN.length + ' 条，未处理 ' + left + ' 条';
   }catch(e){ alert('操作失败：' + (e.message || '网络错误')); }
+}
+
+// ---- 管理员：测试集候选（来自用户点赞） ----
+let EVAL_CASES = [];
+let EVAL_FILTER = 'pending';
+
+function openEvalCandidates(){
+  EVAL_FILTER = 'pending';
+  document.querySelectorAll('#evalModal .qtab').forEach(b =>
+    b.classList.toggle('on', b.dataset.ef === 'pending'));
+  $('#evalModal').classList.add('show');
+  loadEvalCandidates();
+}
+function setEvalFilter(el){
+  EVAL_FILTER = el.dataset.ef || 'pending';
+  document.querySelectorAll('#evalModal .qtab').forEach(b => b.classList.toggle('on', b === el));
+  loadEvalCandidates();
+}
+async function loadEvalCandidates(){
+  const box = $('#evalList');
+  box.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:13px">加载中…</div>';
+  try{
+    const qs = EVAL_FILTER === 'all' ? '' : ('&status=' + encodeURIComponent(EVAL_FILTER));
+    const d = await api('/api/eval/candidates?limit=400' + qs);
+    if (!d || !d.ok){
+      box.innerHTML = '<div style="padding:16px;color:#b91c1c;font-size:13px">' +
+        esc((d && d.msg) || '加载失败') + '</div>';
+      return;
+    }
+    EVAL_CASES = d.items || [];
+    const s = d.summary || {};
+    const sum = $('#evalSummary');
+    if (sum) sum.textContent = `共 ${s.total || 0} 条 · 待核对 ${s.pending || 0} · 已收录 ${s.included || 0}`;
+    renderEvalCandidates();
+  }catch(e){
+    box.innerHTML = '<div style="padding:16px;color:#b91c1c;font-size:13px">' +
+      esc(e.message || '加载失败') + '</div>';
+  }
+}
+function renderEvalCandidates(){
+  const box = $('#evalList');
+  if (!EVAL_CASES.length){
+    box.innerHTML = '<div class="empty" style="padding:30px">暂无候选</div>';
+    return;
+  }
+  box.innerHTML = EVAL_CASES.map(it => {
+    const ts = it.ts ? new Date(it.ts * 1000).toLocaleString('zh-CN', {hour12:false}) : '';
+    const srcs = (it.sources || []).slice(0, 4).map(s => esc(s.path || '')).join('<br>');
+    const st = it.status || 'pending';
+    const tag = st === 'included' ? '已收录' : st === 'ignored' ? '已忽略' : '待核对';
+    const kcls = st === 'included' ? 'content' : st === 'ignored' ? 'other' : '';
+    return '<div class="fbfeed ecase">' +
+      '<div class="h">' +
+        '<span class="k ' + kcls + '">' + tag + '</span>' +
+        '<span>' + esc(it.user || '匿名') + '</span>' +
+        '<span>' + esc(it.kb_name || '') + '</span>' +
+        '<span>' + esc(ts) + '</span>' +
+        ((it.modules || []).length ? '<span>模块：' + esc(it.modules.join('、')) + '</span>' : '') +
+      '</div>' +
+      '<div class="q">' + esc(it.question || '') + '</div>' +
+      '<div class="a">' + esc(it.answer || '') + '</div>' +
+      (srcs ? '<div class="src">引用：' + srcs + '</div>' : '') +
+      '<div class="ops">' +
+        '<button class="btn" style="padding:2px 10px;font-size:12px" ' +
+          'onclick="copyEvalCase(\'' + it.id + '\')">复制 JSON</button>' +
+        (st !== 'included'
+          ? '<button class="btn" style="padding:2px 10px;font-size:12px" ' +
+            'onclick="setEvalStatus(\'' + it.id + '\',\'included\')">✓ 收录</button>' : '') +
+        (st !== 'ignored'
+          ? '<button class="btn" style="padding:2px 10px;font-size:12px" ' +
+            'onclick="setEvalStatus(\'' + it.id + '\',\'ignored\')">忽略</button>' : '') +
+        (st !== 'pending'
+          ? '<button class="btn" style="padding:2px 10px;font-size:12px" ' +
+            'onclick="setEvalStatus(\'' + it.id + '\',\'pending\')">恢复待核对</button>' : '') +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+function evalCaseJson(it){
+  return {
+    id: it.id, kb_id: it.kb, kb_name: it.kb_name,
+    question: it.question, answer: it.answer,
+    expected_modules: it.modules || [], must_include_any: [], min_len: 80,
+    sources: (it.sources || []).map(s => ({path: s.path, text: (s.text || '').slice(0, 300)}))
+  };
+}
+function copyEvalCase(id){
+  const it = EVAL_CASES.find(x => x.id === id);
+  if (!it) return;
+  const text = JSON.stringify(evalCaseJson(it), null, 2);
+  try{
+    navigator.clipboard.writeText(text);
+    alert('已复制到剪贴板');
+  }catch(e){ prompt('复制下面的 JSON：', text); }
+}
+async function setEvalStatus(id, status){
+  try{
+    const d = await api('/api/eval/candidates/' + encodeURIComponent(id) + '/status', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({status})});
+    if (!d || !d.ok){ alert((d && d.msg) || '操作失败'); return; }
+    await loadEvalCandidates();
+  }catch(e){ alert('操作失败：' + (e.message || '网络错误')); }
+}
+async function downloadEvalCandidates(){
+  try{
+    const d = await api('/api/eval/candidates/export');
+    if (!d || !d.ok){ alert((d && d.msg) || '导出失败'); return; }
+    const blob = new Blob([JSON.stringify(d, null, 2)], {type:'application/json;charset=utf-8'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'eval_candidates_' + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '.json';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+  }catch(e){ alert('导出失败：' + (e.message || '网络错误')); }
 }
 // ---- 我的大模型 Key（每个用户自己的）----
 // 公司网关每个 key 只有约 2 路并发，大家都挤公共 key 就会互相排队。
