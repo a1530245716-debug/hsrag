@@ -322,6 +322,18 @@
   .thinkbox pre { margin:0; padding:8px 10px; max-height:220px; overflow:auto;
                   white-space:pre-wrap; word-break:break-word; color:#64748b;
                   font-family:inherit; line-height:1.7; border-top:1px solid #eef2f7; }
+  /* 统计与反馈中心 */
+  .hubtabs { display:flex; gap:6px; flex-wrap:wrap; margin:0 0 12px;
+             border-bottom:1px solid var(--line); padding-bottom:8px; }
+  .hubtab { border:1px solid var(--line); background:#fff; border-radius:7px;
+            padding:6px 12px; font-size:13px; cursor:pointer; font-family:inherit; color:#475569; }
+  .hubtab:hover { border-color:#bfdbfe; }
+  .hubtab.on { background:var(--soft); border-color:var(--accent); color:var(--accent); font-weight:600; }
+  .hubbody { flex:1; min-height:0; overflow:auto; }
+  .hubpane .card { width:100% !important; max-height:none !important; box-shadow:none;
+                   border:0; padding:0; background:transparent; }
+  .hubpager { display:flex; gap:8px; align-items:center; justify-content:flex-end;
+              margin-top:10px; font-size:12px; color:var(--muted); }
   /* 文件权重行 */
   .wrow { display:flex; align-items:center; gap:10px; padding:7px 4px;
           border-bottom:1px solid #f1f3f5; font-size:12.5px; }
@@ -614,13 +626,10 @@
         <button class="btn" onclick="toggleMoreMenu(event)" title="更多操作">⚙ 更多</button>
         <div class="menu" id="moreMenu">
           <div onclick="reindex();closeMoreMenu()">🔄 重建索引</div>
+          <div id="hubItem" onclick="openHub();closeMoreMenu()">📊 统计与反馈</div>
           <div id="kbWeightsItem" style="display:none" onclick="openKbWeights();closeMoreMenu()">⚖️ 文件权重</div>
           <div id="userMgmtItem" style="display:none" onclick="openUsers();closeMoreMenu()">👥 用户管理</div>
-          <div id="qaStatsItem" style="display:none" onclick="openQaStats();closeMoreMenu()">📊 问答统计</div>
-          <div id="fbAdminItem" style="display:none" onclick="openFeedbackAdmin();closeMoreMenu()">📝 用户反馈</div>
-          <div id="evalAdminItem" style="display:none" onclick="openEvalCandidates();closeMoreMenu()">📋 测试集候选</div>
           <div onclick="openDoc();closeMoreMenu()">📖 使用文档</div>
-          <div onclick="openFeedback('qa');closeMoreMenu()">💬 反馈 / 提需求</div>
           <div onclick="openMyKey();closeMoreMenu()">🔑 我的大模型 Key</div>
           <div id="llmCfgItem" style="display:none" onclick="openLlmCfg();closeMoreMenu()">🤖 大模型设置（全局）</div>
           <div id="sysCfgItem" style="display:none" onclick="openSysCfg();closeMoreMenu()">⚙ 系统参数设置</div>
@@ -820,6 +829,25 @@
     <div class="foot">
       <button class="btn" onclick="loadQaStats()">刷新</button>
       <button class="btn" onclick="closeQaStats()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- 统计与反馈中心（问答统计 / 用户反馈 / 测试集候选 / 提交反馈） -->
+<div class="modal" id="hubModal">
+  <div class="card" style="width:min(1100px,96vw);max-height:90vh;display:flex;flex-direction:column">
+    <h3 id="hubTitle">📊 统计与反馈</h3>
+    <div class="hubtabs" id="hubTabs">
+      <button class="hubtab on" data-hub="stats" onclick="switchHub('stats')">📈 问答统计</button>
+      <button class="hubtab" data-hub="feedback" onclick="switchHub('feedback')">📝 用户反馈</button>
+      <button class="hubtab" data-hub="candidates" onclick="switchHub('candidates')">📋 测试集候选</button>
+      <button class="hubtab" data-hub="submit" onclick="switchHub('submit')">💬 提交反馈</button>
+    </div>
+    <div class="hubbody">
+      <div class="hubpane" id="hubStatsPane"></div>
+      <div class="hubpane" id="hubFeedbackPane" style="display:none"></div>
+      <div class="hubpane" id="hubCandidatesPane" style="display:none"></div>
+      <div class="hubpane" id="hubSubmitPane" style="display:none"></div>
     </div>
   </div>
 </div>
@@ -1517,6 +1545,8 @@ function renderMe(){
   if (eva) eva.style.display = isAdmin ? 'block' : 'none';
   const dm = $('#demoModeItem');
   if (dm) dm.style.display = isAdmin ? 'block' : 'none';
+  const hubItem = $('#hubItem');
+  if (hubItem) hubItem.textContent = isAdmin ? '📊 统计与反馈' : '💬 反馈 / 提需求';
   syncKbWeightsItem();
   // 全局大模型设置会改到所有人，只给管理员看
   const lc = $('#llmCfgItem');
@@ -1843,11 +1873,71 @@ async function reindex(){
 }
 
 // ---- 问答统计(管理员) ----
-function openQaStats(){ $('#qaModal').classList.add('show'); loadQaStats(); }
-function closeQaStats(){ $('#qaModal').classList.remove('show'); }
+function openQaStats(){ openHub('stats'); }
+function closeQaStats(){ closeHub(); }
+
+// ---- 统计与反馈中心：把原来的统计/反馈/候选/提交合并到一个弹窗 ----
+function initHub(){
+  const moves = [
+    ['hubStatsPane', 'qaModal'],
+    ['hubFeedbackPane', 'fbAdminModal'],
+    ['hubCandidatesPane', 'evalModal'],
+    ['hubSubmitPane', 'fbModal'],
+  ];
+  moves.forEach(([pane, id]) => {
+    const wrap = document.getElementById(id);
+    const dest = document.getElementById(pane);
+    if (!wrap || !dest) return;
+    const card = wrap.querySelector(':scope > .card');
+    if (card) dest.appendChild(card);
+    wrap.remove();
+  });
+  addHubPager('fbAdminList', 'fbPager');
+  addHubPager('evalList', 'evalPager');
+}
+function addHubPager(listId, pagerId){
+  const list = document.getElementById(listId);
+  if (!list || document.getElementById(pagerId)) return;
+  const card = list.closest('.card');
+  if (!card) return;
+  const foot = card.querySelector('.foot');
+  if (!foot) return;
+  const p = document.createElement('div');
+  p.className = 'hubpager';
+  p.id = pagerId;
+  card.insertBefore(p, foot);
+}
+function openHub(tab){
+  const hub = $('#hubModal');
+  if (!hub) return;
+  const admin = !!window.__isAdmin;
+  document.querySelectorAll('#hubTabs .hubtab').forEach(b => {
+    const t = b.dataset.hub;
+    b.style.display = (admin || t === 'submit') ? 'block' : 'none';
+  });
+  if (!admin && tab !== 'submit') tab = 'submit';
+  if (!tab) tab = admin ? 'stats' : 'submit';
+  $('#hubTitle').textContent = admin ? '📊 统计与反馈' : '💬 反馈 / 提需求';
+  hub.classList.add('show');
+  switchHub(tab);
+}
+function switchHub(tab){
+  if (!$('#hubModal')) return;
+  document.querySelectorAll('#hubTabs .hubtab').forEach(b => b.classList.toggle('on', b.dataset.hub === tab));
+  const map = {stats:'hubStatsPane', feedback:'hubFeedbackPane',
+               candidates:'hubCandidatesPane', submit:'hubSubmitPane'};
+  Object.entries(map).forEach(([k, id]) => {
+    const p = document.getElementById(id);
+    if (p) p.style.display = (k === tab) ? 'block' : 'none';
+  });
+  if (tab === 'stats') loadQaStats();
+  else if (tab === 'feedback') loadFeedbackAdmin();
+  else if (tab === 'candidates') loadEvalCandidates();
+}
+function closeHub(){ const h = $('#hubModal'); if (h) h.classList.remove('show'); }
 
 function switchQaTab(name){
-  document.querySelectorAll('#qaModal .qtab').forEach(b => {
+  document.querySelectorAll('#hubStatsPane .qtab').forEach(b => {
     b.classList.toggle('on', b.dataset.tab === name);
   });
   ['ov', 'stat', 'log'].forEach(t => {
@@ -3200,7 +3290,12 @@ function md(t){
 }
 
 // ---- 大模型设置 & 使用文档 ----
-function closeModal(id){ document.getElementById(id).classList.remove('show'); }
+function closeModal(id){
+  // 旧的统计/反馈/候选/提交弹窗已搬进 hub，关闭它们 = 关闭 hub
+  if (['qaModal','fbAdminModal','evalModal','fbModal'].includes(id)){ closeHub(); return; }
+  const el = document.getElementById(id);
+  if (el) el.classList.remove('show');
+}
 
 // ---- 反馈 / 提需求 ----
 let FB_KIND = 'improve';
@@ -3217,7 +3312,7 @@ function openFeedback(source){
   if (c){ const u = AUTH.user || {}; c.value = u.username || u.email || ''; }
   const m = $('#fbMsg'); if (m) m.textContent = '';
   const b = $('#fbSubmitBtn'); if (b) b.disabled = false;
-  $('#fbModal').classList.add('show');
+  openHub('submit');
   setTimeout(() => { try{ if (t) t.focus(); }catch(e){} }, 60);
 }
 function pickFbKind(el){
@@ -3258,15 +3353,17 @@ async function submitUserFeedback(){
 // ---- 管理员：用户反馈列表 ----
 let FB_ADMIN = [];
 let FB_FILTER = 'unhandled';
+let FB_PAGE = 1;
+const FB_PAGE_SIZE = 12;
 const FB_KIND_LABELS = {content:'内容补充', improve:'改进建议', feature:'新需求', other:'其他'};
 const FB_SOURCE_LABELS = {qa:'智能问答', defense:'模拟答辩'};
 
 function openFeedbackAdmin(){
   FB_FILTER = 'unhandled';
-  document.querySelectorAll('#fbAdminModal .qtab').forEach(b =>
+  FB_PAGE = 1;
+  document.querySelectorAll('#hubFeedbackPane .qtab').forEach(b =>
     b.classList.toggle('on', b.dataset.filter === 'unhandled'));
-  $('#fbAdminModal').classList.add('show');
-  loadFeedbackAdmin();
+  openHub('feedback');
 }
 async function loadFeedbackAdmin(){
   const box = $('#fbAdminList');
@@ -3290,20 +3387,35 @@ async function loadFeedbackAdmin(){
 }
 function setFbFilter(el){
   FB_FILTER = el.dataset.filter || 'unhandled';
-  document.querySelectorAll('#fbAdminModal .qtab').forEach(b => b.classList.toggle('on', b === el));
+  FB_PAGE = 1;
+  document.querySelectorAll('#hubFeedbackPane .qtab').forEach(b => b.classList.toggle('on', b === el));
   renderFeedbackAdmin();
+}
+function fbPage(delta){ FB_PAGE += delta; renderFeedbackAdmin(); }
+function pagerHtml(page, pages, total, fn){
+  return '<button class="btn" style="padding:2px 10px;font-size:12px" ' +
+      (page <= 1 ? 'disabled' : '') + ' onclick="' + fn + '(-1)">上一页</button>' +
+    '<span>第 ' + page + ' / ' + pages + ' 页 · 共 ' + total + ' 条</span>' +
+    '<button class="btn" style="padding:2px 10px;font-size:12px" ' +
+      (page >= pages ? 'disabled' : '') + ' onclick="' + fn + '(1)">下一页</button>';
 }
 function renderFeedbackAdmin(){
   const box = $('#fbAdminList');
+  const pager = $('#fbPager');
   let items = FB_ADMIN || [];
   if (FB_FILTER === 'unhandled') items = items.filter(x => !x.handled);
   else if (FB_FILTER !== 'all') items = items.filter(x => x.kind === FB_FILTER);
   if (!items.length){
     box.innerHTML = '<div class="empty" style="padding:30px">暂时没有' +
       (FB_FILTER === 'unhandled' ? '待处理的' : '') + '反馈</div>';
+    if (pager) pager.innerHTML = '';
     return;
   }
-  box.innerHTML = items.map(it => {
+  const pages = Math.max(1, Math.ceil(items.length / FB_PAGE_SIZE));
+  FB_PAGE = Math.max(1, Math.min(FB_PAGE, pages));
+  const start = (FB_PAGE - 1) * FB_PAGE_SIZE;
+  const pageItems = items.slice(start, start + FB_PAGE_SIZE);
+  box.innerHTML = pageItems.map(it => {
     const ts = it.ts ? new Date(it.ts * 1000).toLocaleString('zh-CN', {hour12:false}) : '';
     return '<div class="fbfeed' + (it.handled ? ' done' : '') + '">' +
       '<div class="h">' +
@@ -3322,6 +3434,7 @@ function renderFeedbackAdmin(){
         : '') +
     '</div>';
   }).join('');
+  if (pager) pager.innerHTML = pagerHtml(FB_PAGE, pages, items.length, 'fbPage');
 }
 async function markFeedbackHandled(id){
   try{
@@ -3339,19 +3452,23 @@ async function markFeedbackHandled(id){
 // ---- 管理员：测试集候选（来自用户点赞） ----
 let EVAL_CASES = [];
 let EVAL_FILTER = 'pending';
+let EVAL_PAGE = 1;
+const EVAL_PAGE_SIZE = 12;
 
 function openEvalCandidates(){
   EVAL_FILTER = 'pending';
-  document.querySelectorAll('#evalModal .qtab').forEach(b =>
+  EVAL_PAGE = 1;
+  document.querySelectorAll('#hubCandidatesPane .qtab').forEach(b =>
     b.classList.toggle('on', b.dataset.ef === 'pending'));
-  $('#evalModal').classList.add('show');
-  loadEvalCandidates();
+  openHub('candidates');
 }
 function setEvalFilter(el){
   EVAL_FILTER = el.dataset.ef || 'pending';
-  document.querySelectorAll('#evalModal .qtab').forEach(b => b.classList.toggle('on', b === el));
+  EVAL_PAGE = 1;
+  document.querySelectorAll('#hubCandidatesPane .qtab').forEach(b => b.classList.toggle('on', b === el));
   loadEvalCandidates();
 }
+function evalPage(delta){ EVAL_PAGE += delta; renderEvalCandidates(); }
 async function loadEvalCandidates(){
   const box = $('#evalList');
   box.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:13px">加载中…</div>';
@@ -3375,11 +3492,17 @@ async function loadEvalCandidates(){
 }
 function renderEvalCandidates(){
   const box = $('#evalList');
+  const pager = $('#evalPager');
   if (!EVAL_CASES.length){
     box.innerHTML = '<div class="empty" style="padding:30px">暂无候选</div>';
+    if (pager) pager.innerHTML = '';
     return;
   }
-  box.innerHTML = EVAL_CASES.map(it => {
+  const pages = Math.max(1, Math.ceil(EVAL_CASES.length / EVAL_PAGE_SIZE));
+  EVAL_PAGE = Math.max(1, Math.min(EVAL_PAGE, pages));
+  const start = (EVAL_PAGE - 1) * EVAL_PAGE_SIZE;
+  const pageItems = EVAL_CASES.slice(start, start + EVAL_PAGE_SIZE);
+  box.innerHTML = pageItems.map(it => {
     const ts = it.ts ? new Date(it.ts * 1000).toLocaleString('zh-CN', {hour12:false}) : '';
     const srcs = (it.sources || []).slice(0, 4).map(s => esc(s.path || '')).join('<br>');
     const st = it.status || 'pending';
@@ -3411,6 +3534,7 @@ function renderEvalCandidates(){
       '</div>' +
     '</div>';
   }).join('');
+  if (pager) pager.innerHTML = pagerHtml(EVAL_PAGE, pages, EVAL_CASES.length, 'evalPage');
 }
 function evalCaseJson(it){
   return {
@@ -4686,9 +4810,10 @@ function closeOnboard(openManual){
 
 // 上下文开关的记忆：上次开着的仍开着，默认关
 try{ ctxOn = localStorage.getItem('rag.ctx') === '1'; }catch(e){ ctxOn = false; }
+initHub();
 initAuth().then(ok => { if (ok) boot(); });
 // 点击弹窗遮罩关闭
-['llmModal','docModal','myKeyModal','fbModal','fbAdminModal','evalModal','kbWeightsModal'].forEach(id => {
+['llmModal','docModal','myKeyModal','fbModal','fbAdminModal','evalModal','kbWeightsModal','hubModal'].forEach(id => {
   const el = document.getElementById(id);
   if (el) el.addEventListener('click', e => { if (e.target === el) el.classList.remove('show'); });
 });
