@@ -553,7 +553,7 @@
       <input id="loginPwd" type="password" placeholder="密码" autocomplete="current-password">
       <button class="btn primary" onclick="doLogin()" id="loginBtn">登录</button>
       <div class="tip">没有账号？<a href="javascript:showRegister(true)">注册新账号</a></div>
-      <div class="tip" style="color:#64748b;margin-top:8px">进入后可点「⚙ 更多 → 💬 反馈」补充内容、提改进建议或新需求。</div>
+      <div class="tip" style="color:#64748b;margin-top:8px">进入后可点「⚙ 更多 → 💬 反馈 / 提需求」补充内容、提改进建议或新需求。</div>
     </div>
     <div id="registerForm" style="display:none">
       <input id="regEmail" type="email" placeholder="公司邮箱（就是你的账号）" autocomplete="username">
@@ -944,7 +944,8 @@
       <li><b>知识库</b>：选项目库直接提问，回答带引用，可点开原文核对。</li>
       <li><b>模拟答辩</b>：按关键词或上传 PPT，AI 导师提问并评价，帮助查漏补缺。</li>
       <li><b>深度思考</b>：默认关闭更快；复杂问题可以打开，查看模型思考过程。</li>
-      <li><b>反馈</b>：加内容、提建议、说需求，在「⚙ 更多 → 💬 反馈」提交。</li>
+      <li><b>反馈</b>：加内容、提建议、说需求，在「⚙ 更多 → 💬 反馈 / 提需求」提交；管理员在「📊 统计与反馈」统一查看。</li>
+      <li><b>文件权重</b>：选中自己的知识库后，点库名右侧的 ⚖️，或「⚙ 更多 → ⚖️ 文件权重」；默认 1.0，仅库归属人/管理员可设。</li>
     </ul>
     <div class="foot">
       <button class="btn" onclick="closeOnboard(false)">先开始使用</button>
@@ -957,7 +958,7 @@
 <div class="modal" id="noticeModal">
   <div class="card" style="width:min(620px,94vw)">
     <h3 id="noticeTitle">📢 使用提示</h3>
-    <div id="noticeBody" style="font-size:13.5px;line-height:1.9;color:#334155;margin:2px 0 14px">本项目目前处于实验推广阶段，服务器性能有限：多人同时提问时会自动排队，回答速度会明显变慢。请耐心等待，不要重复点击发送。<br><br>如果大模型回答不好，欢迎点 👎 并填写原因（例如“希望补充审核/分发步骤”），我们会据此补充资料、修复问题。<br><br>加内容、觉得系统有改进的地方，或者你的需求，可以点下面的「💬 反馈 / 提需求」填写，也可以随时在右上角「⚙ 更多 → 💬 反馈」里提交。</div>
+    <div id="noticeBody" style="font-size:13.5px;line-height:1.9;color:#334155;margin:2px 0 14px">本项目目前处于实验推广阶段，服务器性能有限：多人同时提问时会自动排队，回答速度会明显变慢。请耐心等待，不要重复点击发送。<br><br>如果大模型回答不好，欢迎点 👎 并填写原因（例如“希望补充审核/分发步骤”），我们会据此补充资料、修复问题。<br><br>加内容、觉得系统有改进的地方，或者你的需求，可以点下面的「💬 反馈 / 提需求」填写，也可以随时在右上角「⚙ 更多 → 💬 反馈 / 提需求」里提交。</div>
     <label style="display:flex;align-items:center;gap:7px;font-size:13px;color:#475569;cursor:pointer;margin-bottom:14px">
       <input type="checkbox" id="noticeNoMore"> 不再显示这条提示
     </label>
@@ -1225,7 +1226,7 @@
         <li>「✍️ 写内容」记录经验，支持 Ctrl+V 粘贴截图。</li>
         <li>「添加」上传文件/文件夹/zip；支持 PDF、Word、PPT、Excel、DBF、SQL、
             文本、图片等，zip 会自动解压。</li>
-        <li>「⚙ 更多 → 💬 反馈 / 提需求」提交资料补充、改进建议、新需求；
+        <li>「⚙ 更多 → 💬 反馈 / 提需求」提交资料补充、改进建议、新需求（管理员在「📊 统计与反馈」统一查看）；
             觉得回答有用可以点 👍，会作为测试素材。</li>
         <li>「⚙ 更多 → 📖 使用文档 → 完整手册」查看详细说明。</li>
       </ul>
@@ -1516,7 +1517,7 @@ function showFirstRunTip(){
     '② 把 Word / PDF / PPT / Excel / DBF 拖进去，等索引跑完（几十页大约 1–2 分钟）<br>' +
     '③ 在下面直接提问，回答会引用你上传的资料<br>' +
     '<span style="color:#64748b;font-size:12.5px">提示：资料越全，回答越准。同一份文档重复上传不会重复占空间。<br>' +
-    '觉得系统哪里可以改进、或者需要新功能？点右上角「⚙ 更多 → 💬 反馈」告诉我们。</span>';
+    '觉得系统哪里可以改进、或者需要新功能？点右上角「⚙ 更多 → 💬 反馈 / 提需求」告诉我们。</span>';
   const close = document.createElement('span');
   close.textContent = '✕';
   close.style.cssText = 'position:absolute;right:10px;top:8px;cursor:pointer;color:#64748b;font-size:14px';
@@ -1533,6 +1534,7 @@ function showFirstRunTip(){
 function renderMe(){
   const u = AUTH.user || {};
   const isAdmin = u.role === 'admin';
+  window.__isAdmin = isAdmin;
   $('#meName').textContent = u.name ? ('👤 ' + u.name + (isAdmin ? '（管理员）' : '')) : '';
   const vu = $('#userMgmtItem');
   if (vu) vu.style.display = isAdmin ? 'block' : 'none';
@@ -1554,7 +1556,6 @@ function renderMe(){
   const sc = $('#sysCfgItem');
   if (sc) sc.style.display = isAdmin ? 'block' : 'none';
   // 管理员: 知识库列表里显示归属
-  window.__isAdmin = isAdmin;
 }
 
 // 列表指纹：用来判断"有没有真的变"，没变就不重绘，避免后台刷新时列表闪烁、
@@ -1639,6 +1640,7 @@ function renderKbs(){
     const mgr = locked ? '' : `
         <span class="kbmgr">
           <button class="rm" title="查看文件列表" onclick="event.stopPropagation();openKbFiles('${k.id}')">📂</button>
+          ${(window.__isAdmin || k.mine) ? `<button class="rm" title="设置这个知识库的文件权重" onclick="event.stopPropagation();openKbWeightsFor('${k.id}')">⚖️</button>` : ''}
           ${window.__isAdmin ? `<button class="rm" title="分配知识库权限（多选只读）" onclick="event.stopPropagation();openShare('${k.id}')">📤</button>` : ''}
           <button class="rm" title="重命名" onclick="event.stopPropagation();promptRename('${k.id}')">✎</button>
           <button class="del" title="删除" onclick="event.stopPropagation();delKb('${k.id}')">✕</button>
@@ -1667,11 +1669,26 @@ let WEIGHT_FILES = [], WEIGHT_VALUES = {}, WEIGHT_KB = null;
 function syncKbWeightsItem(){
   const el = $('#kbWeightsItem');
   if (!el) return;
-  const ok = !!(cur && (window.__isAdmin || cur.mine));
+  const ok = !!(window.__isAdmin || (cur && cur.mine));
   el.style.display = ok ? 'block' : 'none';
+  if (ok) el.textContent = cur ? '⚖️ 文件权重：' + (cur.name || '') : '⚖️ 文件权重（请先选知识库）';
+}
+function openKbWeightsFor(id){
+  const k = (kbs || []).find(x => x.id === id);
+  if (!k) return;
+  if (!(window.__isAdmin || k.mine)){
+    alert('只有知识库归属人或管理员可以设置文件权重');
+    return;
+  }
+  if (!cur || cur.id !== id) select(k);
+  openKbWeights();
 }
 async function openKbWeights(){
-  if (!cur) return;
+  if (!cur){ alert('请先在左侧选择一个知识库，再设置文件权重'); return; }
+  if (!(window.__isAdmin || cur.mine)){
+    alert('只有知识库归属人或管理员可以设置文件权重');
+    return;
+  }
   WEIGHT_KB = cur.id;
   $('#kbWeightsName').textContent = cur.name || '';
   $('#kbWeightsSearch').value = '';
