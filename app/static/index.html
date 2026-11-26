@@ -1650,13 +1650,13 @@ function toggleKbMenu(ev, id){
   const existing = document.querySelector('.kbmenu[data-kb="' + id + '"]');
   closeKbMenus();
   if (existing) return;
-  const canWeight = window.__isAdmin || k.mine;
+  const canManage = window.__isAdmin || k.mine;
   const actions = [
     ['📂 查看文件', `openKbFiles('${id}')`],
-    canWeight ? ['⚖️ 文件权重', `openKbWeightsFor('${id}')`] : null,
+    canManage ? ['⚖️ 文件权重', `openKbWeightsFor('${id}')`] : null,
     window.__isAdmin ? ['📤 分配权限', `openShare('${id}')`] : null,
-    ['✎ 重命名', `promptRename('${id}')`],
-    ['✕ 删除', `delKb('${id}')`, 'danger'],
+    canManage ? ['✎ 重命名', `promptRename('${id}')`] : null,
+    canManage ? ['✕ 删除', `delKb('${id}')`, 'danger'] : null,
   ].filter(Boolean);
   const menu = document.createElement('div');
   menu.className = 'kbmenu';
