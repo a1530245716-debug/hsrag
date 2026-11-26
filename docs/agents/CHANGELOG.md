@@ -6,6 +6,16 @@
 
 ---
 
+### 21:25（11-26） | Claude Code | `app/server.py` | 修复 PPT 预览表格表头偏移 | 引用点开的 PPT 表格表头位置错位
+
+- 预览页通用 `th` 原来是 `position:sticky; top:52px`；表格在 `.tw` 横向滚动容器里，
+  这个 52px 不是相对表头容器，导致表头下沉/与表体错位。
+- 去掉 sticky（改为普通表头），`th` 底边与第一行 `td` 顶边对齐。
+- 实测「投资系统日志体系和周边工具.pptx」预览：th position=static、top=auto，
+  thBottom=tdTop=7171.17px；表头与表体对齐。
+
+---
+
 ### 21:12（11-26） | Claude Code | `app/static/defense.html` | 答辩开屏提示增加「不再显示这条提示」勾选框 | 人反馈开屏提示没有“下次不再提醒”选项
 
 - 提示弹窗底部新增勾选框；勾选后点「我知道了」/「去反馈」都会记到

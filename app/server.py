@@ -3084,7 +3084,7 @@ def _preview_html(kb_id, path, name, content_html, kind, size=None, hl=""):
         font-size:13px; line-height:1.6; white-space:pre-wrap; word-break:break-word; max-height:78vh; overflow:auto; }}
   table {{ border-collapse:collapse; background:#fff; width:100%; font-size:12px; }}
   th,td {{ border:1px solid #d6dce4; padding:5px 8px; text-align:left; }}
-  th {{ background:#f0f4f9; position:sticky; top:52px; }}
+  th {{ background:#f0f4f9; }}
   .wrap {{ overflow:auto; max-height:74vh; border:1px solid #e3e6ea; border-radius:8px; }}
   img {{ max-width:100%; border:1px solid #e3e6ea; border-radius:8px; }}
   iframe {{ width:100%; height:78vh; border:1px solid #e3e6ea; border-radius:8px; background:#fff; }}
