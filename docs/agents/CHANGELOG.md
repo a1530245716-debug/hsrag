@@ -6,6 +6,24 @@
 
 ---
 
+### 17:04（11-26） | Claude Code | 部署/验证 | 上线 `rag-bff:20261126-evalset`（点赞入评测候选 + `llm.thinking` 开关 + 合并 agent/phase1-limit） | 人要求点赞答案可进测试集；同时完成思考开关与并发合并
+
+- 容器 `rag-bff` healthy，`/api/health` 200；备份
+  `/opt/rag/backup/20261126-evalset-20261126-170041`（.env/config/镜像列表），
+  旧源码 `/opt/rag/src.bak-20261126-170041`；回滚点 `20261126-manual-hits`。
+- 首页含「📋 测试集候选」；`/openapi.json` 出现
+  `/api/eval/candidates`、`/api/eval/candidates/export`、
+  `/api/eval/candidates/{cid}/status`。
+- 生产实测：用真实 qa id `20261126170420-7f2e9d` 提交 👍 → 候选生成
+  （模块识别 交易所），管理员列表/导出正常；随后标记 `ignored`，待核对列表保持干净。
+- 合并后单问题复测（交易所指令怎么下单，no_cache）：检索 **9.96s**
+  （日志 `[manual] skip` 5 条手册页），引用 3 条，首字 7.82s，总 19.41s；
+  仍偏向 `<期货指令>`，mod-01 的“个股指令”内容缺口仍在（检索内容问题）。
+- `thinking` 生产仍保持默认（未切）；A/B 结论见 16:57，确认后改
+  `/opt/rag/config.json` 的 `llm.thinking={"type":"disabled"}` 即可（热读）。
+
+---
+
 ### 16:57（11-26） | Claude Code | `app/eval_store.py`、`app/server.py`、`app/static/index.html`、`app/llm.py` | 用户点赞的回答进入评测候选；新增 `llm.thinking` 开关 | 人要求"点赞的可以添加到测试集"；并验证思考开/关的业务影响
 
 - 👍 时前端随 `/api/feedback` 带完整问题/答案/引用/kb；👎 不带（减少请求体）。
