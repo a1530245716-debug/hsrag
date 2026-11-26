@@ -2017,6 +2017,219 @@ def _has_confident_hit(results, min_score=2.0):
     return False
 
 
+# ---------------- 按分数分布动态决定给几条 ----------------
+#
+# 人给的需求（2026-11-26）：
+#   「每次都 8 条，感觉不好，能不能改为定为到答案了，那就少点，
+#     如果 8 条里面都没有就适当多点，当然不能无限查询，
+#     有的时候就是知识库没有这个内容。」
+#
+# 固定给 8 条的问题：答案本来就在第 1 条时，后面 7 条无关内容会把答案稀释掉，
+# 大模型容易东拉西扯。反过来，如果 8 条都不相关，硬塞 8 条只会让它编。
+#
+# 判据用 rerank_score 而不是 score。2026-11-26 实测（鑫元库，开重排）：
+#
+#   问题                      rerank_score 序列                     含义
+#   otrade 部署需要准备…      4.74 4.69 4.39 4.39 4.39 4.27 3.91 3.57   全正，都相关
+#   Hsiar 是做什么的          3.07 2.65 2.39 0.93 0.56 0.52 0.21 -0.07   前 3 强，第 4 条断崖
+#   系统上线投产需要准备…     3.75 3.67 3.67 3.67 2.82 2.81 2.75 2.75   平滑下降
+#   今天天气怎么样            3.02 2.56 -4.57 -8.11 …                   前 2 弱，后面全负
+#   如何做红烧肉              -3.61 -3.61 -4.06 -4.07 …                 全负 = 库里没有
+#
+# 规律：正数=相关，负数=不相关。而 BM25 的 score 在同一结果里会出现
+# [0.0, 100.37, 123.12, 0.0, …] 这种 0 与百位混排，没法判断相关性。
+#
+# 四档（人已确认第三档拆成「全负就说没找到」）：
+#   断层明显（首条远超次条）  → 3 条：答案很明确，多了是噪音
+#   分数平滑下降             → 5 条：需要多点上下文
+#   全部分数很低             → 3 条：仍给弱片段，由模型判断有没有（别硬判没找到）
+#   低分但不全负             → 8 条：尽量凑
+#
+# 关掉重排的库没有 rerank_score，**回退到固定条数**，不瞎裁（人已确认）。
+
+# ---------------- 决定给几条：只在"冗余"时做减法 ----------------
+#
+# 人给的需求（2026-11-26）：
+#   「每次都 8 条，感觉不好，能不能改为定为到答案了，那就少点，
+#     如果 8 条里面都没有就适当多点，当然不能无限查询，
+#     有的时候就是知识库没有这个内容。」
+#
+# 第一版按「重排分数」裁：分数高的留、低的丢。**实测是错的**，因为
+# 关键内容片段的重排分往往偏低——「JDK 要求 8u181」这种技术细节，
+# 字面不像在回答"部署要注意什么"，但它恰恰是答案。
+#
+# 2026-11-26 在 6 条真实评测用例上的实测：
+#   xy-03 「otrade 部署和升级要注意什么」
+#     全库 8 条里**只有 1 条**含 JDK，而且它排在第 5 位。
+#     裁到 3 条 = 正好裁掉唯一有用的那条。
+#   xy-06 「otrade 升级流程」
+#     8 条里 7 条含关键内容；裁到 3 条只剩 3 条，覆盖度直接腰斩。
+#
+# 评测对比：裁剪关闭 6/6，按分数裁 4/6。**按分数裁会伤答案。**
+#
+# 所以判据换成「冗余」而不是「分数」：
+#   * 同样的内容说两遍没有信息增量 → 可以删
+#   * 分数低但内容独有的片段 → 绝不能删
+#
+# 三档（人已确认）：
+#   首条很强 + 后面大量重复    → 3~5 条：删掉的都是重复的文档片段
+#   分数平滑 / 命中分散        → 8 条：不动
+#   全部分数都很低            → 3 条：给弱片段由模型判断"有没有"
+#
+# 永远不做的事：因为分数低就丢片段。宁可多给，不可漏掉唯一答案。
+
+# ---------------- 去掉完全重复的检索片段（方案 B，2026-11-26） ----------------
+#
+# 人给的需求：「每次都 8 条，感觉不好，能不能改为定为到答案了，那就少点，
+#   如果 8 条里面都没有就适当多点，当然不能无限查询，
+#   有的时候就是知识库没有这个内容。」
+#
+# 试过两版按「重排分数」裁（高分留低分丢），**都失败**，实测证据：
+#
+#   xy-03「otrade 部署和升级要注意什么」
+#     含 JDK 的片段排在第 **7、8** 位（re rank 3.75），前 6 条是 4.26~5.41。
+#     任何按分数的裁剪都保不住它 —— 可它恰恰是答案的关键部分。
+#     全库 8 条里只有这 2 条提到 JDK。
+#
+#   评测对照（每档连跑两轮）：
+#     8 条不裁  → 6/6, 6/6   （稳定）
+#     按分数裁  → 6/6, 5/6   （不稳定，取决于那几条碰巧有没有重复）
+#
+# 根因：**"像不像在回答"和"内容是不是答案"是两件事**。重排模型判的是前者；
+# 「JDK 版本要求 8u181」这种技术参数，字面确实不像在回答"部署要注意什么"，
+# 但它是答案的一部分。按分数裁 = 系统性地优先删掉最专业的那部分。
+#
+# 所以最终只做一件事：**删掉文本高度重复的片段**。
+#   * 同一份文档被切成多块、内容几乎一样 → 删，没有信息损失
+#   * 内容各不相同 → 一条都不删，哪怕分数很低
+#   * 不设"必须裁到 N 条"的目标，有多少重复就删多少
+#
+# 结果可能是 8 条、7 条或 5 条，取决于库里文档的重复程度。这是正确的行为：
+# 该少的时候少，但绝不能因为"想要少"而丢掉唯一答案。
+
+_TRIM_DEFAULTS = {
+    "enabled": True,
+    # 两段文字的 5 字滑窗重合度 >= 此值，判为重复，只保留分数高的那条
+    "dup_ratio": 0.85,
+    # 同一份文档最多保留几条（同一份长文档切成很多块时，内容往往高度相似）
+    "same_doc_keep": 3,
+    # 这条片段里出现了"前面都没有的技术名词"（JDK / Redis / Zookeeper…），
+    # 就绝不删——它可能正是唯一讲这个点的那一段。
+    "protect_unique_terms": True,
+}
+
+
+def _trim_cfg(cfg=None):
+    """取去重配置，允许在 config.json 的 retrieval.trim 里覆盖。"""
+    out = dict(_TRIM_DEFAULTS)
+    try:
+        sec = (cfg or llm.load_config()).get("retrieval", {}).get("trim") or {}
+    except Exception:
+        sec = {}
+    for k in _TRIM_DEFAULTS:
+        if k in sec:
+            v = sec[k]
+            if k in ("enabled", "protect_unique_terms"):
+                out[k] = bool(v)
+            else:
+                try:
+                    out[k] = float(v) if k == "dup_ratio" else int(v)
+                except Exception:
+                    pass
+    return out
+
+
+def _shingles(text, n=5):
+    """把正文切成 n 字滑窗集合，用来算两段文字的重合度。
+
+    取 5 字是因为中文里 5 个连续的词基本能确定"这是在说同一句"，
+    再短容易把不同的句子误判成重复。
+    """
+    t = "".join((text or "").split())
+    if len(t) < n:
+        return {t} if t else set()
+    return {t[i:i + n] for i in range(len(t) - n + 1)}
+
+
+def _overlap(a_set, b_set):
+    """a 有多大比例出现在 b 里，0~1。"""
+    if not a_set:
+        return 0.0
+    return len(a_set & b_set) / len(a_set)
+
+
+_TERM_RE = None
+
+
+def _tech_terms(text):
+    """提取一段文字里的"技术名词"：英文缩写/版本号/产品名。
+
+    JDK、Redis、Zookeeper、RabbitMQ、O32、V1.3、.NET 这类词，
+    是判断"这段有没有独有信息"最靠得住的信号——中文描述可以换着说，
+    但技术名词该出现还是会出现。
+    """
+    global _TERM_RE
+    if _TERM_RE is None:
+        import re as _re
+        _TERM_RE = _re.compile(r"[A-Za-z][A-Za-z0-9_.\-]{2,}")
+    return {m.group(0).lower() for m in _TERM_RE.finditer(text or "")}
+
+
+def _trim_by_scores(results, cfg=None):
+    """去掉重复片段。返回 (保留的列表, 决策说明)。
+
+    名字保留 `_trim_by_scores` 是为了不动调用处，但**已经不按分数裁了**，
+    只按文本重合度去重。说明会打日志，方便回查删了什么。
+    """
+    conf = _trim_cfg(cfg)
+    n_total = len(results or [])
+    if not conf["enabled"] or n_total <= 1:
+        return results, {"why": "跳过(未启用或不足 2 条)", "keep": n_total}
+
+    # 记下每条的位置，日志里能看出删掉的是第几条
+    kept = []
+    kept_sh = []
+    doc_count = {}
+    dropped = []
+    seen_terms = set()      # 已保留片段里出现过的技术名词
+    for idx, r in enumerate(results):
+        text = r.get("text") or ""
+        doc = r.get("path") or ""
+
+        if doc_count.get(doc, 0) >= conf["same_doc_keep"]:
+            dropped.append(idx + 1)
+            continue
+
+        sh = _shingles(text)
+
+        # 保护：这条带来了前面没有的技术名词，说明它有独有信息，不能删。
+        # 2026-11-26 实测 xy-03 就栽在这里——含 JDK 的那条和前面的尽调材料
+        # 文本高度重合（同族文档），被误判成重复删掉了，可全库只有它提到 JDK。
+        if conf["protect_unique_terms"]:
+            new_terms = _tech_terms(text) - seen_terms
+            if len(new_terms) >= 1 and idx > 0:
+                kept.append(r)
+                kept_sh.append(sh)
+                doc_count[doc] = doc_count.get(doc, 0) + 1
+                seen_terms |= new_terms
+                continue
+
+        if any(_overlap(sh, ks) >= conf["dup_ratio"] for ks in kept_sh):
+            dropped.append(idx + 1)
+            continue
+
+        kept.append(r)
+        kept_sh.append(sh)
+        doc_count[doc] = doc_count.get(doc, 0) + 1
+        seen_terms |= _tech_terms(text)
+
+    if not dropped:
+        return kept, {"why": "没有重复片段，原样给出", "keep": len(kept)}
+
+    return kept, {"why": f"删掉 {len(dropped)} 条重复片段", "keep": len(kept),
+                  "dropped_at": dropped}
+
+
 _NOT_FOUND_MARKS = ("未找到相关信息", "未检索到相关内容", "文档中未找到",
                     "未在文档中", "没有找到相关", "未找到与", "文档中未提及")
 
@@ -2661,6 +2874,19 @@ def kb_ask(kb_id: str, body: AskIn, request: Request):
         _log_ask(q, kb_id, request, "知识库中未检索到相关内容", [], "none", True, _t0, "", False, cfg)
         return {"ok": True, "answer": "知识库中未检索到相关内容,且大模型兜底失败。", "sources": [], "source_type": "none"}
 
+
+    # 按分数分布决定给几条（2026-11-26 需求）：答案明确就少给，库里没有就说没找到
+    results, _trim_info = _trim_by_scores(results, cfg)
+    print(f'[trim] 保留 {len(results)} 条 {_trim_info}', file=sys.stderr)
+    if not results:
+        # 防御：去重后理论上不会全空，但若上游后端返回空列表，
+        # 这里给出明确答复比让提示词拼出空上下文好。
+        # 注意这是非流式链路(kb_ask)，直接 return JSON，不能 yield SSE。
+        _msg = ('知识库里没有找到与这个问题相关的内容。'
+                '可以换个问法，或者把相关资料补进来再问。')
+        _log_ask(q, kb_id, request, _msg, [], 'none', True, _t0, '', False, cfg)
+        return {"ok": True, "answer": _msg, "sources": [], "source_type": "none",
+                "source_label": "未找到相关内容", "not_found": True}
     sources = _reorder_for_listing(q, _build_sources(results, kb_id=kb_id))
     lcfg = llm.llm_settings(cfg)
 
@@ -3183,6 +3409,19 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
                 yield sse("answer", {"text": "大模型兜底调用失败,请检查网络或稍后重试。"})
             return
 
+
+        # 按分数分布决定给几条（2026-11-26 需求）：答案明确就少给，库里没有就说没找到
+        results, _trim_info = _trim_by_scores(results, cfg)
+        print(f'[trim] 保留 {len(results)} 条 {_trim_info}', file=sys.stderr)
+        if not results:
+            # 防御：去重后理论上不会全空，但若上游后端返回空列表，
+            # 这里给出明确答复比让提示词拼出空上下文好。
+            _msg = '知识库里没有找到与这个问题相关的内容。可以换个问法，或者把相关资料补进来再问。'
+            _log_ask(q_eff, kb_id, request, _msg, [], 'none', True, _t_start, '', False, cfg)
+            yield sse('answer', {'text': _msg, 'not_found': True})
+            yield sse('done', {'full': _msg, 'source_type': 'none',
+                               'source_label': '未找到相关内容'})
+            return
         sources = _reorder_for_listing(q_eff, _build_sources(results, kb_id=kb_id))
         yield sse("sources", {"sources": sources,
                               "planning": {"split": plan_["split"], "queries": queries,
@@ -3496,6 +3735,19 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
                 yield sse("answer", {"text": "大模型兜底调用失败,请检查网络或稍后重试。"})
             return
 
+
+        # 按分数分布决定给几条（2026-11-26 需求）：答案明确就少给，库里没有就说没找到
+        results, _trim_info = _trim_by_scores(results, cfg)
+        print(f'[trim] 保留 {len(results)} 条 {_trim_info}', file=sys.stderr)
+        if not results:
+            # 防御：去重后理论上不会全空，但若上游后端返回空列表，
+            # 这里给出明确答复比让提示词拼出空上下文好。
+            _msg = '知识库里没有找到与这个问题相关的内容。可以换个问法，或者把相关资料补进来再问。'
+            _log_ask(q_eff, kb_id, request, _msg, [], 'none', True, _t_start, '', False, cfg)
+            yield sse('answer', {'text': _msg, 'not_found': True})
+            yield sse('done', {'full': _msg, 'source_type': 'none',
+                               'source_label': '未找到相关内容'})
+            return
         sources = _reorder_for_listing(q_eff, _build_sources(results, kb_id=kb_id))
         yield sse("sources", {"sources": sources,
                               "planning": {"split": plan_["split"], "queries": queries,
