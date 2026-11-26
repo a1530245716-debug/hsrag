@@ -27,6 +27,16 @@
   测试反馈写到临时目录（`RAG_FEEDBACK_DIR`），未污染共享 `app/data`。
 - 合并：main 上 11-19~11-26 的已上线改动先提交为 `bd1c4b0`（checkpoint），
   再把 `claude/rerank-tune` 合入 main；冲突仅限 import、入口提示调用和 defense CSS 三处。
+- **15:44 已部署 `rag-bff:20261126-feedback` 到 10.20.154.26:8000，healthy**
+  （容器 `Up (healthy)`，`/api/health` 200）；服务器备份
+  `/opt/rag/backup/20261126-feedback-20261126-154203`（.env/config/镜像列表），
+  旧源码 `/opt/rag/src.bak-20261126-154203`；回滚点 `20261126-sql-backfill`。
+  验证：首页和答辩页都含「💬 反馈 / 提需求」，`/openapi.json` 出现
+  `/api/suggestion`、`/api/suggestions`、`/api/suggestions/{fid}/handled`；
+  `app/data/feedback.jsonl` 在第一条反馈时自动创建（当前尚未创建）。
+  发版脚本 `deploy/release_to_server.py` 一键完成；本次脚本在最后打印 ✅ 时
+  遇到 GBK 控制台 `UnicodeEncodeError`（实际发版已成功），已改为 UTF-8 输出 +
+  ASCII `[OK]/[FAIL]` 标记。
 
 ---
 

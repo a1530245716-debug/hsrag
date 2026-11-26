@@ -121,6 +121,36 @@ python eval/run_eval.py
 **数据更新**（文档/索引）不重新构建镜像：更新 `/opt/rag/data`（上传/重建索引），
 镜像只负责代码；模型更新替换 `/opt/rag/models` 后重启容器。
 
+### 7.1 一键发版脚本（本机 Windows）
+
+凭据放在仓库外的本机文件（`chmod/icacls` 仅当前用户可读，**勿提交**）：
+
+```
+~/.rag_prod.env
+  RAG_DEPLOY_HOST=10.20.154.26
+  RAG_DEPLOY_USER=root
+  RAG_DEPLOY_PASS=...
+```
+
+打包源码（不含 data/models/config，含 `deploy/wheels`）：
+
+```bash
+tar --exclude='app/data' --exclude='app/config.json*' \
+    --exclude='__pycache__' --exclude='*.pyc' \
+    --exclude='deploy/assets' --exclude='deploy/*.tar' \
+    -czf dist/rag-src-<tag>.tar.gz .dockerignore app deploy *.py
+```
+
+发版（自动备份 `.env`/config、上传、换 src、build、切 tag、重启、health）：
+
+```bash
+set -a; source ~/.rag_prod.env; set +a
+python deploy/release_to_server.py --tag <tag> --src dist/rag-src-<tag>.tar.gz
+```
+
+脚本不保存密码：不设 `RAG_DEPLOY_PASS` 时交互输入。回滚只需把 `/opt/rag/.env`
+的 `RAG_TAG` 改回上一版，再 `docker-compose -f compose.yml up -d --pull never`。
+
 ## 8. 注意事项
 
 - 镜像**绝不**包含 `app/data`、`models`、`config.json`；`.dockerignore` 已排除；
@@ -241,3 +271,17 @@ python eval/run_eval.py
 - 2026-11-26 修复：`rag-bff:20261126-sql-backfill`，解决 SQL 文件“签名未变但从未生成块”
   导致重建跳过的问题；etm 库已重建，新增 48 条 SQL 文件名块。回滚点
   `20261125-def-kw3`。
+
+### 2026-11-26 反馈 / 提需求入口
+
+- 当前 tag：`rag-bff:20261126-feedback`（回滚点 `20261126-sql-backfill`，容器 healthy）。
+- 新增：更多菜单「💬 反馈 / 提需求」与管理员「📝 用户反馈」（待处理/全部/类型筛选、
+  标记已处理）；进入知识库原有的「实验推广阶段」提示里直接给反馈按钮；
+  答辩页进入时的推广/排队提醒带「去反馈」，顶栏也有反馈入口。
+- 后端：`POST /api/suggestion`、`GET /api/suggestions`、
+  `POST /api/suggestions/{id}/handled`；数据写 `/opt/rag/data/feedback.jsonl`
+  （首次反馈时创建，追加写、20MB 轮转）。
+- 备份：`/opt/rag/backup/20261126-feedback-20261126-154203`（.env/config/镜像列表）；
+  旧源码：`/opt/rag/src.bak-20261126-154203`。
+- 验证：health 200；首页和答辩页都含反馈入口；`/openapi.json` 出现 3 个新接口；
+  容器 `Up (healthy)`。发版使用 `deploy/release_to_server.py` 一键完成。

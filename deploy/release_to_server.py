@@ -16,10 +16,17 @@
 import argparse
 import getpass
 import os
-import posixpath
 import sys
 import time
 from pathlib import Path
+
+# Windows 控制台默认 GBK，输出 ✅/❌/中文混合会 UnicodeEncodeError；
+# 统一成 UTF-8，失败时也不因打印把发版结果带崩。
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 try:
     import paramiko
@@ -172,7 +179,7 @@ def main():
                  f"http://127.0.0.1:8000/api/suggestions",
             "健康检查与新功能校验")
 
-        log("\n✅ 发版完成")
+        log("\n[OK] 发版完成")
         log(f"   镜像：rag-bff:{tag}")
         log(f"   备份：{backup}（.env / config / 镜像列表）")
         log(f"   旧源码：{src_old}")
@@ -180,7 +187,7 @@ def main():
             "再 docker-compose -f /opt/rag/compose.yml up -d --pull never")
         return 0
     except Exception as e:
-        log(f"\n❌ 发版失败：{e}")
+        log(f"\n[FAIL] 发版失败：{e}")
         log("   若已切换 src/tag 但容器异常，可按上面备份目录回滚。")
         return 1
     finally:
