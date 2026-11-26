@@ -14,12 +14,14 @@
 - **加密存储**：明文写在磁盘上，任何能读到文件的人都拿到 key 了。
   这里用 AES-GCM（密码学库）或退化为 Fernet（cryptography），都拿不到就拒绝保存——
   宁可不存，也不能明文落盘。
-- **只覆盖 key**：base_url / model 沿用全局配置。让用户改这些只会配错，
-  而且公司内网地址本来就统一。
+- **key + 可选 model**：base_url 沿用全局；model 默认用全局，用户填了自己的
+  就以用户为准（不同 BYOK Key 支持的模型名可能不同）。
+- **全局模型不覆盖个人模型**：个人 model 存在本文件，管理员改 config.json 不影响它。
 
 文件格式
 --------
-    {"u_xxx": {"key_enc": "...", "saved": "2026-11-06 16:00", "tail": "abcd"}}
+    {"u_xxx": {"key_enc": "...", "saved": "2026-11-06 16:00", "tail": "abcd",
+               "model": "deepseek-flash"}}
 
 `tail` 是 key 末 4 位，用于界面上显示"你自己的 key（…abcd）"，方便用户确认填对了。
 """
@@ -166,21 +168,34 @@ def get_key(uid: str) -> str:
     return decrypt(rec.get("key_enc", ""))
 
 
+def get_model(uid: str) -> str:
+    """取该用户自定义的模型名；没配置返回空串（回落到全局模型）。"""
+    if not uid:
+        return ""
+    with _LOCK:
+        rec = (_load() or {}).get(uid) or {}
+    if not rec.get("key_enc"):
+        return ""
+    return (rec.get("model") or "").strip()
+
+
 def info(uid: str) -> dict:
-    """给前端看的状态：有没有配、什么时候配的、末 4 位。**不返回 key 本身。**"""
+    """给前端看的状态：有没有配、什么时候配的、末 4 位、模型名。**不返回 key 本身。**"""
     if not uid:
         return {"has_own": False}
     with _LOCK:
         rec = (_load() or {}).get(uid) or {}
     has = bool(rec.get("key_enc"))
-    return {"has_own": has, "saved": rec.get("saved", ""), "tail": rec.get("tail", "")}
+    return {"has_own": has, "saved": rec.get("saved", ""), "tail": rec.get("tail", ""),
+            "model": (rec.get("model") or "") if has else ""}
 
 
-def set_key(uid: str, key: str) -> dict:
-    """保存该用户自己的 key。key 传空串 = 清除，回落到全局 key。"""
+def set_key(uid: str, key: str, model: str = "") -> dict:
+    """保存该用户自己的 key（及可选 model）。key 传空串 = 清除，回落全局。"""
     if not uid:
         raise ValueError("缺少用户")
     key = (key or "").strip()
+    model = (model or "").strip()
     with _LOCK:
         d = _load()
         if not key:
@@ -192,6 +207,7 @@ def set_key(uid: str, key: str) -> dict:
             "key_enc": enc,
             "saved": time.strftime("%Y-%m-%d %H:%M"),
             "tail": key[-4:] if len(key) >= 4 else "",
+            "model": model,
         }
         _save(d)
     return info(uid)

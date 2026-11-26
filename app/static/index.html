@@ -787,6 +787,28 @@
   </div>
 </div>
 
+<!-- 进入知识库的使用提示（实验推广阶段） -->
+<div class="modal" id="noticeModal">
+  <div class="card" style="width:min(620px,94vw)">
+    <h3>📢 使用提示</h3>
+    <div style="font-size:13.5px;line-height:1.9;color:#334155;margin:2px 0 12px">
+      本项目目前处于 <b style="color:#b45309">实验推广阶段</b>，服务器性能有限：
+      多人同时提问时会自动排队，回答速度会明显变慢。请耐心等待，
+      <b>不要重复点击发送</b>。
+    </div>
+    <div style="font-size:13.5px;line-height:1.9;color:#334155;margin-bottom:14px">
+      如果大模型回答不好，欢迎点 <b>👎</b> 并填写原因（例如“希望补充审核/分发步骤”），
+      我们会据此补充资料、修复问题。
+    </div>
+    <label style="display:flex;align-items:center;gap:7px;font-size:13px;color:#475569;cursor:pointer;margin-bottom:14px">
+      <input type="checkbox" id="noticeNoMore"> 不再显示这条提示
+    </label>
+    <div class="foot">
+      <button class="btn primary" onclick="closeNotice()">关闭</button>
+    </div>
+  </div>
+</div>
+
 <!-- 分配知识库权限（管理员） -->
 <div class="modal" id="shareModal">
   <div class="card" style="width:min(720px,95vw)">
@@ -876,13 +898,19 @@
   <div class="card">
     <h3>🔑 我的大模型 Key</h3>
     <div id="myKeyStatus" style="margin:10px 0;padding:10px 12px;border-radius:8px;font-size:13.5px;line-height:1.7"></div>
-    <label class="f">填入你在 demoproduct 平台申请的 Key</label>
-    <input id="myKeyInput" type="password" placeholder="粘贴 demoproduct 平台申请到的 Key" autocomplete="off">
+    <label class="f">填入你在 LightCode UIS 大模型平台申请的 Key</label>
+    <input id="myKeyInput" type="password" placeholder="粘贴 LightCode UIS 平台申请到的 Key" autocomplete="off">
+    <label class="f">模型（可选，填这个 Key 支持的模型名）</label>
+    <input id="myKeyModel" type="text" placeholder="例如 deepseek-flash / deepseek-v4-pro；不填用公共模型" autocomplete="off">
+    <div class="hint" style="margin:-2px 0 8px;line-height:1.6">
+      不同 Key 支持的模型可能不同；你填的模型优先。管理员修改全局模型<strong>不会覆盖</strong>这里。
+    </div>
     <div class="hint" id="myKeyHint" style="line-height:1.8">
-      <b style="color:#b45309">只支持公司 demoproduct 大模型平台签发的 Key。</b><br>
+      <b style="color:#b45309">只支持公司 LightCode UIS 大模型网关签发的 Key。</b><br>
       申请入口：
-      <a href="http://demoproduct.examplecorp.com/ai_market/API" target="_blank" rel="noopener">http://demoproduct.examplecorp.com/ai_market/API</a>，
-      具体注册流程见公司内部文档。<br>
+      <a href="http://lightcode.hundsun.com/ai_market/API" target="_blank" rel="noopener">LightCode UIS 大模型控制台</a>；
+      申请文档：
+      <a href="https://alidocs.dingtalk.com/i/nodes/P7QG4Yx2Jp7N1zqziZ722K9PV9dEq3XD?biz_ver=10&amp;corpId=ding832c343f4b1a9ae4&amp;dd_close=false&amp;dd_user_keyboard=false&amp;doc_type=wiki_doc&amp;dt_editor_toolbar=true&amp;rnd=0.4149816376720521&amp;type=m" target="_blank" rel="noopener">公司大模型申请文档</a>。<br>
       OpenAI、DeepSeek 官网、通义等<b>外部厂商的 Key 填进来无效</b>——本系统只会用它访问
       <code id="keyGatewayUrl">公司网关</code>，不走外网。<br>
       填了之后仅你自己使用，不影响其他人。
@@ -905,13 +933,14 @@
     <div class="formrow">
       <div><label class="f">协议</label>
         <select id="cfg_protocol"><option value="anthropic">Anthropic 协议</option><option value="openai">OpenAI 协议</option></select></div>
-      <div><label class="f">模型名</label><input id="cfg_model" type="text" placeholder="如 deepseek-v4-flash0731"></div>
+      <div><label class="f">模型名</label><input id="cfg_model" type="text" placeholder="如 deepseek-flash / deepseek-v4-pro"></div>
     </div>
     <label class="f">接口地址 base_url</label>
-    <input id="cfg_base" type="text" placeholder="http://demoproduct-uis.examplecorp.com:8080">
+    <input id="cfg_base" type="text" placeholder="http://lightcode-uis.hundsun.com:8080">
     <label class="f">API Key / Token</label>
     <input id="cfg_key" type="password" placeholder="已配置则留空不变;想替换则填新 key">
-    <div class="hint">保存后立即生效,无需重启服务。留空 = 保持原 key 不变。</div>
+    <div class="hint">保存后立即生效,无需重启服务。留空 = 保持原 key 不变。<br>
+      全局模型只影响没有自定义模型的用户；用户在「我的 Key」里填的模型不会被覆盖。</div>
     <div class="foot">
       <button class="btn" onclick="closeModal('llmModal')">取消</button>
       <button class="btn primary" onclick="saveLlmCfg()">保存并生效</button>
@@ -928,139 +957,210 @@
       <button class="tab" data-tab="tab-bg" onclick="switchTab('tab-bg')">项目背景与说明</button>
     </div>
     <div class="tabpane on" id="tab-manual">
-      <h4>一、这是什么</h4>
-      <p>「项目智能问答助手」是一个<b>文档问答系统</b>。每个项目的资料（需求、方案、接口、部署手册、周报、遗留问题等）各自建成一个知识库，你用中文直接提问，它从这些文档里找依据、组织答案，并<b>告诉你答案出自哪份文档的哪一段</b>。</p>
-      <p>它不是你熟悉的普通聊天机器人：<b>它只根据项目文档回答</b>，不靠记忆瞎编。所以答案对错，你随时能点开引用核对原文。</p>
-
-      <h4>二、登录</h4>
+      <div class="box">
+        <b>两个独立场景：</b>
+        <b>知识库问答</b>用于接手项目、查部署/环境/操作，入口在左侧知识库；
+        <b>模拟答辩</b>用于培训后的考核、导师模拟提问和自测，入口在右上角「🎓 答辩演练」。
+        两者权限分开，不是一条流水线。
+      </div>
+      <h4>一、3 分钟快速开始</h4>
       <ol>
-        <li>浏览器打开 <code>https://rag.example.com</code>（手机浏览器同样可用）。</li>
-        <li>在输入框里填管理员给你的 <b>访问 key</b>，点「进入」。<b>没有用户名，key 就是身份。</b></li>
-        <li>不同 key 能看到的知识库不同。看不到某个项目，就是你的 key 没有被授权，找管理员开。</li>
+        <li>在公司内网用 Chrome / Edge 打开管理员提供的系统地址。</li>
+        <li>没有账号就点「注册新账号」，用公司邮箱注册；已有账号直接登录。</li>
+        <li>登录后先在左侧选择一个知识库。看不到知识库或入口是灰的，找管理员开通/分享。</li>
+        <li>在底部输入问题，按 Enter 发送；答案出来后点正文里的 <b>[1] [2]</b> 看引用原文。</li>
+      </ol>
+      <div class="box">
+        <b>完整流程：</b>注册/登录 → 选知识库 → 提问 → 看引用 → 需要补资料时新建/上传 → 等索引完成再问。<br>
+        一个项目建议建一个独立知识库；选错库，系统就找不到对应资料。
+      </div>
+
+      <h4>二、注册与登录</h4>
+      <p><b>注册</b></p>
+      <ol>
+        <li>登录页点「注册新账号」。</li>
+        <li>填<b>公司邮箱</b>（邮箱就是你的登录账号）、设置密码（至少 6 位）。</li>
+        <li>如果页面出现「邮箱验证码」或「邀请码」，按管理员提供的方式填写。</li>
+        <li>点「注册并登录」。新账号默认的知识库/答辩权限由管理员在「系统参数设置」里决定。</li>
+      </ol>
+      <p><b>登录</b></p>
+      <ul>
+        <li>用账号密码登录；同一浏览器不同标签页可以各自登录不同账号。</li>
+        <li>右上角显示当前用户名；「更多」菜单里可以退出登录。</li>
+        <li>看不到某个知识库不是系统坏了，是管理员没有把这个库分享给你。</li>
+      </ul>
+
+      <h4>三、知识库：选择、新建、上传</h4>
+      <p><b>1. 选择知识库</b></p>
+      <ul>
+        <li>左侧是你能访问的知识库，单击选中（蓝色高亮）。</li>
+        <li>一个知识库通常对应一个项目/一套资料；切换库后，聊天记录也会跟着切换。</li>
+        <li>共享给你的库是只读的：可以提问，不能改别人的库。需要补资料找管理员或库的负责人。</li>
+      </ul>
+
+      <p><b>2. 新建知识库</b></p>
+      <ol>
+        <li>左侧展开「+ 新建知识库」。</li>
+        <li>填名称（可留空，默认取文件夹名）。</li>
+        <li>选资料：可以从电脑选文件、选整个文件夹、上传 zip 压缩包，或者直接把文件/文件夹拖到右侧页面。</li>
+        <li>点「创建并建索引」。不填路径也能建：拖文件进去会自动建库。</li>
+      </ol>
+      <p>支持 Word / PDF / PPT / Excel / 文本 / CSV / JSON / DBF / 图片等；zip 会在服务端安全解压后批量导入。
+        文件夹里已有的 zip 套压缩包也会在索引时自动解压（最多 3 层），内部文档正常参与检索。</p>
+      <p>SQL 脚本只按<b>文件名</b>登记，不读取脚本内容——实施时通常只需要知道有哪个脚本。</p>
+
+      <p><b>3. 索引与补资料</b></p>
+      <ul>
+        <li>首次建库要解析文档、分块、建索引和向量，文件多时可能需要几分钟到十几分钟；页面会显示进度。</li>
+        <li><b>索引完成再提问效果最好</b>；索引中提问可能搜不到新加的内容。</li>
+        <li>补资料：右上「添加文件」→ 选文件/文件夹/zip；也可以直接拖拽，多文件会自动并行处理。</li>
+        <li>「✍️ 写内容」适合记录口头经验、群里聊出来的结论：直接打字，支持 <b>Ctrl+V 粘贴截图</b>，也能继续编辑已有笔记。</li>
+        <li>资料变动很多或索引异常时，「更多 → 🔄 重建索引」。</li>
+      </ul>
+
+      <p><b>4. 权限与共享</b></p>
+      <ul>
+        <li>知识库有归属：自己的库自己管理；管理员可以把库只读分享给别人，也可以转交。</li>
+        <li>「智能问答」和「模拟答辩」的共享是<b>分开的</b>：一个库分给了问答，不代表答辩也能用。</li>
+        <li>需要访问某个项目的库：把账号发给管理员，在「用户管理 → 分配知识库权限」里勾选。</li>
+      </ul>
+
+      <h4>四、提问、引用与追问</h4>
+      <p><b>1. 怎么问</b></p>
+      <ol>
+        <li>先选中知识库。</li>
+        <li>底部输入框输入问题，<b>Enter 发送</b>，<b>Shift+Enter 换行</b>。</li>
+        <li>回答逐字流式输出；生成过程中可以点「⏹ 停止」。</li>
+        <li>底部的 <b>📏 标准</b> 可以切换「简答 / 标准 / 详细」：现场演示看结论用简答，整理资料用详细。</li>
       </ol>
 
-      <h4>三、先选知识库</h4>
+      <p><b>2. 回答下面的按钮</b></p>
+      <ul>
+        <li><b>↻ 换个回答</b>：同一个问题原地再检索/生成一次，不新增重复提问；出错了会变成「↻ 重试」。</li>
+        <li><b>🧠 大模型本地回答</b>：不查知识库，直接让大模型凭自身知识回答；适合知识库里没有的通用问题，但可能不准。</li>
+        <li><b>👍 / 👎</b>：点踩可以写原因，管理员会在问答统计/反馈里看到，作为补资料和改进的依据。</li>
+      </ul>
+
+      <p><b>3. 引用和预览（核实答案的唯一办法）</b></p>
+      <ul>
+        <li>正文里的 <b>[1] [2]</b> 和下方引用区的序号一一对应；点角标会展开对应引用并高亮。</li>
+        <li>点引用里的文件名会打开原文档预览，左侧是<b>文档大标题/小标题目录</b>，命中片段会定位并高亮。</li>
+        <li>重要结论一定点开引用核对原文；文档说了算，不是模型说了算。</li>
+      </ul>
+
+      <p><b>4. 追问和上下文</b></p>
+      <ul>
+        <li>输入框右边 <b>💬 上下文：关</b> 是默认值：每次提问独立理解，适合大多数交付问题。</li>
+        <li>要追问时点成 <b>💬 上下文：开</b>，例如先问「这个接口怎么调」，再问「那它的超时怎么配」，系统会结合上文理解「它」。</li>
+        <li>开启后底部出现「🆕 清空上文（已记 N 轮）」；换话题时点它清空，避免串题。</li>
+      </ul>
+
+      <p><b>5. 多人同时问 / 排队</b></p>
+      <ul>
+        <li>系统默认同时回答 10 个问题；再多会<b>自动排队</b>，页面显示“第 N 位 / 前面还有几人 / 预计约多少秒”，轮到后自动继续，不用重新问。</li>
+        <li>一个人同时最多 2 个问题；第 3 个会提示稍后再试。</li>
+        <li>如果显示「排队已满」或 429，说明排队人数也到上限了，等一会再试。</li>
+      </ul>
+
+      <p><b>6. 问得更准</b></p>
+      <ul>
+        <li>问具体：把系统名、模块名、环境写出来，例如「O32 交易所指令怎么下单」比「怎么下单」准。</li>
+        <li>交易所 / 开放式基金 / 期货 / 固收是不同模块，问题里写清；系统会按模块过滤，避免拿其他模块的片段拼答案。</li>
+        <li>多个小问题最好分开问；但「我刚接手，这个项目是什么、有哪些系统、进展到哪一步」这种整体摸底可以直接问，系统会自动拆解。</li>
+        <li>问操作步骤时，优先用用户手册/培训资料里的原词；答案没找到就换个说法，或确认选对了知识库。</li>
+      </ul>
+
+      <h4>五、模拟答辩（AI 扮演评委）</h4>
       <ol>
-        <li>左侧列出你能访问的知识库，<b>单击选中</b>（蓝色高亮的就是当前库）。</li>
-        <li>一个知识库 = 一个项目的资料。选错了库，它当然答不上来。</li>
-        <li>切换库不影响历史记录，随时可换。</li>
+        <li>点右上角「🎓 答辩演练」。</li>
+        <li>选一种入口：<b>上传 PPT 演练</b>（.pptx / .ppt，最大 60MB），或 <b>关键词直练</b>（不用 PPT）。</li>
+        <li>选择模式、<b>出题难度</b>、题目数量和出题依据的知识库。</li>
+        <li>点「开始演练」，逐题作答；底部输入答案，Ctrl+Enter 或点「提交回答」。</li>
+      </ol>
+      <p><b>两种模式</b></p>
+      <ul>
+        <li><b>📖 练习模式</b>：每答完一题，立刻能看参考答案、依据和关键得分点，适合边学边练。</li>
+        <li><b>🎯 答辩模式</b>：全程不给答案，全部答完统一看解析，更接近真评委。</li>
+      </ul>
+      <p><b>难度</b></p>
+      <ul>
+        <li><b>基础（默认）</b>：按实施工程师带新人的角度问——这个模块做什么、在哪操作、分几步、怎么确认成功；业务只问皮毛，不考深层规则。</li>
+        <li><b>标准</b>：结合流程和业务适度追问。</li>
+        <li><b>挑战</b>：多步链路、异常/回滚、边界条件。</li>
+      </ul>
+      <p><b>关键词直练（不用 PPT）</b></p>
+      <ul>
+        <li>输入学习关键词（例如“交易所指令 下单 审核 分发”），系统自动匹配已有权限的知识库并整理学习内容。</li>
+        <li>也可以手动指定依据库；找不到内容时换关键词或换库。</li>
+        <li>适合复盘某个模块/流程，或手上没有 PPT 时直接开练。</li>
+      </ul>
+      <p><b>设置</b></p>
+      <ul>
+        <li>题目数量：按需要选 3 / 5 / 更多题。</li>
+        <li>出题依据知识库：上传后系统会根据 PPT 内容推荐一个你有权限的库，前端预选并显示理由；你可以随时改。</li>
+        <li>首题会在 PPT 解析后后台预生成，等待时间更短。</li>
+      </ul>
+      <p><b>过程与报告</b></p>
+      <ul>
+        <li>回答含糊时评委会追问；同一个点最多追问 2 次，答偏/复读后会换方向。</li>
+        <li>每题答完会生成诊断；最后汇总逐题得分、做得好的、还要补的、概念混淆点和建议。</li>
+        <li>如果没有答辩入口、或没有可选知识库：找管理员在「用户管理」里开通「模拟答辩」，并在系统参数里配默认答辩库/单独分享答辩库。</li>
+      </ul>
+
+      <h4>六、系统设置（管理员）</h4>
+      <p>「更多」菜单里是管理员功能，普通用户看不到或只能看到一部分。</p>
+      <p><b>1. 用户管理</b></p>
+      <ul>
+        <li>添加用户：账号、姓名、角色（普通/管理员）、密码（留空自动生成）、知识库/模拟答辩入口权限。</li>
+        <li>重置密码、修改账号/姓名/备注、删除用户。</li>
+        <li>注册邀请码：需要控制自助注册时，把邀请码发给对方。</li>
+        <li>「📤 分配知识库权限」：按用户分别勾选「智能问答」「模拟答辩」两列，都是只读共享。</li>
+      </ul>
+      <p><b>2. 系统参数设置</b></p>
+      <ul>
+        <li><b>新账号默认知识库</b>：是否开通知识库入口 + 默认只读共享哪些库。</li>
+        <li><b>新账号默认模拟答辩</b>：是否开通答辩入口 + 默认答辩库；<b>和问答默认库分开配置</b>。</li>
+        <li>全部不选 = 不给默认库；未设置过时默认业务手册。保存后只影响之后新建的账号，不会改已有用户。</li>
+      </ul>
+      <p><b>3. 大模型设置（全局）</b></p>
+      <ul>
+        <li>协议、接口地址 base_url、模型名、API Key；保存后立即生效，不需要重启。</li>
+        <li>只影响<b>没有自己 Key/模型</b>的用户；用户在「我的 Key」填的个人模型不会被全局设置覆盖。</li>
+        <li>全局模型必须被全局 Key 支持；不支持会报 401/403/422，填之前先测试。</li>
+      </ul>
+      <p><b>4. 问答统计 / 反馈 / 重建索引</b></p>
+      <ul>
+        <li>「📊 问答统计」看今日/近期提问量、耗时、兜底率、差评和最近问答明细；差评原因就是补资料的线索。</li>
+        <li>「🔄 重建索引」用于大量更新资料或索引异常；索引完成前提问可能搜不到新内容。</li>
+        <li>持久化日志在服务器 `/opt/rag/logs`，按天保存，排障时看最新日志。</li>
+      </ul>
+
+      <h4>七、个人 Key / 模型（可选）</h4>
+      <p>公共 Key 是大家共用的，人多时会排队。急用或想更稳定，可以申请自己的 <b>LightCode UIS Key</b>：</p>
+      <ol>
+        <li>点右上角「公共 Key / 我的 Key」，按弹窗里的「LightCode UIS 大模型控制台」申请入口和「公司大模型申请文档」操作。</li>
+        <li>在「我的 Key」粘贴 Key，模型填该 Key 支持的模型名（如 <code>deepseek-flash</code>、<code>deepseek-v4-pro</code>）。</li>
+        <li>点「先测试」，确认「key 可用」后「测试并保存」。</li>
+        <li>之后你的问题走自己的 Key；已保存过 Key 只想换模型时，Key 留空、改模型后直接点「测试并保存」即可。</li>
+        <li>提示 422 / 模型不支持：说明模型名不对，换该 Key 支持的模型；提示 401/403 先确认 Key 没过期。</li>
       </ol>
 
-      <h4>四、怎么提问（决定答案质量的关键）</h4>
-      <p>底部输入框输入问题，<b>回车发送</b>。答案会逐字流式出现，生成过程中可以随时点 <b>⏹ 停止</b>。</p>
-<p>回答下面有两个按钮：<b>↻ 换个回答</b> 和 👍/👎。同一个问题每次检索到的片段、生成的措辞都会有点差别，
-<b>觉得这次答偏了、答浅了就点「换个回答」原地再抽一次</b>——不会多出一条重复提问，也不用重新打字。
-出错了（超时、生成失败、回答被截断）同一个按钮会变成 <b>↻ 重试</b>。</p>
-      <p><b>两个最典型的问法，照这个路子问就行：</b></p>
-      <div class="box">
-        <b>① 问具体流程 —— 「这件事怎么做」</b><br>
-        <code>demo升级的流程是什么样的</code><br>
-        这类问题最好答：部署手册、操作步骤、变更记录会被直接命中，答案按步骤给出来。
-        每一步后面跟着右上角小标（如 <b>1</b>、<b>3,4</b>），对应下方引用的第几条，点开就能核对原文。
-      </div>
-      <div class="box">
-        <b>② 摸底一个陌生项目 —— 「我刚接手，这项目是什么、到哪一步了」</b><br>
-        <code>我是一个刚接手项目的小白，这个项目目前是什么进展，这个项目的内容是什么。</code><br>
-        把自己的处境（刚接手、不了解）直接写进问题里是有用的。系统会把这句话拆成几条子查询
-        —— 项目内容、系统架构、当前进展、周报月报 —— 分别检索后再合成一份带时间线的介绍。
-        刚接手一个项目，先问这一句，比一个模块一个模块地摸要快得多。
-      </div>
-      <p>几个让答案更准的习惯：</p>
+      <h4>八、常见问题</h4>
+      <div class="box"><b>问：看不到知识库 / 入口是灰的？</b><br>找管理员开通入口权限，并把对应项目库分享给你；新账号默认权限由「系统参数设置」决定。</div>
+      <div class="box"><b>问：一直排队 / 很慢？</b><br>公共 Key 或全局名额在排队。看页面显示的位置/预计等待；急用可填个人 Key，或错开时间。</div>
+      <div class="box"><b>问：429 是什么？</b><br>你同时问了 2 个以上，或队列满/等待超时。等当前问题完成后再试；不要连点发送。</div>
+      <div class="box"><b>问：上传后搜不到？</b><br>先看索引是否完成；再确认当前选的是这个知识库；还不行点「重建索引」或补更准确的文件。</div>
+      <div class="box"><b>问：回答「没找到」？</b><br>可能这个库没有该内容，或问法和文档用词差太远。换库、换问法，或把对应手册/PPT 补进库。</div>
+      <div class="box"><b>问：问交易所，怎么扯到开放式基金/期货了？</b><br>问题里写清模块（交易所/开放式基金/期货/固收）；系统会按模块过滤，但前提是库里确实有该模块的资料。</div>
+      <div class="box"><b>问：两个人同时问会互相卡吗？</b><br>不会互相顶掉；系统会排队并显示预计等待，全局最多同时回答 10 个。</div>
+      <div class="box"><b>问：我的回答能保存到知识库吗？</b><br>看你的库权限；共享库只读，自己的库可以加文件/写内容。</div>
+
+      <h4>九、使用注意</h4>
       <ul>
-        <li><b>问具体，别问宽泛。</b>「OTRADE 部署要开哪些端口」比「怎么部署」更容易得到准确答案。</li>
-        <li><b>带上文档里的说法。</b>系统支持同义检索（问「佣金」也能命中「货币中介费」），但用项目里的原名命中率最高。</li>
-        <li><b>几个小问题别堆在一起。</b>「接口地址、超时时间、重试次数分别是多少」这种细项堆着问容易只答一半，
-            分开问更稳。<b>但「总体摸底」是例外</b>——上面第②种问法虽然长，系统会自己拆开查。</li>
-        <li><b>答不上来就换问法。</b>同一个意思换个说法再问一次，往往就出来了。</li>
-        <li><b>问"发生过什么"时带上时间点。</b>「10 月的周报里说进度到哪了」比「项目进度」准得多；
-            文档有新老版本时，系统会优先采信较新的那份。</li>
-        <li>等太久时页面会显示秒数，超过 45 秒会提示「网关较慢，最多等 3 分钟」，这时候可以等，也可以点停止换个问法。</li>
+        <li>仅在公司内网使用，资料不出内网；不要上传与工作无关的私人文件。</li>
+        <li>涉及账号、密码、生产变更的操作，以原文档和公司流程为准，回答只作辅助。</li>
+        <li>重要结论点开引用核对原文；引用来自哪个库、哪份文件，比“看起来像”更重要。</li>
       </ul>
-
-      <h4>五、看引用（这是核实答案的唯一办法）</h4>
-      <p>每个回答下方都有 <b>📎 引用 N 个片段（点击文件名可打开原文件）</b>，点开就能看到系统实际用了哪几段文字。
-      每条引用前面有个<b>蓝色序号</b>，和正文里右上角的小标一一对应：正文写 <b>3,4</b>，就是引用区的第 3、4 条。</p>
-      <ul>
-        <li><b>点文件名</b> → 新窗口打开那份原文档，并<b>直接定位到被引用的那一段</b>，方便你逐字核对。
-            现在预览按原文档的排版渲染：标题层级、表格、<b>文档里的插图都保留</b>，和你在 Word 里看到的顺序一致。</li>
-        <li><b>引用下方的缩略图</b>是这段涉及的文档截图，点一下在当前页面放大，按 <b>Esc</b>、点空白处或右上角 ✕ 关闭，不会跳到别的页面。</li>
-        <li>预览页里的图片同样可以点开放大。参数表、菜单路径这类"只在截图里"的信息，别只看文字，图也扫一眼。</li>
-        <li><b>养成习惯</b>：重要结论一定点开引用看一眼。答得对不对，文档说了算，不是模型说了算。</li>
-      </ul>
-
-      <h4>六、接着追问（上下文默认是关的）</h4>
-      <p>输入框右边有个 <b>💬 上下文：关</b> 按钮。<b>默认关闭</b>：每次提问都独立理解，不受前面的对话影响。
-      这是故意的——交付场景里大部分是独立提问，旧对话带着只会让答案跑偏。</p>
-      <ul>
-        <li><b>要追问时先点一下</b>，变成 <b>💬 上下文：开</b>。这时先问「这个接口怎么调」，再问「那它的超时怎么配」，
-            系统会结合上文理解「它」指的是谁。</li>
-        <li>开启后底部会显示 <b>🆕 清空上文（已记 N 轮）</b>，最多记最近 3 轮。换话题时点它清空，避免串题。</li>
-        <li>关掉开关会顺手清空已记的对话，并给一句提示，不会悄悄丢掉。</li>
-        <li>如果你问得太省略，它可能先把你的问题<b>补全成完整问句</b>再检索，并把补全结果显示出来，让你知道它"听懂"了什么。</li>
-        <li>开关状态记在本机浏览器里，下次打开还是上次的选择。</li>
-      </ul>
-
-      <h4>七、告诉它答得好不好</h4>
-      <p>每个回答底部有 <b>👍 有用 / 👎 没用</b>。</p>
-      <ul>
-        <li>点一下就会记录。管理员能在「📊 问答统计」里看到哪些问题总被差评、哪些问题系统压根答不上来。</li>
-        <li>这不是客套功能：<b>大家点的差评，就是知识库该补的内容</b>。觉得没用就点，别客气。</li>
-      </ul>
-
-      <h4>八、往知识库里补内容</h4>
-      <p>资料不全的时候，答案自然不准。补料有三种方式：</p>
-      <ol>
-        <li><b>拖文件</b>：把文件或整个文件夹直接拖到页面中间，松手即可加入当前知识库并自动建索引。</li>
-        <li><b>点「添加文件」</b>：右上角按钮，选文件后批量加入。</li>
-        <li><b>✍️ 写内容</b>：适合记录口头经验、临时结论、群里聊出来的要点。点开就是一个空白编辑器，<b>直接写字</b>，也可以 <b>Ctrl+V 粘贴截图</b>（会自动存成图片一起入库），写完点「保存到知识库」。<br>还可以用它<b>继续编辑已有笔记</b>，不必每次新建。</li>
-      </ol>
-      <p>文件越多，首次建索引越久（大项目几分钟到十几分钟），页面会显示进度，等它跑完再提问。</p>
-
-      <h4>九、在手机上用</h4>
-      <ul>
-        <li>地址相同，手机浏览器直接打开。</li>
-        <li>左上角的 <b>☰</b> 打开知识库列表，选好会自动收起，把屏幕让给对话。</li>
-        <li>粘贴截图、看引用、点反馈都支持。</li>
-      </ul>
-
-      <h4>十、常见问题</h4>
-      <div class="box">
-        <b>问</b>：它说「没有找到相关内容」？<br>
-        两种可能：知识库里确实没有这方面资料；或者你的问法和文档里的用词差太远。先换个说法再问一次，还不行就说明该补文档了。
-      </div>
-      <div class="box">
-        <b>问</b>：提示「大模型调用失败」，下面还列了一堆片段？<br>
-        说明<b>检索是好的</b>，只是负责生成的模型服务暂时不可用（内网网关波动或维护）。稍后点「↻ 重试」即可；这期间你仍然可以看列出来的片段自己找答案。
-      </div>
-      <div class="box">
-        <b>问</b>：第一次提问特别慢？<br>
-        服务刚启动时要把知识库索引进内存，第一次会慢一点，之后就快了。大项目首次可能等一两分钟，页面有提示。
-      </div>
-      <div class="box">
-        <b>问</b>：答案看起来不对？<br>
-        先点开引用看它到底依据了哪几段。常见原因是：引用的段落本身不完整、几个文档说法不一致、或者你的问题跨了好几个文档。这种情况换更具体的问法，或者把相关文档补全。
-      </div>
-      <div class="box">
-        <b>问</b>：我追问「那它的超时呢」，它却当成一个新问题答了？<br>
-        因为<b>上下文默认是关的</b>。点一下输入框右边的 <b>💬 上下文：关</b>，变成「开」再问，它就会结合上一句理解。
-      </div>
-      <div class="box">
-        <b>问</b>：答案写到一半出现「正在接着写…」？<br>
-        正常现象。单次输出有长度上限，撞到上限时系统会自动接着把它写完，你什么都不用做。
-        只有连续续写两轮还不够（问题范围太大）才会提示你拆开问。
-      </div>
-      <div class="box">
-        <b>问</b>：答案里那些右上角小数字是什么？<br>
-        引用角标，指下方引用区的第几条。看到不放心的地方，按数字去找对应那一条核对原文即可。
-      </div>
-      <div class="box">
-        <b>问</b>：两个人同时问会互相卡吗？<br>
-        不会。系统做了并发控制，多人同时用会排队处理，页面会显示当前阶段。
-      </div>
-      <div class="box">
-        <b>问</b>：我看到的库比别人少？<br>
-        key 决定了能看到哪些知识库。需要访问某个项目，找管理员给你的 key 加权限。
-      </div>
     </div>
     <div class="tabpane" id="tab-bg">
       <h4>建立目的与背景</h4>
@@ -1081,7 +1181,7 @@
         <li><b>后端</b>：Python + FastAPI + Uvicorn</li>
         <li><b>检索</b>：中文分词（jieba）+ BM25 关键词检索 + <b>本地语义向量（bge-small-zh, ONNX）</b> + <b>Rerank 精排（bge-reranker-base int8）</b>；
             关键词与语义两路并行召回后融合，再按权威性/版本新旧/文件名命中加权，块级索引 + 内存缓存 + 启动预热</li>
-        <li><b>批量导入</b>：支持上传 zip 压缩包（服务端安全解压），多文件自动 2–3 路并行上传</li>
+        <li><b>批量导入</b>：支持上传 zip 压缩包（服务端安全解压）；文件夹里的 zip 也会自动解压并索引内部文档（最多 3 层）</li>
         <li><b>文档解析</b>：python-docx / python-pptx / openpyxl / xlrd / pymupdf(PDF) + 直接读 Office 内部结构定位图片；
             支持 Word、Excel、PPT、PDF、文本、CSV、JSON、DBF 等</li>
         <li><b>文档内图片</b>：按需从原文档解压（docx 的 word/media、pptx 的 ppt/media 等），转换后缓存；
@@ -1089,7 +1189,7 @@
         <li><b>预览渲染</b>：不靠外部 Office，直接按文档结构生成网页——标题层级、表格、图片位置都与原文档一致</li>
         <li><b>大模型</b>：支持 Anthropic / OpenAI 协议的本地或云模型，走公司内网部署的大模型（如需外部可经 UIS 代理 key 接入）；
             流式输出，单次输出撞上限会自动接着写，写完为止</li>
-        <li><b>安全</b>：访问口令鉴权、外网目录浏览禁用、登录有效期、知识库按 key 隔离</li>
+        <li><b>安全</b>：账号密码（PBKDF2）+ 登录 token、外网目录浏览禁用、登录有效期、知识库按用户/共享隔离</li>
         <li><b>前端</b>：原生 HTML / CSS / JavaScript 单页，轻量无框架（阶段状态提示、停止/重试、流式输出、引用角标、图片放大）</li>
         <li><b>部署</b>：本地私有部署，数据全部落在本机 <code>app/data/</code>（每库独立索引 + 语义向量），不出内网</li>
       </ul>
@@ -1117,6 +1217,8 @@
 const $ = s => document.querySelector(s);
 let kbs = [], cur = null, pickPath = "", pickStack = [];
 let AUTH = {enabled:false, authenticated:true};
+// 服务器能不能联网：不能就隐藏「联网搜索回答」，只留模型直答
+let WEB_SEARCH_ON = true;
 
 function esc(s){ return (s||"").replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 
@@ -1328,6 +1430,7 @@ async function initAuth(){
     const d = await (await fetch('/api/auth/status', withAuth({cache:'no-store'}))).json();
     AUTH = {enabled: !!d.enabled, authenticated: !!d.authenticated,
             allow_fs_browse: !!d.allow_fs_browse, user: d.user || null};
+    WEB_SEARCH_ON = d.fallback_web !== false;
     if (AUTH.allow_fs_browse === false && $('#fsBrowseBtn')) $('#fsBrowseBtn').style.display = 'none';
     if (AUTH.enabled && !AUTH.authenticated){ showLogin(); return false; }
     // 已经有有效登录态时，不能停在登录遮罩上（只有 doLogin 会移除它）。
@@ -2191,7 +2294,8 @@ function sourceBadgeHtml(srcType, label){
   const meta = {
     kb:  {cls:'kb',  icon:'📚', text: label || '知识库'},
     web: {cls:'web', icon:'🌐', text: label || '网络搜索'},
-    llm: {cls:'llm', icon:'🧠', text: label || '大模型知识'}
+    llm: {cls:'llm', icon:'🧠', text: label || '大模型知识'},
+    none:{cls:'llm', icon:'⚠️', text: label || '未命中'}
   };
   const m = meta[srcType] || meta.kb;
   return `<span class="src-badge ${m.cls}">${m.icon} ${esc(m.text)}</span>`;
@@ -2385,7 +2489,29 @@ async function ask(retryQ, reuseNode, fbMode){
     retryBtn.disabled = true; retryBtn.textContent = '↻ 重试中…';
     ask(q, msg);
   };
+  // 不查知识库的两种直答：知识库里没有的问题，可以直接联网搜或让模型凭自身知识答
+  const webBtn = document.createElement('button');
+  webBtn.className = 'btn';
+  webBtn.textContent = '🌐 联网搜索回答';
+  webBtn.title = '不查知识库，改用联网搜索结果回答；网络不通或没搜到时会说明并降级为模型自身知识';
+  webBtn.style.display = 'none';
+  webBtn.onclick = () => {
+    if (webBtn.disabled) return;
+    webBtn.disabled = true;
+    ask(q, msg, 'web');
+  };
+  const llmBtn = document.createElement('button');
+  llmBtn.className = 'btn';
+  llmBtn.textContent = '🧠 大模型本地回答';
+  llmBtn.title = '不查知识库，直接让大模型凭自身知识回答；可能不准，请自行判断';
+  llmBtn.style.display = 'none';
+  llmBtn.onclick = () => {
+    if (llmBtn.disabled) return;
+    llmBtn.disabled = true;
+    ask(q, msg, 'llm');
+  };
   ctrl.appendChild(stopBtn); ctrl.appendChild(retryBtn);
+  ctrl.appendChild(webBtn); ctrl.appendChild(llmBtn);
   msg.appendChild(ctrl);
   const ac = new AbortController(); askAbort = ac;
   srcDone = null;
@@ -2396,14 +2522,16 @@ async function ask(retryQ, reuseNode, fbMode){
   let offerPayload = null;  // 知识库没命中：等用户选兜底来源，不自动跑
   let offerIsBody = false;  // offer 的文字本身就是正文（没有任何知识库答案）
   let figBlocks = [];       // 答案配图：按段落挂的图片块（后端按语义匹配给出）
+  let queueInfo = null;     // 全局满时的排队状态（位置/预计等待）
   // 等待计时: 让用户知道"在等、等了多久"，而不是对着转圈干等
-  const t0 = Date.now();
+  let t0 = Date.now();
   let waitingText = '正在准备…';
   let firstTokenAt = 0;
   const tick = setInterval(() => {
     if (Date.now() - t0 < 1000) return;
     const sec = Math.floor((Date.now() - t0) / 1000);
     if (firstTokenAt) return;              // 已经开始输出, 不再刷等待提示
+    if (queueInfo) return;                 // 排队时由服务端推送位置/ETA，不叠加秒数
     const cur2 = msg.querySelector('.waiting .wtxt');
     if (cur2){
       let hint = '';
@@ -2448,7 +2576,19 @@ async function ask(retryQ, reuseNode, fbMode){
         const line = part.trim().split('\n').find(l => l.startsWith('data: '));
         if (!line) continue;
         let ev; try{ ev = JSON.parse(line.slice(6)); }catch(e){ continue; }
-        if (ev.type === 'status'){ waitingText = ev.text || '处理中…'; msg.innerHTML = '<span class="waiting"><span class="spin"></span> <span class="wtxt">' + esc(waitingText) + ' 0s</span></span>'; msg.appendChild(ctrl); }
+        if (ev.type === 'queue'){
+          queueInfo = ev;
+          waitingText = ev.status || '排队中…';
+          msg.innerHTML = '<span class="waiting"><span class="spin"></span> <span class="wtxt">' + esc(waitingText) + '</span></span>';
+          msg.appendChild(ctrl);
+          scrollChat();
+        }
+        else if (ev.type === 'status'){
+          if (queueInfo){ t0 = Date.now(); queueInfo = null; }   // 出队后重新计时
+          waitingText = ev.text || '处理中…';
+          msg.innerHTML = '<span class="waiting"><span class="spin"></span> <span class="wtxt">' + esc(waitingText) + ' 0s</span></span>';
+          msg.appendChild(ctrl);
+        }
         else if (ev.type === 'rewrite'){
           // 追问被改写成完整问题: 显示出来, 让用户知道系统"听懂了"什么
           msg.innerHTML = '<span class="waiting"><span class="spin"></span> 已结合上文理解你的问题…</span>' +
@@ -2568,6 +2708,11 @@ async function ask(retryQ, reuseNode, fbMode){
     retryBtn.textContent = degraded ? '↻ 重试' : '↻ 换个回答';
     retryBtn.title = degraded ? '重新生成一次' : '同样的提问再抽一次回答（原地替换，不新增对话）';
     retryBtn.style.display = 'inline-block';
+    // 知识库未命中时下面已有来源选择框；寒暄/反问类回答也不需要换来源
+    const showAlt = !offerPayload &&
+      !/助手|请补充问题/.test((srcDone && srcDone.source_label) || '');
+    webBtn.style.display = (showAlt && WEB_SEARCH_ON) ? 'inline-block' : 'none';
+    llmBtn.style.display = showAlt ? 'inline-block' : 'none';
     if (body.trim() && !degraded && ctxOn) pushHistory(q, body);   // 只有生成成功且开启上下文才记
     scrollChat();
   } catch(e){
@@ -2575,6 +2720,8 @@ async function ask(retryQ, reuseNode, fbMode){
     if (e.name === 'AbortError'){ msg.innerHTML = '<span style="color:#6b7280">已停止生成。</span>'; }
     else { msg.innerHTML = '请求失败: ' + esc(e.message) + '<br>可点「↻ 重试」再来一次。'; }
     retryBtn.style.display = 'inline-block';      // 失败/中断都要能一键重试
+    webBtn.style.display = (offerPayload || !WEB_SEARCH_ON) ? 'none' : 'inline-block';
+    llmBtn.style.display = offerPayload ? 'none' : 'inline-block';
     // 失败时把问题放回输入框，用户想改几个字再发也行
     if (!$('#q').value){ $('#q').value = q; fitQHeight(); }
     msg.appendChild(ctrl);
@@ -2781,7 +2928,7 @@ function closeModal(id){ document.getElementById(id).classList.remove('show'); }
 // ---- 我的大模型 Key（每个用户自己的）----
 // 公司网关每个 key 只有约 2 路并发，大家都挤公共 key 就会互相排队。
 // 让不配的人明确看到"你在用公共 key、人多会排队"，他才会有动力去申请自己的。
-let MY_KEY = { has_own:false, saved:'', tail:'' };
+let MY_KEY = { has_own:false, saved:'', tail:'', model:'', global_model:'' };
 
 function paintMyKeyStatus(){
   const el = $('#myKeyStatus');
@@ -2791,12 +2938,15 @@ function paintMyKeyStatus(){
     el.style.border = '1px solid #a7f3d0';
     el.style.color = '#065f46';
     el.innerHTML = '✅ <b>当前使用：我自己的 Key</b>（…' + esc(MY_KEY.tail || '') + '）' +
+      (MY_KEY.model ? '<br><span style="font-size:12.5px">模型：<b>' + esc(MY_KEY.model) + '</b></span>' :
+        (MY_KEY.global_model ? '<br><span style="font-size:12.5px">模型：公共（' + esc(MY_KEY.global_model) + '）</span>' : '')) +
       (MY_KEY.saved ? '<br><span style="font-size:12.5px;opacity:.8">保存于 ' + esc(MY_KEY.saved) + '</span>' : '');
   } else {
     el.style.background = '#fffbeb';
     el.style.border = '1px solid #fde68a';
     el.style.color = '#92400e';
-    el.innerHTML = '⚠️ <b>当前使用：公共 Key</b><br>' +
+    el.innerHTML = '⚠️ <b>当前使用：公共 Key</b>' +
+      (MY_KEY.global_model ? '（模型：' + esc(MY_KEY.global_model) + '）' : '') + '<br>' +
       '<span style="font-size:12.5px">公共 Key 的并发额度是大家共用的，人多时会排队等待。' +
       '建议申请一个自己的 Key，填在这里，就不会被别人拖慢。</span>';
   }
@@ -2806,11 +2956,14 @@ function paintMyKeyStatus(){
 
 function openMyKey(){
   $('#myKeyInput').value = '';
+  $('#myKeyModel').value = '';
   paintMyKeyStatus();
   $('#myKeyModal').classList.add('show');
   api('/api/my/llm').then(d => {
     if (d && d.ok){
-      MY_KEY = { has_own: !!d.has_own, saved: d.saved || '', tail: d.tail || '' };
+      MY_KEY = { has_own: !!d.has_own, saved: d.saved || '', tail: d.tail || '',
+                 model: d.model || '', global_model: d.global_model || '' };
+      $('#myKeyModel').value = d.model || '';
       paintMyKeyStatus();
       // 把真实网关地址显示出来，用户就知道该去哪儿申请 key
       const gw = $('#keyGatewayUrl');
@@ -2823,17 +2976,18 @@ function openMyKey(){
 function keyFailMsg(msg){
   return '❌ ' + msg +
     '\n\n常见原因：填了外部厂商（OpenAI、DeepSeek 官网、通义等）的 Key。' +
-    '\n本系统只认公司 demoproduct 大模型平台签发的 Key（申请入口见「我的 Key」弹窗）。';
+    '\n本系统只认公司 LightCode UIS 大模型网关签发的 Key（申请入口见「我的 Key」弹窗）。';
 }
 
 async function testMyKey(){
   const k = $('#myKeyInput').value.trim();
+  const m = $('#myKeyModel').value.trim();
   if (!k){ alert('先粘贴你的 Key'); return; }
   const btn = $('#myKeyTestBtn'); const old = btn.textContent;
   btn.disabled = true; btn.textContent = '测试中…';
   try{
     const d = await api('/api/my/llm/verify', { method:'POST',
-      headers:{'Content-Type':'application/json'}, body: JSON.stringify({ key:k }) });
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({ key:k, model:m }) });
     alert(d.ok ? '✅ ' + (d.msg || 'Key 可用') : keyFailMsg(d.msg || 'Key 不可用'));
   }catch(e){ alert('测试失败: ' + e.message); }
   finally{ btn.disabled = false; btn.textContent = old; }
@@ -2841,20 +2995,29 @@ async function testMyKey(){
 
 async function saveMyKey(){
   const k = $('#myKeyInput').value.trim();
-  if (!k){ alert('先粘贴你的 Key'); return; }
+  const m = $('#myKeyModel').value.trim();
+  if (!k && !MY_KEY.has_own){ alert('先粘贴你的 Key'); return; }
   const btn = $('#myKeySaveBtn'); const old = btn.textContent;
   btn.disabled = true; btn.textContent = '验证并保存…';
   try{
-    const d = await api('/api/my/llm', { method:'POST',
-      headers:{'Content-Type':'application/json'}, body: JSON.stringify({ key:k }) });
+    let d;
+    if (!k && MY_KEY.has_own){
+      // 已保存过 Key：只更新模型，不用重新粘贴 Key
+      d = await api('/api/my/llm/model', { method:'POST',
+        headers:{'Content-Type':'application/json'}, body: JSON.stringify({ model:m }) });
+    } else {
+      d = await api('/api/my/llm', { method:'POST',
+        headers:{'Content-Type':'application/json'}, body: JSON.stringify({ key:k, model:m }) });
+    }
     if (d.ok){
-      MY_KEY = { has_own: !!d.has_own, saved: d.saved || '', tail: d.tail || '' };
+      MY_KEY = { has_own: !!d.has_own, saved: d.saved || '', tail: d.tail || '',
+                 model: d.model || '', global_model: MY_KEY.global_model || '' };
       paintMyKeyStatus();
       $('#myKeyInput').value = '';
       refreshLlmBadge();
       alert('✅ ' + (d.msg || '已保存'));
     } else {
-      alert(keyFailMsg(d.msg || '保存失败') + '\n\nKey 没有保存。');
+      alert(keyFailMsg(d.msg || '保存失败') + '\n\n没有保存。');
     }
   }catch(e){ alert('保存失败: ' + e.message); }
   finally{ btn.disabled = false; btn.textContent = old; }
@@ -2866,7 +3029,8 @@ async function clearMyKey(){
     const d = await api('/api/my/llm', { method:'POST',
       headers:{'Content-Type':'application/json'}, body: JSON.stringify({ key:'' }) });
     if (d.ok){
-      MY_KEY = { has_own:false, saved:'', tail:'' };
+      MY_KEY = { has_own:false, saved:'', tail:'', model:'', global_model: MY_KEY.global_model || '' };
+      $('#myKeyModel').value = '';
       paintMyKeyStatus();
       refreshLlmBadge();
       alert('已改回使用公共 Key');
@@ -2916,7 +3080,8 @@ function refreshLlmBadge(){
   // 顺带刷新"用的是谁的 key"，好在徽标上标出来
   api('/api/my/llm').then(d => {
     if (!d || !d.ok) return;
-    MY_KEY = { has_own: !!d.has_own, saved: d.saved || '', tail: d.tail || '' };
+    MY_KEY = { has_own: !!d.has_own, saved: d.saved || '', tail: d.tail || '',
+               model: d.model || '', global_model: d.global_model || '' };
     paintKeyBadge();
   }).catch(()=>{});
 }
@@ -3806,6 +3971,25 @@ function syncPermsUI(){
   if (send && !p.kb) send.disabled = true;
 }
 
+function noticeKey(){
+  const u = AUTH.user || {};
+  return 'rag.notice.experimental.v1.' + (u.id || u.username || 'anon');
+}
+function maybeShowNotice(){
+  try{ if (localStorage.getItem(noticeKey()) === '1') return; }catch(e){}
+  const el = document.getElementById('noticeModal');
+  if (el) el.classList.add('show');
+}
+function closeNotice(){
+  try{
+    if (document.getElementById('noticeNoMore')?.checked){
+      localStorage.setItem(noticeKey(), '1');
+    }
+  }catch(e){}
+  const el = document.getElementById('noticeModal');
+  if (el) el.classList.remove('show');
+}
+
 function showHome(){
   const p = myPerms();
   const kb = $('#homeKb'), def = $('#homeDef');
@@ -3830,7 +4014,12 @@ function pickHome(kind){
     if (!p.kb){ alert('未开通知识库权限，请联系管理员'); return; }
     sessionStorage.setItem('rag.homePicked', '1');
     closeModal('homeModal');
-    setTimeout(() => { const q = $('#q'); if (q && !q.disabled) q.focus(); }, 60);
+    setTimeout(() => {
+      maybeShowNotice();
+      const shown = document.getElementById('noticeModal')?.classList.contains('show');
+      const q = $('#q');
+      if (!shown && q && !q.disabled) q.focus();
+    }, 60);
     return;
   }
   if (kind === 'defense'){
@@ -3880,6 +4069,7 @@ async function boot(){
   syncDemoItem();     // 演示模式开关的记忆状态
   syncPermsUI();
   if (!sessionStorage.getItem('rag.homePicked')) showHome();
+  else maybeShowNotice();
 }
 
 // 上下文开关的记忆：上次开着的仍开着，默认关

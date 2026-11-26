@@ -61,6 +61,28 @@ $py = "$env:USERPROFILE\anaconda3\envs\rag\python.exe"
 `expect` 不会被脚本检查，是给人和后续模型看的——写清楚"什么叫答得好"，
 以后改提示词或换模型时这是最重要的参照。
 
+## 模块对抗评测
+
+`module_cases.json` + `run_module_eval.py` 专门检查“问交易所却引用开放式基金/期货”
+这类跨模块拼盘：
+
+```powershell
+& $py -u eval\run_module_eval.py
+```
+
+- 每条用例带 `expected_modules` / `forbidden_modules`；
+- 检查 `/ask` 返回的每个来源是否属于目标模块；
+- 默认要求 80% 来源命中目标模块、禁止来源为 0、回答里不能出现“引用校验”警告；
+- 结果写到 `eval/results_module/`。
+
+服务器上跑（token 方式，避免在命令行里写密码）：
+
+```powershell
+$env:RAG_EVAL_BASE="http://10.20.154.26:8000"
+$env:RAG_EVAL_TOKEN="<在容器内生成的短期 token>"
+& $py -u eval\run_module_eval.py
+```
+
 ## 历史
 
 | 时间 | 结果 | 说明 |

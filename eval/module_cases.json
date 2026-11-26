@@ -1,0 +1,62 @@
+{
+  "name": "业务模块对抗评测集（交易所/开放式基金/期货/固收）",
+  "kb_id": "20261108_174939_69c8b5",
+  "kb_name": "业务手册（O32/资管培训）",
+  "note": "同名动作词（下单/委托/指令）跨模块混用；检查引用来源是否锁定在目标模块，而不是每份 PPT 各抓一点。",
+  "cases": [
+    {
+      "id": "mod-01",
+      "topic": "交易所指令",
+      "question": "O32交易所指令怎么下单？",
+      "expected_modules": ["交易所"],
+      "forbidden_modules": ["开放式基金", "期货"],
+      "must_include_any": [["交易所指令"], ["个股指令"], ["指令管理"]],
+      "min_len": 80
+    },
+    {
+      "id": "mod-02",
+      "topic": "开放式基金",
+      "question": "O32开放式基金怎么下单？",
+      "expected_modules": ["开放式基金"],
+      "forbidden_modules": ["交易所", "期货"],
+      "must_include_any": [["开放式基金"], ["申购", "赎回", "认购"]],
+      "min_len": 80
+    },
+    {
+      "id": "mod-03",
+      "topic": "期货",
+      "question": "O32期货指令怎么开仓？",
+      "expected_modules": ["期货"],
+      "forbidden_modules": ["交易所", "开放式基金"],
+      "must_include_any": [["期货"], ["开仓", "平仓"]],
+      "min_len": 80
+    },
+    {
+      "id": "mod-04",
+      "topic": "对比",
+      "question": "交易所指令和期货指令有什么区别？",
+      "expected_modules": ["交易所", "期货"],
+      "forbidden_modules": ["开放式基金"],
+      "min_precision": 0.8,
+      "must_include_any": [["交易所"], ["期货"]],
+      "min_len": 80
+    },
+    {
+      "id": "mod-05",
+      "topic": "固收",
+      "question": "固收资金询报价怎么操作？",
+      "expected_modules": ["固收"],
+      "forbidden_modules": ["开放式基金"],
+      "must_include_any": [["固收", "债券", "回购"], ["询价", "报价"]],
+      "min_len": 80
+    },
+    {
+      "id": "mod-06",
+      "topic": "控制组",
+      "question": "O32系统登录地址是什么？",
+      "expected_modules": [],
+      "forbidden_modules": [],
+      "note": "控制组：不应对普通问题误过滤到没有结果"
+    }
+  ]
+}

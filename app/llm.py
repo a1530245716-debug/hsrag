@@ -112,11 +112,13 @@ def load_config():
         return json.load(f)
 
 
-def llm_settings(cfg=None, user_key=""):
+def llm_settings(cfg=None, user_key="", user_model=""):
     """组装一份可用的 LLM 设置。
 
     `user_key` 是该用户自己申请的 key（见 userllm.py）。给了就用它，
     没有就回落到 config.json / 环境变量的全局 key。
+    `user_model` 是该用户自定义的模型名；只有配了用户 key 时生效，
+    没填就沿用全局模型。
 
     为什么要按人分 key：公司网关**每个 key 只有约 2 路并发**，
     所有人挤同一把 key 会互相排队；各用各的就不互相影响。
@@ -127,10 +129,13 @@ def llm_settings(cfg=None, user_key=""):
     llm["api_key"] = llm.get("api_key") or os.environ.get("RAG_LLM_API_KEY", "")
     llm["base_url"] = os.environ.get("RAG_LLM_BASE_URL") or llm.get("base_url", "")
     llm["model"] = os.environ.get("RAG_LLM_MODEL") or llm.get("model", "")
-    # 用户自己的 key 优先级最高（只换 key，base_url/model 仍走全局，避免用户配错）
+    # 用户自己的 key 优先级最高；用户自定义模型只随用户 key 生效
     uk = (user_key or "").strip()
+    um = (user_model or "").strip()
     if uk:
         llm["api_key"] = uk
+        if um:
+            llm["model"] = um
         llm["_key_source"] = "user"
     else:
         llm["_key_source"] = "global"
@@ -251,8 +256,8 @@ def chat(messages, cfg=None, system=None, timeout=None, meta=None, user_key=""):
     return None
 
 
-def verify_key(key: str, cfg=None, timeout: int = 25):
-    """验证一把 key 能不能用。返回 (ok, 说明)。
+def verify_key(key: str, cfg=None, timeout: int = 25, model: str = ""):
+    """验证一把 key 能不能用。返回 (ok, 说明)。model 为空则用全局模型。
 
     用户在界面上填自己的 key 时先跑这个：填错了当场告诉他，
     而不是等他提问失败才发现。用完立刻丢弃，不写任何地方。
@@ -260,7 +265,7 @@ def verify_key(key: str, cfg=None, timeout: int = 25):
     key = (key or "").strip()
     if not key:
         return False, "key 不能为空"
-    s = llm_settings(cfg, user_key=key)
+    s = llm_settings(cfg, user_key=key, user_model=model)
     if not s.get("base_url") or not s.get("model"):
         return False, "系统还没配置 base_url / model，无法验证"
     os.environ.pop("SSL_CERT_FILE", None)
@@ -284,11 +289,13 @@ def _explain_err(err: str):
     e = err or ""
     low = e.lower()
     if "401" in e or "403" in e or "unauthorized" in low or "invalid" in low:
-        return False, "key 无效或无权限（401/403）"
+        return False, "key 无效或无权限（401/403）；如果 Key 本身可用，请检查模型名是否该 Key 支持"
     if "429" in e or "rate" in low or "too many" in low:
         return False, "调用太频繁（429），稍后重试"
     if "404" in e or "not found" in low:
         return False, "模型名或接口地址不对（404）"
+    if "422" in e or ("model" in low and ("support" in low or "invalid" in low)):
+        return False, "模型名不对，或该 Key 不支持这个模型（422）"
     if "timeout" in low or "timed out" in low:
         return False, "网关响应超时，请稍后重试"
     return False, f"验证失败：{e[:120]}"

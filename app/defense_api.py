@@ -51,6 +51,13 @@ MODES = {
 # 可选题目数量。真答辩通常 10 题左右，练手可以少来几道。
 ALLOWED_N = (3, 5, 10, 15, 20)
 
+# 出题难度。默认基础：先让新人把概念/步骤说清楚，再逐步加难度。
+DIFFICULTIES = {
+    "basic":  {"label": "基础", "desc": "只问概念、步骤和单一环节"},
+    "normal": {"label": "标准", "desc": "结合流程和业务，适度追问"},
+    "hard":   {"label": "挑战", "desc": "多步链路、异常与边界"},
+}
+
 
 def _gc():
     now = time.time()
@@ -71,9 +78,11 @@ def get_session(sid):
         return s
 
 
-def new_session(uid, ppt_meta, mode="practice", total=None, kb_id=""):
+def new_session(uid, ppt_meta, mode="practice", total=None, kb_id="",
+                difficulty="basic", material=None, keywords="", source="ppt"):
     sid = uuid.uuid4().hex[:16]
     mode = mode if mode in MODES else "practice"
+    difficulty = difficulty if difficulty in DIFFICULTIES else "basic"
     n = total if total in ALLOWED_N else MODES[mode]["default_n"]
     with _LOCK:
         _gc()
@@ -85,6 +94,11 @@ def new_session(uid, ppt_meta, mode="practice", total=None, kb_id=""):
             "total": n,
             # 用哪个知识库当依据；空串 = 默认的业务手册
             "kb_id": kb_id or "",
+            "difficulty": difficulty,
+            # 关键词直练：没有 PPT，material 是关键词匹配到的知识库内容
+            "material": material or "",
+            "keywords": keywords or "",
+            "source": source or "ppt",
             "history": [],          # [{"q":..., "a":...}]
             "asked_pages": [],
             "started": time.strftime("%Y-%m-%d %H:%M"),
@@ -92,6 +106,14 @@ def new_session(uid, ppt_meta, mode="practice", total=None, kb_id=""):
             "done": False,
         }
     return _SESS[sid]
+
+
+def _material_of(sess):
+    m = str((sess or {}).get("material") or "").strip()
+    if m:
+        return m
+    import defense_coach
+    return defense_coach.material_from_ppt((sess or {}).get("ppt") or {})
 
 
 def drop_session(sid):
@@ -172,21 +194,23 @@ def _record_question(sess, q):
             sess["asked_pages"].append(pno)
 
 
-def prefetch_first_question(meta, cfg=None, user_key="", timeout=120):
+def prefetch_first_question(meta, difficulty="basic", cfg=None, user_key="", timeout=120):
     """PPT 解析完就开始想第一题，用户选模式/题数时这段时间不浪费。"""
     import defense_coach
     pid = str((meta or {}).get("id") or "")
     if not pid:
         return None
+    difficulty = difficulty if difficulty in DIFFICULTIES else "basic"
+    key = f"{pid}:{difficulty}"
     with _FIRST_LOCK:
-        job = _FIRST.get(pid)
+        job = _FIRST.get(key)
         if job and not job["event"].is_set():
             return job
         if job and job.get("q"):
             return job
         ev = threading.Event()
         job = {"event": ev, "q": "", "err": "", "ts": time.time()}
-        _FIRST[pid] = job
+        _FIRST[key] = job
         if len(_FIRST) > _FIRST_MAX:
             for k in sorted(_FIRST, key=lambda x: _FIRST[x].get("ts", 0))[:len(_FIRST) - _FIRST_MAX]:
                 _FIRST.pop(k, None)
@@ -195,12 +219,15 @@ def prefetch_first_question(meta, cfg=None, user_key="", timeout=120):
         try:
             material = defense_coach.material_from_ppt(meta)
             withimg = [s for s in (meta.get("slides") or []) if s.get("images")]
-            focus = withimg[min(1, len(withimg) - 1)].get("no") if withimg else None
+            focus = None
+            if difficulty != "basic" and withimg:
+                focus = withimg[min(1, len(withimg) - 1)].get("no")
             ctx = {}
             q = defense_coach.next_question(
                 material, [], user_answer=None, cfg=cfg, user_key=user_key,
                 timeout=timeout, ppt=meta, focus_page=focus,
-                kb_id=defense_coach.manual_kb_id(), ctx=ctx)
+                kb_id=defense_coach.manual_kb_id(), ctx=ctx,
+                difficulty=difficulty)
             job["q"] = q or ""
             # 把出题时算好的历史参考/手册检索带进会话，第一次追问直接复用
             job["ctx"] = ctx
@@ -215,7 +242,7 @@ def prefetch_first_question(meta, cfg=None, user_key="", timeout=120):
     return job
 
 
-def take_first_job(ppt_id, kb_id="", timeout=120):
+def take_first_job(ppt_id, kb_id="", difficulty="basic", timeout=120):
     """取预生成第一题的任务（含复用上下文）。只有默认业务手册库才用缓存。"""
     import defense_coach
     pid = str(ppt_id or "")
@@ -223,23 +250,25 @@ def take_first_job(ppt_id, kb_id="", timeout=120):
         return None
     if (kb_id or "") != defense_coach.manual_kb_id():
         return None
+    difficulty = difficulty if difficulty in DIFFICULTIES else "basic"
     with _FIRST_LOCK:
-        job = _FIRST.get(pid)
+        job = _FIRST.get(f"{pid}:{difficulty}")
     if not job:
         return None
     job["event"].wait(timeout=timeout)
     return job
 
 
-def take_first_question(ppt_id, kb_id="", timeout=120):
-    job = take_first_job(ppt_id, kb_id, timeout=timeout)
+def take_first_question(ppt_id, kb_id="", difficulty="basic", timeout=120):
+    job = take_first_job(ppt_id, kb_id, difficulty, timeout=timeout)
     return (job or {}).get("q") or ""
 
 
 def make_first_question(sess, cfg=None, user_key="", timeout=120):
     """开始演练的第一题：优先复用上传后预生成的结果。"""
     ppt = sess.get("ppt") or {}
-    job = take_first_job(ppt.get("id"), sess.get("kb_id") or "", timeout=timeout)
+    job = take_first_job(ppt.get("id"), sess.get("kb_id") or "",
+                         sess.get("difficulty") or "basic", timeout=timeout)
     q = (job or {}).get("q") or ""
     if q:
         if isinstance(job.get("ctx"), dict):
@@ -257,29 +286,45 @@ def make_question(sess, user_answer=None, images=None,
     import defense_coach
 
     ppt = sess.get("ppt") or {}
-    material = defense_coach.material_from_ppt(ppt)
+    material = _material_of(sess)
     if not material.strip():
-        return "", "PPT 里没有提取到内容，换一份试试"
+        return "", ("没有可用的学习内容：请换一份 PPT，"
+                    "或者换个关键词/知识库再试")
 
     history = sess.get("history") or []
 
-    # 第一题优先挑有图的页——评委开场常常指着张图问
+    # 第一题优先挑有图的页——评委开场常常指着张图问。
+    # 基础难度不这么干：从实施工程师视角问“是做什么/在哪配/分几步”，
+    # 不把第一题就压到某一页的细节上。
     focus = None
-    if not history:
-        withimg = [s for s in (ppt.get("slides") or []) if s.get("images")]
-        if withimg:
-            # 跳过封面页，从中间挑一页有图的
-            pick = withimg[min(1, len(withimg) - 1)]
-            focus = pick.get("no")
-    elif sess.get("asked_pages"):
-        # 追问时优先盯着刚刚那道题涉及的页，而不是 PPT 前几页的图
-        focus = sess["asked_pages"][-1]
+    difficulty = sess.get("difficulty") or "basic"
+    if difficulty != "basic":
+        if not history:
+            withimg = [s for s in (ppt.get("slides") or []) if s.get("images")]
+            if withimg:
+                # 跳过封面页，从中间挑一页有图的
+                pick = withimg[min(1, len(withimg) - 1)]
+                focus = pick.get("no")
+        elif sess.get("asked_pages"):
+            # 追问时优先盯着刚刚那道题涉及的页，而不是 PPT 前几页的图
+            focus = sess["asked_pages"][-1]
 
     ctx = sess.setdefault("ctx", {})
+    source = sess.get("source") or "ppt"
+    scene_note = ""
+    material_label = None
+    if source == "keywords":
+        scene_note = (
+            "学员没有上传 PPT，只输入了一组学习关键词；下面是系统从知识库里"
+            "匹配到的学习内容。请像导师带新人一样，围绕这些内容提问；"
+            "不要提“第几页”或 PPT，也不要用“你讲到/你说过”开头。")
+        material_label = "【学员关键词匹配到的学习内容】"
     q = defense_coach.next_question(
         material, history, user_answer=user_answer, cfg=cfg,
         user_key=user_key, timeout=timeout, ppt=ppt, focus_page=focus,
-        kb_id=sess.get("kb_id") or "", ctx=ctx)
+        kb_id=sess.get("kb_id") or "", ctx=ctx,
+        difficulty=sess.get("difficulty") or "basic",
+        material_label=material_label, scene_note=scene_note)
 
     if not q:
         return "", ("生成问题失败：大模型这次没有返回内容"
@@ -376,6 +421,84 @@ def recommend_kb_for_ppt(meta, user=None, cfg=None, user_key="", timeout=45):
     }
 
 
+def search_kb_keywords(kb_id, keywords, topk=10):
+    """关键词直练：只用 BM25 找学习内容，不调模型，快且稳定。"""
+    import kb as kbmod
+    q = (keywords or "").strip()
+    if not kb_id or not q:
+        return []
+    try:
+        return kbmod.search(kb_id, q[:200], topk=topk) or []
+    except Exception as e:
+        print(f"[defense] 关键词检索失败: {type(e).__name__}", file=__import__("sys").stderr)
+        return []
+
+
+def match_kb_for_keywords(keywords, user=None, topk=8):
+    """在用户有答辩权限的知识库里，按关键词命中情况挑一个最合适的。"""
+    import indexer
+    import users
+
+    q = (keywords or "").strip()
+    if not q:
+        return {"kb_id": "", "name": "", "hits": [], "reason": "请输入关键词"}
+    import math
+    import re
+    import defense_coach
+
+    manual_id = defense_coach.manual_kb_id()
+    business_terms = ["交易", "指令", "委托", "下单", "审核", "分发", "清算",
+                      "交收", "回购", "ETF", "固收", "风控", "O32", "资管"]
+    q_low = q.lower()
+    name_tokens = [t for t in re.split(r"[\s,，、;；/]+", q) if len(t) >= 2]
+    best = None
+    for kb_ in indexer.load_registry():
+        kid = str(kb_.get("id") or "")
+        if not kid or not users.can_read_kb(kb_, user, "defense"):
+            continue
+        n = int(kb_.get("chunk_count") or
+                (kb_.get("stats") or {}).get("total_chunks") or 0)
+        if n <= 0:
+            continue
+        hits = search_kb_keywords(kid, q, topk=topk)
+        if not hits:
+            continue
+        name = str(kb_.get("name") or "")
+        label = (name + " " + str(kb_.get("folder") or "")).lower()
+        name_hit = 1 if any(t.lower() in label for t in name_tokens) else 0
+        manual_hit = 1 if (kid == manual_id and
+                           any(t.lower() in q_low for t in business_terms)) else 0
+        top = float(hits[0].get("score") or 0)
+        total = sum(float(h.get("score") or 0) for h in hits)
+        # 大项目库的 BM25 绝对值天然更高；按库规模做温和归一化，
+        # 再优先“关键词命中库名”和“业务关键词优先业务手册”。
+        norm = top / math.log10(max(10, n) + 10)
+        rank = (name_hit, manual_hit, norm, len(hits), total)
+        if best is None or rank > best["rank"]:
+            best = {"kb_id": kid, "name": name, "hits": hits,
+                    "top": top, "sum": total, "count": len(hits),
+                    "rank": rank}
+    if not best:
+        return {"kb_id": "", "name": "", "hits": [],
+                "reason": "没有在可用的知识库里匹配到这些关键词"}
+    best.pop("rank", None)
+    best["reason"] = f"关键词在「{best['name']}」命中 {best['count']} 个片段"
+    return best
+
+
+def keyword_material(hits, keywords=""):
+    parts = [f"【学员输入的学习关键词】{keywords}"]
+    n = 0
+    for h in (hits or [])[:10]:
+        txt = (h.get("text_full") or h.get("text") or "").strip()
+        if not txt:
+            continue
+        n += 1
+        name = str(h.get("path") or "").replace("\\", "/").split("/")[-1]
+        parts.append(f"【学习资料 {n}｜{name}】\n{txt[:800]}")
+    return "\n\n".join(parts)
+
+
 def total_of(sess):
     return int(sess.get("total") or QUESTIONS_TOTAL)
 
@@ -404,7 +527,7 @@ def prefetch_diagnosis(sess, index, cfg=None, user_key="", timeout=90):
         if index < 0 or index >= len(history):
             return False
         item = dict(history[index])
-        material = defense_coach.material_from_ppt(sess.get("ppt") or {})
+        material = _material_of(sess)
         fut = _DIAG_POOL.submit(
             defense_coach.diagnose_one, item.get("q", ""), item.get("a", ""),
             material, cfg=cfg, user_key=user_key, timeout=timeout,
@@ -471,7 +594,7 @@ def prefetch_explain(sess, index, question, cfg=None, user_key="", timeout=180):
             ppt = sess.get("ppt") or {}
             r = defense_coach.reveal(
                 question, None,
-                material=defense_coach.material_from_ppt(ppt),
+                material=_material_of(sess),
                 ppt=ppt, cfg=cfg, user_key=user_key, timeout=timeout,
                 kb_id=sess.get("kb_id") or "")
             if r.get("ok"):
@@ -529,7 +652,7 @@ def explain(sess, index, cfg=None, user_key="", timeout=150):
     ppt = sess.get("ppt") or {}
     r = defense_coach.reveal(
         item.get("q", ""), item.get("a", ""),
-        material=defense_coach.material_from_ppt(ppt),
+        material=_material_of(sess),
         ppt=ppt, cfg=cfg, user_key=user_key, timeout=timeout,
         kb_id=sess.get("kb_id") or "")
     if r.get("ok"):
@@ -542,7 +665,7 @@ def make_report(sess, cfg=None, user_key="", timeout=180):
     import defense_coach
 
     ppt = sess.get("ppt") or {}
-    material = defense_coach.material_from_ppt(ppt)
+    material = _material_of(sess)
     history = sess.get("history") or []
     if not history:
         return {"ok": False, "msg": "还没有答题记录"}
@@ -552,7 +675,13 @@ def make_report(sess, cfg=None, user_key="", timeout=180):
     if not r.get("ok"):
         return r
 
-    r["ppt_name"] = ppt.get("name", "")
+    source = sess.get("source") or "ppt"
+    r["source"] = source
+    r["keywords"] = sess.get("keywords") or ""
+    r["difficulty"] = sess.get("difficulty") or "basic"
+    r["difficulty_label"] = DIFFICULTIES.get(r["difficulty"], {}).get("label", "基础")
+    r["ppt_name"] = ppt.get("name", "") or (
+        f"关键词练习：{sess.get('keywords')}" if source == "keywords" else "")
     r["pages"] = ppt.get("pages", 0)
     r["mode"] = sess.get("mode") or "practice"
     r["mode_label"] = MODES.get(r["mode"], {}).get("label", "练习模式")
@@ -579,7 +708,7 @@ def make_analysis(sess, cfg=None, user_key="", timeout=180):
                            timeout=min(90, timeout))
     diagnoses = wait_diagnoses(sess, len(history), timeout=90)
     r = defense_coach.analyze(
-        defense_coach.material_from_ppt(ppt),
+        _material_of(sess),
         history,
         cfg=cfg, user_key=user_key, timeout=timeout,
         kb_id=sess.get("kb_id") or "", diagnoses=diagnoses)

@@ -10,7 +10,7 @@
 - 增量索引:按文件 size+mtime 签名,未变文件跳过,只处理新增/修改;删除文件同步移除其块。
 - 复用 index_docs.py 的抽取函数(EXTRACTORS)保证与旧版一致。
 """
-import json, math, os, queue, sys, threading, time, hashlib, tracemalloc
+import json, math, os, queue, re, shutil, sys, threading, time, hashlib, tracemalloc, zipfile
 from pathlib import Path
 
 APP_DIR = Path(__file__).parent
@@ -19,6 +19,8 @@ import index_docs
 
 EXTRACTORS = index_docs.EXTRACTORS
 CHUNKS_PER_KB = 100000
+# 分块器版本：改动 chunks()/PPT 分块后 +1，让增量索引知道要重解析旧文件。
+CHUNKER_VERSION = 2
 
 # registry.json 的读-改-写必须串行，否则两个用户同时建库/改名/索引完成时
 # 会互相覆盖（后写的把前一个新建的库整条丢掉）。RLock 允许嵌套调用。
@@ -268,6 +270,137 @@ def _sig_mb(path: Path):
     return f"mb:{st.st_size}:{int(st.st_mtime)}"
 
 
+# ---------------- zip 自动解压（文件夹/上传目录里的 zip） ----------------
+ZIP_MAX_FILES = 20000
+ZIP_MAX_TOTAL = 2 * 1024 * 1024 * 1024      # 解压后总量
+ZIP_MAX_ENTRY = 500 * 1024 * 1024           # 单文件
+ZIP_MAX_DEPTH = 3                           # 嵌套层数
+ZIP_MAX_RATIO = 150                         # 压缩比上限
+
+
+def _zip_name(info):
+    """没带 UTF-8 标记的 zip 会被 zipfile 按 cp437 解成乱码，尝试按 GBK 还原。"""
+    name = info.filename
+    if not (info.flag_bits & 0x800):
+        try:
+            plain = name.encode("cp437").decode("gbk")
+            if plain and plain != name:
+                name = plain
+        except Exception:
+            pass
+    return name
+
+
+def _zip_safe_extract(zpath: Path, dest: Path, depth=0, budget=None):
+    """安全解压；递归处理内部 zip（限层数/总量）。返回解压文件数。"""
+    if budget is None:
+        budget = {"files": 0, "bytes": 0}
+    if depth > ZIP_MAX_DEPTH or not zipfile.is_zipfile(zpath):
+        return 0
+    dest.mkdir(parents=True, exist_ok=True)
+    dest_res = dest.resolve()
+    saved = 0
+    with zipfile.ZipFile(zpath) as zf:
+        infos = zf.infolist()
+        total = sum(max(0, i.file_size) for i in infos)
+        zsize = zpath.stat().st_size
+        if len(infos) > ZIP_MAX_FILES - budget["files"]:
+            raise ValueError("压缩包内文件过多")
+        if total > ZIP_MAX_TOTAL - budget["bytes"]:
+            raise ValueError("解压后体积超过限制")
+        if zsize and total > max(200 * 1024 * 1024, zsize * ZIP_MAX_RATIO):
+            raise ValueError("压缩比异常")
+        nested = []
+        for info in infos:
+            if info.flag_bits & 0x1:
+                raise ValueError("压缩包不能有密码")
+            name = _zip_name(info)
+            low = name.lower().replace("\\", "/")
+            if (not name or low.startswith("__macosx/") or
+                    low == ".ds_store" or low.endswith("/.ds_store") or
+                    low == "thumbs.db" or low.endswith("/thumbs.db")):
+                continue
+            parts = [p for p in low.strip("/").split("/") if p]
+            if not parts or any(p == ".." or ":" in p for p in parts):
+                continue
+            target = (dest / Path(*parts)).resolve()
+            if not (str(target) == str(dest_res) or
+                    str(target).startswith(str(dest_res) + os.sep)):
+                continue
+            if info.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            mode = (info.external_attr >> 16) & 0o170000
+            if mode == 0o120000 or info.file_size == 0:
+                continue
+            if info.file_size > ZIP_MAX_ENTRY:
+                continue
+            if budget["files"] >= ZIP_MAX_FILES or \
+                    budget["bytes"] + info.file_size > ZIP_MAX_TOTAL:
+                break
+            target.parent.mkdir(parents=True, exist_ok=True)
+            tmp = target.with_name(target.name + f".{os.getpid()}_{time.time_ns()}.tmp")
+            try:
+                with zf.open(info) as src, open(tmp, "wb") as dst:
+                    shutil.copyfileobj(src, dst, 1 << 20)
+                tmp.replace(target)
+            except Exception:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                continue
+            saved += 1
+            budget["files"] += 1
+            budget["bytes"] += info.file_size
+            if target.suffix.lower() == ".zip":
+                nested.append(target)
+    for nz in nested:
+        if depth < ZIP_MAX_DEPTH:
+            key = hashlib.md5(str(nz).encode("utf-8")).hexdigest()[:8]
+            sub = dest / ".inner" / f"{nz.stem}-{key}"
+            try:
+                _zip_safe_extract(nz, sub, depth + 1, budget)
+            except Exception as e:
+                print(f"  [ZIP-NESTED-FAIL] {nz}: {e}", file=sys.stderr)
+        try:
+            nz.unlink()
+        except Exception:
+            pass
+    return saved
+
+
+def _zip_cache_dir(zpath: Path, unz_root: Path):
+    stem = re.sub(r"[^\w一-龥.-]+", "_", zpath.stem)[:40] or "zip"
+    key = hashlib.md5(str(zpath.resolve()).lower().encode("utf-8")).hexdigest()[:8]
+    return unz_root / f"{stem}-{key}"
+
+
+def _extract_zip_cached(zpath: Path, unz_root: Path):
+    """同一路径/同样大小的 zip 复用上次解压结果；变了就重解。"""
+    dest = _zip_cache_dir(zpath, unz_root)
+    st = zpath.stat()
+    sig = f"{st.st_size}:{int(st.st_mtime_ns)}"
+    marker = dest / ".src-signature"
+    if marker.exists():
+        try:
+            if marker.read_text(encoding="utf-8").strip() == sig:
+                return dest
+        except Exception:
+            pass
+    if dest.exists():
+        shutil.rmtree(dest, ignore_errors=True)
+    dest.mkdir(parents=True, exist_ok=True)
+    try:
+        _zip_safe_extract(zpath, dest)
+        marker.write_text(sig, encoding="utf-8")
+        return dest
+    except Exception as e:
+        shutil.rmtree(dest, ignore_errors=True)
+        print(f"  [ZIP-FAIL] {zpath}: {e}", file=sys.stderr)
+        return None
+
+
 # ---------------- 索引任务队列 ----------------
 # index_kb 是同步的; 直接在请求线程里跑会占满 HTTP 线程池, 重建期间其他库的
 # 提问也会变慢。这里用「单 worker 后台线程 + 持久化状态文件」:
@@ -508,11 +641,17 @@ def index_kb(kb, progress=None):
     # 读旧签名表
     old_sigs = {}
     all_file_sigs = {}
+    old_manifest = {}
     if manifest_path.exists():
         try:
-            old_sigs = json.loads(manifest_path.read_text(encoding="utf-8")).get("sigs", {})
+            old_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            old_sigs = old_manifest.get("sigs", {})
         except Exception:
-            old_sigs = {}
+            old_manifest, old_sigs = {}, {}
+    # 分块规则变了（例如 PPT 从按行切改成按页切），旧块不能继续复用；
+    # 清空签名表，让所有文件重解析一次。
+    if old_manifest.get("chunker") != CHUNKER_VERSION:
+        old_sigs = {}
 
     # 扫描该知识库文件夹(可含多个真实文件夹,以 | 分隔) + 拖拽上传专用目录
     roots = [Path(r) for r in str(kb.get("folder") or "").split("|") if r.strip()]
@@ -520,6 +659,7 @@ def index_kb(kb, progress=None):
     if not roots or up.is_dir():
         roots.append(up)
     scan = {}   # rel -> (path, sig)
+    zip_paths = []
     for root in roots:
         if not root.is_dir():
             continue
@@ -531,6 +671,9 @@ def index_kb(kb, progress=None):
                 if fn.endswith(tuple(index_docs.SKIP_EXT)):
                     continue
                 p = Path(dp) / fn
+                if p.suffix.lower() == ".zip":
+                    zip_paths.append(p)
+                    continue
                 try:
                     sig = _sig(p)
                 except Exception:
@@ -539,8 +682,39 @@ def index_kb(kb, progress=None):
                 key = f"{root.name}:{rel}"
                 scan[key] = (p, sig)
 
+    # 文件夹/上传目录里的 zip 自动解压到 upload/.unzipped，再把内部文件并进扫描。
+    # 源目录不改动；解压结果带签名，zip 没变就复用。
+    if zip_paths:
+        up.mkdir(parents=True, exist_ok=True)
+        unz_root = up / ".unzipped"
+        unz_root.mkdir(parents=True, exist_ok=True)
+        used_dirs = set()
+        for zp in dict.fromkeys(zip_paths):
+            dest = _extract_zip_cached(zp, unz_root)
+            if not dest:
+                continue
+            used_dirs.add(dest.name)
+            for dp, dirs, files in os.walk(dest):
+                dirs[:] = [x for x in dirs if x != "__pycache__"]
+                for fn in files:
+                    if fn.startswith("~$") or fn.startswith(".") or fn.endswith((".tmp", ".zip")):
+                        continue
+                    if fn.endswith(tuple(index_docs.SKIP_EXT)):
+                        continue
+                    p = Path(dp) / fn
+                    try:
+                        sig = _sig(p)
+                    except Exception:
+                        continue
+                    inner = p.relative_to(dest).as_posix()
+                    rel = f".unzipped/{dest.name}/{inner}"
+                    scan[f"upload:{rel}"] = (p, sig)
+        for child in unz_root.iterdir():
+            if child.is_dir() and child.name not in used_dirs and not child.name.startswith("."):
+                shutil.rmtree(child, ignore_errors=True)
+
     stats = {"files": len(scan), "added": 0, "changed": 0, "unchanged": 0, "removed": 0,
-             "failed": 0, "total_chunks": 0}
+             "failed": 0, "total_chunks": 0, "zips": len(zip_paths)}
     new_sigs = {}
     # 发现删除(旧有但新扫描不存在的文件):其旧块不被写入即被移除
     for key, o_sig in old_sigs.items():
@@ -562,14 +736,16 @@ def index_kb(kb, progress=None):
     # 1) 未变文件:直接保留旧块
     for key, o_sig in old_sigs.items():
         if key in scan and scan[key][1] == o_sig:
-            # 在 scan 中仍存在且未变
-            new_sigs[key] = o_sig
-            stats["unchanged"] += 1
-            old_lines = old_block.pop(key.split(":", 1)[1], None)
-            # 但旧行 path 存的是 rel,而 key 存 root.name:rel;这里用 rel 作为归属键
-            if old_lines:
-                out_lines.extend(old_lines)
-                stats["total_chunks"] += len(old_lines)
+            rel = key.split(":", 1)[1]
+            old_lines = old_block.pop(rel, None)
+            # 旧版跳过的扩展名（典型是 .sql）签名还在，但没有块；
+            # 现在已经支持了，不能当“未变”跳过，必须补解析一次。
+            if old_lines or scan[key][0].suffix.lower() != ".sql":
+                new_sigs[key] = o_sig
+                stats["unchanged"] += 1
+                if old_lines:
+                    out_lines.extend(old_lines)
+                    stats["total_chunks"] += len(old_lines)
 
     # 2) 变更/新增文件:重解析
     todo = [(key, p, sig) for key, (p, sig) in scan.items() if key not in new_sigs]
@@ -607,9 +783,12 @@ def index_kb(kb, progress=None):
                 cap_s = cap.strip()
                 if body.endswith(cap_s):
                     text = body[: -len(cap_s)].rstrip()
-            cs = list(index_docs.chunks(text))
-            for i, c in enumerate(cs):
+            cs = list(index_docs.chunks_with_meta(text, ext, rel))
+            for i, (c, meta) in enumerate(cs):
                 rec = {"id": f"{doc_id}_{i:04d}", "path": rel, "chunk": i, "text": c}
+                for k, v in (meta or {}).items():
+                    if v not in (None, ""):
+                        rec[k] = v
                 out_lines.append(json.dumps(rec, ensure_ascii=False) + "\n")
                 stats["total_chunks"] += 1
             if cap:
@@ -634,7 +813,8 @@ def index_kb(kb, progress=None):
         os.fsync(f.fileno())
     os.replace(tmp_chunk, chunk_path)
 
-    manifest = {"sigs": new_sigs, "build_time": time.strftime("%Y-%m-%d %H:%M:%S"),
+    manifest = {"sigs": new_sigs, "chunker": CHUNKER_VERSION,
+                "build_time": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "stats": stats}
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     stats["total_chunks"] = len(out_lines)

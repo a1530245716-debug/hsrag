@@ -9,6 +9,7 @@ _label.json
 # 原来写的是 eval/*.json，把 xinyuan_cases.json 也一起忽略了，
 # 结果这个文件从来没进过 git，换个 worktree / 换台机器就跑不了评测。
 eval/results/
+eval/results_module/
 *.key
 *.pem
 *.crt

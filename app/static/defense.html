@@ -227,6 +227,18 @@
                cursor:pointer; line-height:1; opacity:.8; }
   #viewer .x:hover { opacity:1; }
 
+  /* ---------- 入口切换 / 关键词直练 ---------- */
+  .defTabs { display:flex; gap:9px; margin:0 0 16px; }
+  .defTab { flex:none; padding:9px 18px; border:1px solid var(--line); border-radius:9px;
+            background:var(--panel); color:#475569; font-size:13.5px; cursor:pointer; }
+  .defTab:hover { border-color:#b9c4d4; }
+  .defTab.on { border-color:var(--accent); background:var(--soft); color:var(--accent);
+               font-weight:600; }
+  #kwInput { width:100%; min-height:74px; padding:12px 14px; border-radius:10px;
+             border:1px solid var(--line); font-family:inherit; font-size:14px;
+             line-height:1.7; resize:vertical; outline:none; }
+  #kwInput:focus { border-color:var(--accent); box-shadow:0 0 0 3px rgba(37,99,235,.09); }
+
   @media (max-width:640px){
     #top h1 { font-size:15px; } #top .sub { display:none; }
     #main { padding:14px 12px 30px; }
@@ -250,6 +262,11 @@
 
 <div id="main">
   <div class="wrap">
+
+    <div class="defTabs">
+      <button class="defTab on" id="tabPpt" onclick="switchSrc('ppt')">📄 上传 PPT 演练</button>
+      <button class="defTab" id="tabKw" onclick="switchSrc('kw')">🔤 关键词直练（不用 PPT）</button>
+    </div>
 
     <!-- 上传 -->
     <div id="uploadCard">
@@ -283,6 +300,16 @@
         </div>
 
         <div class="optGroup">
+          <label class="optLabel">出题难度</label>
+          <div class="nums" id="diffRow"></div>
+          <div class="optHint" style="line-height:1.85">
+            <b>基础（默认）</b>：实施工程师带新人——模块做什么、在哪操作、分几步、怎么确认；业务只问皮毛。<br>
+            <b>标准</b>：结合流程和业务，适度追问“为什么 / 怎么做 / 谁负责”。<br>
+            <b>挑战</b>：多步链路、异常/回滚、边界条件和设计取舍。
+          </div>
+        </div>
+
+        <div class="optGroup">
           <label class="optLabel">题目数量</label>
           <div class="nums" id="numRow"></div>
         </div>
@@ -296,6 +323,56 @@
 
       <div id="startRow">
         <button class="btn primary" id="startBtn">开始演练</button>
+      </div>
+    </div>
+
+    <!-- 关键词直练：不用上传 PPT -->
+    <div id="kwCard" style="display:none">
+      <h2>关键词直练</h2>
+      <div class="lead">
+        不用上传 PPT。输入你想练的学习关键词，系统自动在知识库匹配内容，
+        像导师一样围绕这些内容提问。适合复盘某个模块、某个业务流程。
+      </div>
+      <div class="optGroup">
+        <label class="optLabel">学习关键词</label>
+        <textarea id="kwInput" placeholder="例如：交易所指令 下单 审核 分发"></textarea>
+        <div class="optHint">用空格或逗号分隔；越具体越好，例如“O32 交易所指令 审核 分发”。</div>
+      </div>
+      <div class="optGroup">
+        <label class="optLabel">选择模式</label>
+        <div class="modes">
+          <div class="modeCard sel" data-mode="practice">
+            <div class="mt">📖 练习模式</div>
+            <div class="md">每题答完立刻看参考答案和依据。<br>适合自己边学边练。</div>
+          </div>
+          <div class="modeCard" data-mode="exam">
+            <div class="mt">🎯 答辩模式</div>
+            <div class="md">全程不给答案，全部答完统一看解析。<br>模拟导师考核。</div>
+          </div>
+        </div>
+      </div>
+      <div class="optGroup">
+        <label class="optLabel">出题难度</label>
+        <div class="nums" id="kwDiffRow"></div>
+        <div class="optHint" style="line-height:1.85">
+          <b>基础（默认）</b>：模块做什么、在哪操作、分几步、怎么确认；业务只问皮毛。<br>
+          <b>标准</b>：结合流程和业务，适度追问“为什么 / 怎么做 / 谁负责”。<br>
+          <b>挑战</b>：多步链路、异常/回滚、边界条件和设计取舍。
+        </div>
+      </div>
+      <div class="optGroup">
+        <label class="optLabel">题目数量</label>
+        <div class="nums" id="kwNumRow"></div>
+      </div>
+      <div class="optGroup">
+        <label class="optLabel">出题依据的知识库</label>
+        <select id="kwKbSel" class="sel">
+          <option value="">自动匹配知识库</option>
+        </select>
+        <div class="optHint" id="kwKbHint">系统会根据关键词自动选择命中内容最多的知识库；也可以手动指定。</div>
+      </div>
+      <div id="kwStartRow">
+        <button class="btn primary" id="kwStartBtn">开始关键词演练</button>
       </div>
     </div>
 
@@ -439,7 +516,14 @@ function backToQa(ev){
 
 // ---------------- 演练设置 ----------------
 const NUM_OPTIONS = [3, 5, 10, 15, 20];
+const DIFF_OPTIONS = [['basic', '基础'], ['normal', '标准'], ['hard', '挑战']];
 let PICK_N = 10;
+let DIFF = 'basic';
+let KW_N = 10;
+let KW_DIFF = 'basic';
+let SOURCE = 'ppt';          // ppt / keywords
+
+function diffLabel(d){ return (DIFF_OPTIONS.find(x => x[0] === d) || ['basic','基础'])[1]; }
 
 function renderNums(){
   $('#numRow').innerHTML = NUM_OPTIONS.map(n =>
@@ -449,19 +533,155 @@ function renderNums(){
     b.onclick = () => { PICK_N = parseInt(b.dataset.n, 10); renderNums(); updateStartBtn(); };
   });
 }
+function renderDiffRow(el, cur, onPick){
+  if (!el) return;
+  el.innerHTML = DIFF_OPTIONS.map(([k, label]) =>
+    `<button class="numBtn${k === cur ? ' sel' : ''}" data-d="${k}">${label}</button>`
+  ).join('');
+  el.querySelectorAll('.numBtn').forEach(b => {
+    b.onclick = () => { onPick(b.dataset.d); };
+  });
+}
+function renderDiffs(){
+  renderDiffRow($('#diffRow'), DIFF, d => { DIFF = d; renderDiffs(); updateStartBtn(); });
+  renderDiffRow($('#kwDiffRow'), KW_DIFF, d => { KW_DIFF = d; renderDiffs(); updateKwStartBtn(); });
+}
+function renderKwNums(){
+  $('#kwNumRow').innerHTML = NUM_OPTIONS.map(n =>
+    `<button class="numBtn${n === KW_N ? ' sel' : ''}" data-n="${n}">${n} 题</button>`
+  ).join('');
+  $('#kwNumRow').querySelectorAll('.numBtn').forEach(b => {
+    b.onclick = () => { KW_N = parseInt(b.dataset.n, 10); renderKwNums(); updateKwStartBtn(); };
+  });
+}
 function updateStartBtn(){
   const m = MODE === 'exam' ? '答辩模式' : '练习模式';
-  $('#startBtn').textContent = `开始演练（${m} · 共 ${PICK_N} 题）`;
+  $('#startBtn').textContent = `开始演练（${m} · ${diffLabel(DIFF)} · 共 ${PICK_N} 题）`;
+}
+function updateKwStartBtn(){
+  const m = MODE === 'exam' ? '答辩模式' : '练习模式';
+  const b = $('#kwStartBtn');
+  if (b) b.textContent = `开始关键词演练（${m} · ${diffLabel(KW_DIFF)} · 共 ${KW_N} 题）`;
 }
 function setMode(m){
   MODE = m;
   document.querySelectorAll('.modeCard').forEach(c =>
     c.classList.toggle('sel', c.dataset.mode === m));
   updateStartBtn();
+  updateKwStartBtn();
 }
 document.querySelectorAll('.modeCard').forEach(c => {
   c.onclick = () => setMode(c.dataset.mode);
 });
+
+// ---------------- 入口切换：PPT / 关键词 ----------------
+function switchSrc(src){
+  SOURCE = src;
+  $('#tabPpt').classList.toggle('on', src === 'ppt');
+  $('#tabKw').classList.toggle('on', src === 'kw');
+  $('#uploadCard').style.display = src === 'ppt' ? '' : 'none';
+  $('#kwCard').style.display = src === 'kw' ? 'block' : 'none';
+  const sub = document.querySelector('#top .sub');
+  if (sub) sub.textContent = src === 'kw'
+    ? '输入学习关键词，AI 导师围绕知识库内容提问'
+    : '上传你的答辩 PPT，AI 扮演评委提问';
+  if (src === 'kw'){
+    renderDiffs();
+    renderKwNums();
+    updateKwStartBtn();
+    loadKwKbOptions();
+  }
+}
+
+let KW_KB_LOADED = false;
+async function loadKwKbOptions(){
+  if (KW_KB_LOADED) return;
+  const sel = $('#kwKbSel');
+  if (!sel) return;
+  await READY;
+  let d;
+  try {
+    const r = await fetch('/api/kb?mode=defense', withAuth({ credentials:'same-origin' }));
+    d = await r.json();
+  } catch(e){ d = { kbs: [] }; }
+  const kbs = (d.kbs || []).filter(k => k.name);
+  const manual = kbs.filter(k => k.name.indexOf('业务手册') >= 0);
+  const others = kbs.filter(k => k.name.indexOf('业务手册') < 0)
+                     .sort((a,b) => (a.name||'').localeCompare(b.name||'', 'zh'));
+  sel.innerHTML = '<option value="">自动匹配知识库</option>' + [...manual, ...others].map(k =>
+    `<option value="${k.id}">${esc(k.name)}${k.readonly ? '（别人分享的·只读）' : ''}</option>`
+  ).join('');
+  KW_KB_LOADED = true;
+}
+
+async function startKeywords(){
+  if (BUSY) return;
+  const kw = $('#kwInput').value.trim();
+  if (kw.length < 2){ toast('请输入学习关键词'); $('#kwInput').focus(); return; }
+  BUSY = true;
+  SESSION = ''; TOTAL = KW_N; ANSWERED.length = 0; SOURCE = 'keywords';
+  $('#kwStartBtn').disabled = true;
+  $('#kwCard').style.display = 'none';
+  $('#uploadCard').style.display = 'none';
+  document.querySelector('.defTabs').style.display = 'none';
+  $('#chat').style.display = 'block';
+  $('#bottom').style.display = 'block';
+  $('#progressWrap').style.display = 'flex';
+  updateProgress(0);
+  const modeName = MODE === 'exam' ? '答辩模式' : '练习模式';
+  const sub = document.querySelector('#top .sub');
+  if (sub) sub.textContent = `关键词练习 · ${modeName} · ${diffLabel(KW_DIFF)} · 共 ${KW_N} 题`;
+
+  const box = $('#chat');
+  const t0 = Date.now();
+  const phases = [
+    [0,  '正在匹配知识库…'],
+    [1,  '正在整理匹配到的学习内容…'],
+    [3,  '导师正在组织第一个问题…'],
+    [10, '模型还在思考，通常再等几秒…'],
+    [25, '模型/网络较慢，仍在生成，请稍候…'],
+  ];
+  const tick = setInterval(() => {
+    const sec = Math.floor((Date.now() - t0) / 1000);
+    box.innerHTML = '<div class="empty">' + waitHtml(sec, phases, '关键词检索通常很快') + '</div>';
+  }, 500);
+  box.innerHTML = '<div class="empty">' + waitHtml(0, phases, '关键词检索通常很快') + '</div>';
+
+  let d;
+  try{
+    d = await api('/api/defense/start_keywords', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ keywords: kw, mode: MODE, total: KW_N,
+                             difficulty: KW_DIFF,
+                             kb_id: $('#kwKbSel').value || '' })
+    });
+  }catch(e){ d = { ok:false, msg:'网络错误，请重试' }; }
+  clearInterval(tick);
+  BUSY = false;
+  $('#kwStartBtn').disabled = false;
+  if (!d || !d.ok){
+    document.querySelector('.defTabs').style.display = 'flex';
+    $('#kwCard').style.display = 'block';
+    $('#bottom').style.display = 'none';
+    box.innerHTML = '<div class="empty">⚠️ ' + esc((d && d.msg) || '开始失败') +
+      '<br><button class="btn primary" id="retryKwBtn" style="margin-top:12px">↻ 重试</button></div>';
+    const rb = document.getElementById('retryKwBtn');
+    if (rb) rb.onclick = () => { box.innerHTML = ''; startKeywords(); };
+    return;
+  }
+  SESSION = d.session;
+  TOTAL = d.total || KW_N;
+  REVEAL_OK = (d.reveal !== false);
+  box.innerHTML = '';
+  const tip = document.createElement('div');
+  tip.className = 'empty';
+  tip.style.cssText = 'padding:10px 20px 0;font-size:12.5px;color:#475569';
+  tip.innerHTML = `已匹配知识库：<b>${esc(d.kb_name || '')}</b>` +
+    (d.matched ? `（命中 ${d.matched} 段）` : '') +
+    ` · 关键词：${esc(kw)}`;
+  box.appendChild(tip);
+  showQuestion(d.question, d.no || 1);
+}
 
 // 知识库下拉：默认选业务手册，上传后根据 PPT 内容推荐一个（用户仍可改）
 async function loadKbOptions(){
@@ -653,23 +873,31 @@ async function uploadFile(file){
 
 // ---------------- 开始演练 ----------------
 $('#startBtn').onclick = startDefense;
+$('#kwStartBtn').onclick = startKeywords;
+renderDiffs();
+renderKwNums();
+updateStartBtn();
+updateKwStartBtn();
 async function startDefense(){
   if (!PPT || BUSY) return;
   BUSY = true;
+  SOURCE = 'ppt';
   SESSION = '';
   TOTAL = PICK_N;
   ANSWERED.length = 0;
   $('#startRow').style.display = 'none';
   $('#uploadCard').style.display = 'none';
+  $('#kwCard').style.display = 'none';
+  document.querySelector('.defTabs').style.display = 'none';
   $('#chat').style.display = 'block';
   $('#bottom').style.display = 'block';
   $('#progressWrap').style.display = 'flex';
   updateProgress(0);
 
-  // 顶栏标出模式和题数，演练过程中随时能看到自己在哪种模式
+  // 顶栏标出模式、难度和题数，演练过程中随时能看到自己在哪种模式
   const modeName = MODE === 'exam' ? '答辩模式' : '练习模式';
   const sub = document.querySelector('#top .sub');
-  if (sub) sub.textContent = `${modeName} · 共 ${PICK_N} 题`;
+  if (sub) sub.textContent = `${modeName} · ${diffLabel(DIFF)} · 共 ${PICK_N} 题`;
 
   const box = $('#chat');
   const t0 = Date.now();
@@ -690,11 +918,13 @@ async function startDefense(){
 
   const d = await api('/api/defense/start', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ ppt_id: PPT.id, mode: MODE, total: PICK_N, kb_id: KB_ID })
+    body: JSON.stringify({ ppt_id: PPT.id, mode: MODE, total: PICK_N, kb_id: KB_ID,
+                           difficulty: DIFF })
   });
   clearInterval(tick);
   BUSY = false;
   if (!d.ok){
+    document.querySelector('.defTabs').style.display = 'flex';
     box.innerHTML = '<div class="empty">⚠️ ' + esc(d.msg || '开始失败') +
       '<br><button class="btn primary" id="retryStartBtn" style="margin-top:12px">↻ 重试出题</button></div>';
     const rb = document.getElementById('retryStartBtn');

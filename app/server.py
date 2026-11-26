@@ -22,6 +22,7 @@ from pydantic import BaseModel
 APP_DIR = Path(__file__).parent
 sys.path.insert(0, str(APP_DIR))
 import indexer, kb, llm, auth, fallback, planner, users, qa_log, cache, imgserve, mailer, system_settings
+import module_router
 # 阶段 3：检索内核抽象。业务层只认 backend.retrieve，底下换 BM25/RAGFlow/Mock 都不改这里。
 import backend
 
@@ -196,6 +197,8 @@ _ASK_LIMIT_CFG = {
     "per_user_max": 2,      # 单用户同时进行的问答数
     "per_ip_per_min": 60,   # 单 IP 每分钟问答次数
     "retry_after": 5,       # 429 里告诉客户端等几秒
+    "queue_max": 50,        # 全局满时最多排队多少个请求（0=不排队，直接 429）
+    "queue_timeout": 600,   # 排队最长等待秒数
 }
 
 # 全局用纯计数器而不是 asyncio.Semaphore：
@@ -229,6 +232,8 @@ def _load_ask_limits():
     _ASK_LIMIT_CFG["per_user_max"] = _clip(cfg.get("per_user_max"), 1, 50, 2)
     _ASK_LIMIT_CFG["per_ip_per_min"] = _clip(cfg.get("per_ip_per_min"), 1, 10000, 60)
     _ASK_LIMIT_CFG["retry_after"] = _clip(cfg.get("retry_after"), 1, 300, 5)
+    _ASK_LIMIT_CFG["queue_max"] = _clip(cfg.get("queue_max"), 0, 500, 50)
+    _ASK_LIMIT_CFG["queue_timeout"] = _clip(cfg.get("queue_timeout"), 30, 3600, 600)
     return dict(_ASK_LIMIT_CFG)
 
 
@@ -320,6 +325,13 @@ ASK_SLOT_MAX_HOLD = 180     # 秒
 _ask_slots = {}             # slot_id(int) -> (uid, 开始时间)
 _next_slot_id = [0]
 
+# 有界排队：全局名额满时，最多 queue_max 个请求进入 FIFO，等名额释放。
+# 队列只在内存里；排队请求不占 per_user/global 名额，被准入时才占。
+_ask_queue = []             # [{"id","uid","enqueued"}]
+_ask_queue_lock = threading.Lock()
+_ask_queue_seq = [0]
+_ask_avg_seconds = 120.0    # 最近回答耗时的 EWMA，用于估算排队等待
+
 
 def _slot_register(uid):
     """登记一个名额，返回 id。"""
@@ -353,13 +365,43 @@ def _slot_gc():
                 _ask_global_active -= 1
             print(f"[ask] 回收超时名额#{sid} user={u} 持有{int(now-started)}s",
                   file=sys.stderr)
-        return len(dead)
+        _n_dead = len(dead)
+    # 队列过期清理放在 ask 锁之外，避免和 _queue_claim 的 queue->ask 锁顺序死锁
+    cut = now - float(_ASK_LIMIT_CFG.get("queue_timeout") or 600)
+    with _ask_queue_lock:
+        _ask_queue[:] = [t for t in _ask_queue if t.get("enqueued", now) >= cut]
+    return _n_dead
 
 
 def _slot_unregister(sid):
     """名额被正常释放时，把它从登记表摘掉。"""
     with _ask_lock:
         _ask_slots.pop(sid, None)
+
+
+def _make_release(uid, sid):
+    """生成幂等的 release：归还 global/user 名额，并更新平均回答耗时。"""
+    state = {"done": False}
+
+    def release():
+        if state["done"]:
+            return
+        state["done"] = True
+        global _ask_global_active, _ask_avg_seconds
+        with _ask_lock:
+            rec = _ask_slots.pop(sid, None)
+            start = rec[1] if rec else None
+            if _ask_global_active > 0:
+                _ask_global_active -= 1
+            n = _ask_user_active.get(uid, 0)
+            if n <= 1:
+                _ask_user_active.pop(uid, None)
+            else:
+                _ask_user_active[uid] = n - 1
+            if start:
+                dur = max(1.0, time.time() - start)
+                _ask_avg_seconds = 0.8 * _ask_avg_seconds + 0.2 * dur
+    return release
 
 
 _slot_gc_started = [False]
@@ -427,27 +469,16 @@ async def _acquire_ask_slot(request):
             f"你还有 {n_u} 个问题正在回答中，等它们结束后再问"
             f"（每人同时 {_ASK_LIMIT_CFG['per_user_max']} 个）。")
 
-    # 第 1 层：全局并发（不排队，满就拒绝）
+    # 第 1 层：全局并发。满了抛 GlobalBusy，由 endpoint 决定是否进排队。
     ok_g, n_g = _ask_global_inc()
     if not ok_g:
         _ask_user_dec(uid)
-        raise RateLimited(
-            f"系统繁忙（同时回答上限 {_ASK_LIMIT_CFG['global_max']} 个），请几秒后重试。")
+        raise GlobalBusy(
+            f"系统繁忙（同时回答上限 {_ASK_LIMIT_CFG['global_max']} 个），请稍后重试。")
 
     # 名额到手，登记（客户端断开的兜底回收靠它）
     sid = _slot_register(uid)
-    released = False
-
-    def release():
-        nonlocal released
-        if released:
-            return
-        released = True
-        _slot_unregister(sid)
-        _ask_global_dec()
-        _ask_user_dec(uid)
-
-    return release
+    return _make_release(uid, sid)
 
 
 class RateLimited(Exception):
@@ -458,14 +489,80 @@ class RateLimited(Exception):
         self.msg = msg
 
 
+class GlobalBusy(RateLimited):
+    """全局并发满；可进入有界排队。"""
+
+
+def _queue_add(request):
+    """把一个全局满的请求放进 FIFO。返回 (ticket, 拒绝原因)。"""
+    user = _current_user(request)
+    uid = (user or {}).get("id") or "anon"
+    maxq = int(_ASK_LIMIT_CFG.get("queue_max") or 0)
+    if maxq <= 0:
+        return None, "系统繁忙，请稍后重试。"
+    with _ask_queue_lock:
+        if any(t.get("uid") == uid for t in _ask_queue):
+            return None, "你已有一个问题在排队，请等它开始或完成后再试。"
+        if len(_ask_queue) >= maxq:
+            return None, f"排队已满（{maxq} 个），请稍后重试。"
+        _ask_queue_seq[0] += 1
+        t = {"id": _ask_queue_seq[0], "uid": uid, "enqueued": time.time()}
+        _ask_queue.append(t)
+        return t, ""
+
+
+def _queue_position(ticket):
+    with _ask_queue_lock:
+        for i, t in enumerate(_ask_queue):
+            if t.get("id") == ticket.get("id"):
+                return i + 1
+    return 0
+
+
+def _queue_eta(pos):
+    avg = float(_ask_avg_seconds or 120.0)
+    slots = max(1, int(_ASK_LIMIT_CFG.get("global_max") or 1))
+    return max(1, int(round(pos * avg / slots)))
+
+
+def _queue_remove(ticket):
+    with _ask_queue_lock:
+        _ask_queue[:] = [t for t in _ask_queue if t.get("id") != ticket.get("id")]
+
+
+def _queue_claim(ticket):
+    """轮到队首时占一个名额。返回 release 或 None。"""
+    global _ask_global_active
+    with _ask_queue_lock:
+        if not _ask_queue or _ask_queue[0].get("id") != ticket.get("id"):
+            return None
+        uid = ticket.get("uid") or "anon"
+        with _ask_lock:
+            if _ask_global_active >= int(_ASK_LIMIT_CFG["global_max"]):
+                return None
+            if _ask_user_active.get(uid, 0) >= int(_ASK_LIMIT_CFG["per_user_max"]):
+                return None
+            _ask_queue.pop(0)
+            _ask_global_active += 1
+            _ask_user_active[uid] = _ask_user_active.get(uid, 0) + 1
+            _next_slot_id[0] += 1
+            sid = _next_slot_id[0]
+            _ask_slots[sid] = (uid, time.time())
+        return _make_release(uid, sid)
+
+
 def ask_limits_state():
     """给管理员总览/健康检查看的实时状态。"""
+    with _ask_queue_lock:
+        qlen = len(_ask_queue)
     with _ask_lock:
         return {
             "config": dict(_ASK_LIMIT_CFG),
             "active_users": dict(_ask_user_active),
             "active_total": _ask_global_active,
             "slots_held": len(_ask_slots),
+            "queue_len": qlen,
+            "avg_answer_seconds": round(_ask_avg_seconds, 1),
             "tracked_ips": len(_ask_ip_hits),
             "global_free": max(0, _ASK_LIMIT_CFG["global_max"] - _ask_global_active),
         }
@@ -697,13 +794,19 @@ class RegisterIn(BaseModel):
 @app.get("/api/auth/status")
 def auth_status(request: Request):
     acfg = auth.load_auth_cfg()
+    # 联网搜索不可用的部署（内网服务器）直接告诉前端，别再摆一个必然失败的按钮
+    try:
+        web_ok = bool(fallback.load_fb_cfg().get("web_enabled"))
+    except Exception:
+        web_ok = False
     if not acfg["enabled"]:
         return {"ok": True, "enabled": False, "authenticated": True,
-                "allow_fs_browse": acfg["allow_fs_browse"], "user": None}
+                "allow_fs_browse": acfg["allow_fs_browse"], "user": None,
+                "fallback_web": web_ok}
     u = _user_of(request)
     return {"ok": True, "enabled": True,
             "authenticated": bool(u), "allow_fs_browse": acfg["allow_fs_browse"],
-            "user": u}
+            "user": u, "fallback_web": web_ok}
 
 
 @app.get("/api/me")
@@ -1399,10 +1502,10 @@ def _cfg():
 
 
 def _cfg_with_user_key(request):
-    """返回一份把当前用户 key 合进去的配置副本。
+    """返回一份把当前用户 key（及自定义模型）合进去的配置副本。
 
     给那些"只收 cfg、没有 user_key 参数"的模块用（planner / fallback）。
-    没配自己的 key 就原样返回全局配置。
+    没配自己的 key 就原样返回全局配置；用户自定义模型不会被全局模型覆盖。
     """
     cfg = _cfg()
     uk = _user_llm_key(request)
@@ -1411,6 +1514,9 @@ def _cfg_with_user_key(request):
     cfg = dict(cfg)
     llmd = dict(cfg.get("llm") or {})
     llmd["api_key"] = uk
+    um = _user_llm_model(request)
+    if um:
+        llmd["model"] = um
     cfg["llm"] = llmd
     return cfg
 
@@ -1428,6 +1534,18 @@ def _user_llm_key(request):
         return userllm.get_key(u.get("id", ""))
     except Exception as e:
         print(f"[userllm] 取用户 key 失败: {type(e).__name__}", file=sys.stderr)
+        return ""
+
+
+def _user_llm_model(request):
+    """取当前用户自定义的模型名；没配返回空串，调用方沿用全局模型。"""
+    try:
+        u = _user_of(request)
+        if not u:
+            return ""
+        import userllm
+        return userllm.get_model(u.get("id", ""))
+    except Exception:
         return ""
 
 
@@ -2085,11 +2203,13 @@ def _diversify(results, topk, max_per_path=2):
     检索经常出现"一份部署手册的 4 个块霸占 8 个引用位"的情况，
     模型看到的全是同一份文档，其它同样相关的文档（系统概述、环境信息）挤不进来。
     这里保证引用尽量覆盖不同文件，剩下的席位才按原顺序补齐。
+    用户手册例外：操作步骤常跨页/跨小节，允许最多 4 块，避免只拿到目录页。
     """
     out, cnt = [], {}
     for r in results:
         p = r.get("path") or ""
-        if cnt.get(p, 0) >= max_per_path:
+        cap = 4 if module_router.is_manual_path(p) else max_per_path
+        if cnt.get(p, 0) >= cap:
             continue
         cnt[p] = cnt.get(p, 0) + 1
         out.append(r)
@@ -2105,10 +2225,66 @@ def _diversify(results, topk, max_per_path=2):
     return out
 
 
-def _multi_search(kb_id, queries, topk, rc):
+_HOWTO_RE = re.compile(r"怎么|如何|步骤|流程|操作|下单|委托|开仓|平仓|申购|赎回|询价|报价")
+
+
+def _is_howto(q):
+    return bool(_HOWTO_RE.search(q or ""))
+
+
+def _manual_query(q, modules):
+    """模块 + 操作类问题追加一条手册定向子查询。"""
+    if modules and _is_howto(q):
+        return f"{' '.join(modules)} 用户手册 操作说明 步骤 {q}"
+    return ""
+
+
+def _manual_hits(kb_id, q, modules, topk=2):
+    """模块 + 操作类问题：额外做一次“用户手册定向检索”。
+
+    综合手册（O3.2 基础用户手册）一页里可能同时出现股票/债券/基金/回购，
+    普通检索容易被培训 PPT、系统参数表挤掉；这里用“模块 + 用户手册 +
+    操作说明 + 原问题”定向捞手册页，保底放进引用。
+    """
+    if not modules or not q or not _is_howto(q):
+        return []
+    sub = f"{' '.join(modules)} 用户手册 操作说明 步骤 {q}"
+    try:
+        rs = backend.retrieve(kb_id, sub, top_k=max(12, topk * 3),
+                              enable_vector=True, enable_rerank=True) or []
+    except Exception as e:
+        print(f"[manual] 手册定向检索失败: {e}", file=sys.stderr)
+        return []
+    out = []
+    for r in rs:
+        if (module_router.is_manual_path(r.get("path") or "")
+                and module_router.matches(r, modules)):
+            out.append(r)
+            if len(out) >= topk:
+                break
+    return out
+
+
+def _merge_manual(picked, manual, topk):
+    """手册页优先放在引用前面，按 id 去重。"""
+    out, seen = [], set()
+    for r in list(manual or []) + list(picked or []):
+        rid = r.get("id") or f"{r.get('path')}#{r.get('chunk')}"
+        if rid in seen:
+            continue
+        seen.add(rid)
+        out.append(r)
+        if len(out) >= topk:
+            break
+    return out
+
+
+def _multi_search(kb_id, queries, topk, rc, modules=None):
     """多路检索(查询拆解后用): 各路只做召回, 合并去重后**统一重排一次**。
 
     相比"每路各重排一次", 延迟从数十秒降到 2~3 秒。
+    modules 非空时，在重排/去重之前先按业务模块过滤，避免其他模块的片段
+    被 _diversify 强行塞进引用位。
     返回 None 表示无索引。
     """
     def _one(sub):
@@ -2132,16 +2308,29 @@ def _multi_search(kb_id, queries, topk, rc):
     except Exception as e:
         print(f"[ask] 文件名命中跳过: {e}")
         reserved = []
+    if modules:
+        # 先按模块过滤，再重排/去重：否则 _diversify 会把其他模块的片段
+        # 强行补进引用位，正确模块的片段反而被每文件 2 块的上限挤掉。
+        cand, _drop = module_router.filter_records(cand, modules)
+        reserved, _drop_r = module_router.filter_records(reserved, modules) if reserved else ([], 0)
+        if _drop or _drop_r:
+            print(f"[module] {kb_id} 过滤其他模块片段 {_drop + _drop_r} 个（{ '、'.join(modules) }）",
+                  file=sys.stderr)
+    manual_reserved = _manual_hits(kb_id, queries[0], modules, topk=min(2, topk))
+    if modules and not cand and not reserved:
+        return manual_reserved[:topk]
     # 统一重排: 用原问题作为 query(最终要回答的仍是原问题)
     try:
         import rerank
         # 多留些候选，重排后再做文件去重，否则去重会把好结果挤没
         rr = rerank.rerank(queries[0], cand, topk=topk * 2)
         if rr:
-            return _with_reserved(_diversify(rr, topk), reserved, topk)
+            picked = _with_reserved(_diversify(rr, topk), reserved, topk)
+            return _merge_manual(picked, manual_reserved, topk)
     except Exception as e:
         print(f"[ask] 合并重排跳过: {e}")
-    return _with_reserved(_diversify(cand, topk), reserved, topk)
+    picked = _with_reserved(_diversify(cand, topk), reserved, topk)
+    return _merge_manual(picked, manual_reserved, topk)
 
 
 def _with_reserved(picked, reserved, topk, max_reserve=2):
@@ -2668,25 +2857,61 @@ def kb_ask(kb_id: str, body: AskIn, request: Request):
     # 带上当前用户自己的 key：planner（改写/拆解）和 fallback 都只吃 cfg，
     # 用同一把 key 才不会出现"主问答用自己的 key、拆解仍挤公共 key"的割裂。
     cfg = _cfg_with_user_key(request)
+
+    # 用户主动选了「联网搜索 / 大模型本地回答」：不检索知识库、不走缓存
+    fb_mode = (body.fallback_mode or "").strip().lower()
+    if fb_mode in ("web", "llm"):
+        if not llm.llm_enabled(cfg=cfg):
+            return {"ok": True, "sources": [], "source_type": "none",
+                    "answer": "未配置大模型，暂时不能用「联网搜索回答 / 大模型本地回答」。"}
+        q_eff, src_type, user_msg, system, refs, note = _forced_fallback_prepare(
+            q, body.history or [], fb_mode, cfg)
+        answer = llm.chat([{"role": "user", "content": user_msg}], cfg=cfg,
+                          system=system, user_key=_user_llm_key(request)) or ""
+        if not answer.strip():
+            tip = "回答失败：联网搜索或大模型暂时不可用，请稍后重试。"
+            _log_ask(q, kb_id, request, tip, [], "none", True, _t0, "", False, cfg)
+            return {"ok": True, "answer": tip, "sources": [], "source_type": "none"}
+        full = (note + answer) if note else answer
+        label = _forced_fallback_label(src_type, fb_mode, note)
+        _log_ask(q, kb_id, request, full, [], src_type, True, _t0,
+                 q_eff if q_eff != q else "", False, cfg)
+        return {"ok": True, "answer": full, "sources": [], "source_type": src_type,
+                "refs": refs, "source_label": label}
+
     rc = cfg.get("retrieval", {})
     top_k = body.top_k or rc.get("top_k", 8)
     # 多轮: 依赖上文的追问先改写成独立问题(改写后的句子用于检索与回答)
     hist = body.history or []
     rw = planner.rewrite_query(q, hist, cfg=cfg)
     q_eff = rw["q"] if rw["rewritten"] else q
+    mods = module_router.detect_modules(q_eff) or module_router.detect_modules(q)
     # 查询规划: 模糊/复合问题 → 拆成多个子查询, 多路检索后合并去重(原问题保底一路)
     plan_ = planner.plan_queries(q_eff, cfg=cfg)
     queries = plan_["queries"]
     if len(queries) > 1:
-        results = _multi_search(kb_id, queries, top_k, rc)
+        results = _multi_search(kb_id, queries, top_k, rc, modules=mods)
     else:
         results = backend.retrieve(
             kb_id, q_eff, top_k=top_k,
             enable_vector=rc.get("enable_vector", True),
             enable_rerank=rc.get("enable_rerank", True),
         )
+        if results is not None and mods:
+            results, _drop = module_router.filter_records(results, mods)
+            if _drop:
+                print(f"[module] {kb_id} 过滤其他模块片段 {_drop} 个（{'、'.join(mods)}）",
+                      file=sys.stderr)
+            _mh = _manual_hits(kb_id, q_eff, mods, topk=min(2, top_k))
+            if _mh:
+                results = _merge_manual(results, _mh, top_k)
     if results is None:
         return {"ok": True, "answer": "该知识库还没有索引,请先点\"重建索引\"。", "sources": []}
+    if mods and not results:
+        msg = module_router.miss_message(mods)
+        _log_ask(q, kb_id, request, msg, [], "none", True, _t0, q_eff, False, cfg)
+        return {"ok": True, "answer": msg, "sources": [], "source_type": "none",
+                "source_label": "模块未命中", "modules": mods}
 
     # 知识库未命中 → 兜底(联网搜索 / 大模型自身知识), 并标注来源
     if not results or (fallback.should_fallback(results) and not _has_confident_hit(results)):
@@ -2722,7 +2947,7 @@ def kb_ask(kb_id: str, body: AskIn, request: Request):
         return {"ok": True, "answer": "\n\n".join(lines), "sources": sources, "llm": False}
 
     # 组提示词(用 _build_ask_context: 完整文本 + 标识信息不得截断的约束 + 多轮历史)
-    system, msgs = _build_ask_context(sources, q_eff, hist, body.answer_len, body.images)
+    system, msgs = _build_ask_context(sources, q_eff, hist, body.answer_len, body.images, modules=mods)
     _meta = {}
     _ukey = _user_llm_key(request)
     answer = llm.chat(msgs, cfg=cfg, system=system, meta=_meta, user_key=_ukey) or ""
@@ -2770,10 +2995,14 @@ def kb_ask(kb_id: str, body: AskIn, request: Request):
                 "sources": sources, "source_type": "kb", "source_label": "知识库",
                 "msg": "知识库未命中,且大模型兜底暂时失败"}
 
+    warn = module_router.audit_citations(answer, sources, mods)
+    if warn:
+        answer += warn
     qa_id = _log_ask(q, kb_id, request, answer, sources, "kb", False,
                      _t0, q_eff if rw["rewritten"] else "", plan_["split"], cfg)
     return {"ok": True, "answer": answer, "sources": sources, "llm": True, "qa_id": qa_id,
             "model": lcfg.get("model", ""), "source_type": "kb", "source_label": "知识库",
+            "modules": mods,
             "planning": {"split": plan_["split"], "queries": queries,
                          "reason": plan_["reason"]},
             "rewrite": {"q": q_eff, "rewritten": rw["rewritten"], "reason": rw["reason"]}}
@@ -2795,6 +3024,46 @@ def _log_ask(q, kb_id, request, answer, sources, source_type, fallback,
     except Exception as e:
         print(f"[qa_log] {e}", file=sys.stderr)
         return ""
+
+
+def _forced_fallback_prepare(q, hist, mode, cfg):
+    """用户主动选了「不查知识库」的来源：准备联网/模型直答的上下文。
+
+    返回 (q_eff, src_type, user_msg, system, refs, note)。
+    note 是要在正文前明确告诉用户的降级说明（例如联网未启用/没搜到）。
+    """
+    q_eff = q
+    if hist:
+        try:
+            rw = planner.rewrite_query(q, hist, cfg=cfg)
+            if rw.get("rewritten") and rw.get("q"):
+                q_eff = rw["q"]
+        except Exception:
+            pass
+    note = ""
+    use = mode
+    if mode == "web":
+        try:
+            web_enabled = bool(fallback.load_fb_cfg().get("web_enabled"))
+        except Exception:
+            web_enabled = False
+        if not web_enabled:
+            use = "llm"
+            note = "（联网搜索未启用，本次改用大模型自身知识回答。）\n\n"
+    src_type, user_msg, system, refs = fallback.prepare_fallback(q_eff, mode=use)
+    if mode == "web" and src_type != "web" and not note:
+        note = "（本次没有取到联网搜索结果，以下由大模型凭自身知识回答。）\n\n"
+    return q_eff, src_type, user_msg, system, refs or [], note
+
+
+def _forced_fallback_label(src_type, mode, note):
+    if src_type == "web":
+        return "联网搜索（未查知识库）"
+    if mode == "web" and note:
+        if "未启用" in note:
+            return "大模型知识（联网未启用）"
+        return "大模型知识（联网未取到结果）"
+    return "大模型知识（未查知识库）"
 
 
 _ASK_SYSTEM = (
@@ -2966,7 +3235,7 @@ def _user_image_blocks(images):
     return blocks
 
 
-def _build_ask_context(sources, q, history=None, answer_len="normal", images=None):
+def _build_ask_context(sources, q, history=None, answer_len="normal", images=None, modules=None):
     """组装 messages: [最近几轮对话...] + 当前问题(带检索片段 + 用户贴的图)。
 
     历史只保留最近 3 轮、每条回答截到 800 字, 防止上下文过长拖慢生成;
@@ -3002,7 +3271,78 @@ def _build_ask_context(sources, q, history=None, answer_len="normal", images=Non
     else:
         msgs.append({"role": "user", "content": user_msg})
         sys_prompt = _ASK_SYSTEM + _LEN_HINT[_norm_len(answer_len)]
+    if modules:
+        sys_prompt += (
+            "\n【业务模块约束】本次问题限定的业务模块：" + "、".join(modules) + "。"
+            "只使用明确提到该模块的片段；不要把其他模块的步骤拼进来；"
+            "如果片段来自多个模块，先说明歧义并询问用户；"
+            "没有对应片段时回答未找到，不要用相邻模块补全。")
     return sys_prompt, msgs
+
+
+async def _queue_stream(ticket, kb_id, body, request, kb_, _json):
+    """排队 SSE：先同步位置/预计等待，轮到后接着跑正常问答流。"""
+    import asyncio
+
+    def sse(tag, payload):
+        return f"data: {_json.dumps({'type': tag, **payload}, ensure_ascii=False)}\n\n"
+
+    t0 = time.time()
+    release = None
+    try:
+        while True:
+            pos = _queue_position(ticket)
+            if not pos:
+                msg = "排队已结束，请重新提问。"
+                yield sse("answer", {"text": msg})
+                yield sse("done", {"full": msg, "source_type": "none",
+                                   "source_label": "排队结束"})
+                return
+            eta = _queue_eta(pos)
+            ahead = max(0, pos - 1)
+            status = (f"排队第 1 位，正在等当前回答结束，预计约 {eta} 秒" if ahead == 0
+                      else f"排队中：前面还有 {ahead} 人，预计约 {eta} 秒")
+            yield sse("queue", {
+                "position": pos, "ahead": ahead, "eta": eta,
+                "active": _ask_global_active,
+                "global_max": _ASK_LIMIT_CFG["global_max"],
+                "queue_len": len(_ask_queue),
+                "status": status,
+            })
+            try:
+                if await request.is_disconnected():
+                    return
+            except Exception:
+                pass
+            if time.time() - t0 > float(_ASK_LIMIT_CFG.get("queue_timeout") or 600):
+                _queue_remove(ticket)
+                msg = (f"排队等待超过 {_ASK_LIMIT_CFG.get('queue_timeout', 600)} 秒，"
+                       "请稍后再试，或让大家错开提问。")
+                yield sse("answer", {"text": msg})
+                yield sse("done", {"full": msg, "source_type": "none",
+                                   "source_label": "排队超时"})
+                return
+            release = _queue_claim(ticket)
+            if release is not None:
+                try:
+                    resp = await _run_ask_stream(kb_id, body, request, kb_, _json,
+                                                 on_finish=release)
+                    async for chunk in resp.body_iterator:
+                        yield chunk
+                finally:
+                    try:
+                        release()
+                    except Exception:
+                        pass
+                return
+            await asyncio.sleep(2)
+    finally:
+        _queue_remove(ticket)
+        if release is not None:
+            try:
+                release()
+            except Exception:
+                pass
 
 
 @app.post("/api/kb/{kb_id}/ask/stream")
@@ -3034,6 +3374,14 @@ async def kb_ask_stream(kb_id: str, body: AskIn, request: Request):
 
     try:
         _release = await _acquire_ask_slot(request)
+    except GlobalBusy as e:
+        ticket, why = _queue_add(request)
+        if not ticket:
+            return _too_many(why or "系统繁忙，请稍后重试。", wait=10)
+        return StreamingResponse(
+            _queue_stream(ticket, kb_id, body, request, kb_, _json),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
     except RateLimited as e:
         return _too_many(e.msg)
 
@@ -3147,9 +3495,48 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
             yield sse("answer", {"text": ask, "clarify": True})
             yield sse("done", {"full": ask, "source_type": "kb", "source_label": "请补充问题"})
             return
+        # 用户主动选了「联网搜索 / 大模型本地回答」：不检索知识库、不走缓存
+        fb_mode = (body.fallback_mode or "").strip().lower()
+        if fb_mode in ("web", "llm"):
+            if not llm.llm_enabled(cfg=cfg):
+                tip = "未配置大模型，暂时不能用「联网搜索回答 / 大模型本地回答」。"
+                yield sse("status", {"text": "未配置大模型"})
+                yield sse("answer", {"text": tip})
+                yield sse("done", {"full": tip, "source_type": "none", "source_label": "未配置大模型"})
+                return
+            q_eff, src_type, user_msg, system, refs, note = _forced_fallback_prepare(
+                q, body.history or [], fb_mode, cfg)
+            label = _forced_fallback_label(src_type, fb_mode, note)
+            yield sse("status", {"text": ("不查知识库，正在联网搜索并组织回答…"
+                                          if src_type == "web" else "不查知识库，正在用大模型自身知识回答…")})
+            buf = []
+            if note:
+                buf.append(note)
+                yield sse("delta", {"text": note})
+            if refs:
+                yield sse("refs", {"refs": refs, "status": f"已获取 {len(refs)} 条网络参考"})
+            got = False
+            for token in llm.stream([{"role": "user", "content": user_msg}], cfg=cfg,
+                                    system=system, user_key=_ukeys):
+                got = True
+                buf.append(token)
+                yield sse("delta", {"text": token})
+            full = "".join(buf)
+            if got and full.strip():
+                yield sse("done", {"full": full, "source_type": src_type,
+                                   "refs": refs, "source_label": label})
+                _log_ask(q, kb_id, request, full, [], src_type, True, _t_start,
+                         q_eff if q_eff != q else "", False, cfg)
+            else:
+                tip = "回答失败：联网搜索或大模型暂时不可用，请稍后重试。"
+                yield sse("answer", {"text": tip})
+                yield sse("done", {"full": tip, "source_type": "none", "source_label": "回答失败"})
+                _log_ask(q, kb_id, request, tip, [], "none", True, _t_start, "", False, cfg)
+            return
         rc = cfg.get("retrieval", {})
         topk_ = body.top_k or rc.get("top_k", 8)
         hist = body.history or []
+        mods = module_router.detect_modules(q)
         # 索引刚更新时会有一两分钟还在用旧索引, 这个状态要告诉用户,
         # 否则"刚加的文档搜不到"会被当成 bug
         try:
@@ -3159,7 +3546,8 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
             _stale = False
         # 首问先看缓存(追问依赖上下文, 不走缓存; 演示模式/换个回答也不走)
         # 带图更不能走缓存: 缓存键只有问题文本, 同一句话配不同图会拿到上一次的答案
-        if not hist and not body.no_cache and not has_img:
+        # 模块问题也不走缓存：旧缓存的答案可能把其他模块的内容拼进来了
+        if not hist and not body.no_cache and not has_img and not mods:
             hit = cache.get(kb_id, q)
             if hit:
                 srcs = _build_sources(hit["sources"], kb_id=kb_id)
@@ -3175,16 +3563,22 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
         # 多轮: 依赖上文的追问 → 先改写成独立问题
         rw = planner.rewrite_query(q, hist, cfg=cfg)
         q_eff = rw["q"] if rw["rewritten"] else q
+        mods = module_router.detect_modules(q_eff) or mods
         if rw["rewritten"]:
             yield sse("rewrite", {"q": q_eff, "original": q,
                                   "status": f"已结合上文理解你的问题：{q_eff}"})
         # 查询规划: 拆分模糊/复合问题后再检索
         plan_ = planner.plan_queries(q_eff, cfg=cfg)
         queries = plan_["queries"]
+        _mq = _manual_query(q_eff, mods)
+        if _mq and _mq not in queries:
+            queries = list(queries) + [_mq]
+        if mods:
+            yield sse("status", {"text": f"已识别业务模块：{'、'.join(mods)}，只使用该模块的片段"})
         if len(queries) > 1:
             yield sse("plan", {"queries": queries,
                                "status": f"已拆解为 {len(queries) - 1} 个子问题，正在多路检索…"})
-            results = _multi_search(kb_id, queries, topk_, rc)
+            results = _multi_search(kb_id, queries, topk_, rc, modules=mods)
         else:
             yield sse("status", {"text": "正在检索知识库…"})
             results = backend.retrieve(
@@ -3192,9 +3586,21 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
                 enable_vector=rc.get("enable_vector", True),
                 enable_rerank=rc.get("enable_rerank", True),
             )
+            if results is not None and mods:
+                results, _drop = module_router.filter_records(results, mods)
+                if _drop:
+                    print(f"[module] {kb_id} 过滤其他模块片段 {_drop} 个（{'、'.join(mods)}）",
+                          file=sys.stderr)
         if results is None:
             _log_ask(q, kb_id, request, "该知识库还没有索引", [], "none", True, _t_start, "", False, cfg)
             yield sse("answer", {"text": "该知识库还没有索引,请先点\"重建索引\"。"}); return
+        if mods and not results:
+            msg = module_router.miss_message(mods)
+            _log_ask(q, kb_id, request, msg, [], "none", True, _t_start, q_eff, False, cfg)
+            yield sse("answer", {"text": msg, "module_miss": True})
+            yield sse("done", {"full": msg, "source_type": "none",
+                               "source_label": "模块未命中", "modules": mods})
+            return
 
         # 知识库未命中 → 兜底(联网搜索 / 大模型自身知识), 并显著标注来源
         if not results or (fallback.should_fallback(results) and not _has_confident_hit(results)):
@@ -3245,7 +3651,7 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
                      for i, s in enumerate(sources, 1)]
             yield sse("answer", {"text": "未配置大模型,以下为检索命中片段:\n\n" + "\n\n".join(lines),
                                  "llm": False}); return
-        system, msgs = _build_ask_context(sources, q_eff, hist, body.answer_len, body.images)
+        system, msgs = _build_ask_context(sources, q_eff, hist, body.answer_len, body.images, modules=mods)
         buf = []
         got = False
         meta = {}
@@ -3376,9 +3782,14 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
             else:
                 yield sse("done", {"full": full, "source_type": "kb", "source_label": "知识库"})
             return
+        # 引用模块校验：跨模块引用追加一个显著提示，不让“拼盘”看起来像有依据
+        _cwarn = module_router.audit_citations(full, sources, mods)
+        if _cwarn:
+            yield sse("delta", {"text": _cwarn})
+            full += _cwarn
         try:
             # 带图的答案不写缓存：缓存键只有问题文本，会把"看图得出的结论"污染给下次纯文字提问
-            if not hist and not rw["rewritten"] and not body.no_cache and not has_img:
+            if not hist and not rw["rewritten"] and not body.no_cache and not has_img and not mods:
                 cache.put(kb_id, q, full, results)
             qa_id = qa_log.record(q, kb_id, _current_user(request), full,
                                   sources, "kb", False, int((time.time() - _t_start) * 1000),
@@ -3448,9 +3859,48 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
             yield sse("answer", {"text": ask, "clarify": True})
             yield sse("done", {"full": ask, "source_type": "kb", "source_label": "请补充问题"})
             return
+        # 用户主动选了「联网搜索 / 大模型本地回答」：不检索知识库、不走缓存
+        fb_mode = (body.fallback_mode or "").strip().lower()
+        if fb_mode in ("web", "llm"):
+            if not llm.llm_enabled(cfg=cfg):
+                tip = "未配置大模型，暂时不能用「联网搜索回答 / 大模型本地回答」。"
+                yield sse("status", {"text": "未配置大模型"})
+                yield sse("answer", {"text": tip})
+                yield sse("done", {"full": tip, "source_type": "none", "source_label": "未配置大模型"})
+                return
+            q_eff, src_type, user_msg, system, refs, note = await run_in_threadpool(
+                _forced_fallback_prepare, q, body.history or [], fb_mode, cfg)
+            label = _forced_fallback_label(src_type, fb_mode, note)
+            yield sse("status", {"text": ("不查知识库，正在联网搜索并组织回答…"
+                                          if src_type == "web" else "不查知识库，正在用大模型自身知识回答…")})
+            buf = []
+            if note:
+                buf.append(note)
+                yield sse("delta", {"text": note})
+            if refs:
+                yield sse("refs", {"refs": refs, "status": f"已获取 {len(refs)} 条网络参考"})
+            got = False
+            async for token in llm.stream_async([{"role": "user", "content": user_msg}], cfg=cfg,
+                                                system=system, user_key=_ukeys):
+                got = True
+                buf.append(token)
+                yield sse("delta", {"text": token})
+            full = "".join(buf)
+            if got and full.strip():
+                yield sse("done", {"full": full, "source_type": src_type,
+                                   "refs": refs, "source_label": label})
+                _log_ask(q, kb_id, request, full, [], src_type, True, _t_start,
+                         q_eff if q_eff != q else "", False, cfg)
+            else:
+                tip = "回答失败：联网搜索或大模型暂时不可用，请稍后重试。"
+                yield sse("answer", {"text": tip})
+                yield sse("done", {"full": tip, "source_type": "none", "source_label": "回答失败"})
+                _log_ask(q, kb_id, request, tip, [], "none", True, _t_start, "", False, cfg)
+            return
         rc = cfg.get("retrieval", {})
         topk_ = body.top_k or rc.get("top_k", 8)
         hist = body.history or []
+        mods = module_router.detect_modules(q)
         # 索引刚更新时会有一两分钟还在用旧索引, 这个状态要告诉用户,
         # 否则"刚加的文档搜不到"会被当成 bug
         try:
@@ -3460,7 +3910,8 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
             _stale = False
         # 首问先看缓存(追问依赖上下文, 不走缓存; 演示模式/换个回答也不走)
         # 带图更不能走缓存: 缓存键只有问题文本, 同一句话配不同图会拿到上一次的答案
-        if not hist and not body.no_cache and not has_img:
+        # 模块问题也不走缓存：旧缓存的答案可能把其他模块的内容拼进来了
+        if not hist and not body.no_cache and not has_img and not mods:
             hit = cache.get(kb_id, q)
             if hit:
                 srcs = _build_sources(hit["sources"], kb_id=kb_id)
@@ -3476,16 +3927,22 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
         # 多轮: 依赖上文的追问 → 先改写成独立问题
         rw = await run_in_threadpool(planner.rewrite_query, q, hist, cfg=cfg)
         q_eff = rw["q"] if rw["rewritten"] else q
+        mods = module_router.detect_modules(q_eff) or mods
         if rw["rewritten"]:
             yield sse("rewrite", {"q": q_eff, "original": q,
                                   "status": f"已结合上文理解你的问题：{q_eff}"})
         # 查询规划: 拆分模糊/复合问题后再检索
         plan_ = await run_in_threadpool(planner.plan_queries, q_eff, cfg=cfg)
         queries = plan_["queries"]
+        _mq = _manual_query(q_eff, mods)
+        if _mq and _mq not in queries:
+            queries = list(queries) + [_mq]
+        if mods:
+            yield sse("status", {"text": f"已识别业务模块：{'、'.join(mods)}，只使用该模块的片段"})
         if len(queries) > 1:
             yield sse("plan", {"queries": queries,
                                "status": f"已拆解为 {len(queries) - 1} 个子问题，正在多路检索…"})
-            results = await run_in_threadpool(_multi_search, kb_id, queries, topk_, rc)
+            results = await run_in_threadpool(_multi_search, kb_id, queries, topk_, rc, mods)
         else:
             yield sse("status", {"text": "正在检索知识库…"})
             results = await run_in_threadpool(
@@ -3494,9 +3951,21 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
                 enable_vector=rc.get("enable_vector", True),
                 enable_rerank=rc.get("enable_rerank", True),
             )
+            if results is not None and mods:
+                results, _drop = module_router.filter_records(results, mods)
+                if _drop:
+                    print(f"[module] {kb_id} 过滤其他模块片段 {_drop} 个（{'、'.join(mods)}）",
+                          file=sys.stderr)
         if results is None:
             _log_ask(q, kb_id, request, "该知识库还没有索引", [], "none", True, _t_start, "", False, cfg)
             yield sse("answer", {"text": "该知识库还没有索引,请先点\"重建索引\"。"}); return
+        if mods and not results:
+            msg = module_router.miss_message(mods)
+            _log_ask(q, kb_id, request, msg, [], "none", True, _t_start, q_eff, False, cfg)
+            yield sse("answer", {"text": msg, "module_miss": True})
+            yield sse("done", {"full": msg, "source_type": "none",
+                               "source_label": "模块未命中", "modules": mods})
+            return
 
         # 知识库未命中 → 兜底(联网搜索 / 大模型自身知识), 并显著标注来源
         if not results or (fallback.should_fallback(results) and not _has_confident_hit(results)):
@@ -3547,7 +4016,7 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
                      for i, s in enumerate(sources, 1)]
             yield sse("answer", {"text": "未配置大模型,以下为检索命中片段:\n\n" + "\n\n".join(lines),
                                  "llm": False}); return
-        system, msgs = _build_ask_context(sources, q_eff, hist, body.answer_len, body.images)
+        system, msgs = _build_ask_context(sources, q_eff, hist, body.answer_len, body.images, modules=mods)
         buf = []
         got = False
         meta = {}
@@ -3678,9 +4147,14 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
             else:
                 yield sse("done", {"full": full, "source_type": "kb", "source_label": "知识库"})
             return
+        # 引用模块校验：跨模块引用追加一个显著提示，不让“拼盘”看起来像有依据
+        _cwarn = module_router.audit_citations(full, sources, mods)
+        if _cwarn:
+            yield sse("delta", {"text": _cwarn})
+            full += _cwarn
         try:
             # 带图的答案不写缓存：缓存键只有问题文本，会把"看图得出的结论"污染给下次纯文字提问
-            if not hist and not rw["rewritten"] and not body.no_cache and not has_img:
+            if not hist and not rw["rewritten"] and not body.no_cache and not has_img and not mods:
                 cache.put(kb_id, q, full, results)
             qa_id = qa_log.record(q, kb_id, _current_user(request), full,
                                   sources, "kb", False, int((time.time() - _t_start) * 1000),
@@ -3789,6 +4263,7 @@ def my_llm_get(request: Request):
         "has_own": bool(st.get("has_own")),
         "saved": st.get("saved", ""),
         "tail": st.get("tail", ""),
+        "model": st.get("model", ""),
         "global_model": s.get("model", ""),
         "global_configured": llm.llm_enabled(),
         # 界面上要告诉用户"只能填这个网关签发的 key"，地址从配置里来，别在前端写死
@@ -3799,12 +4274,13 @@ def my_llm_get(request: Request):
 
 class MyKeyIn(BaseModel):
     key: str = ""
+    model: str = ""
 
 
 @app.post("/api/my/llm/verify")
 def my_llm_verify(body: MyKeyIn):
-    """只验证不保存。前端可以先点「测试」确认 key 好用。"""
-    ok, msg = llm.verify_key(body.key, timeout=25)
+    """只验证不保存。前端可以先点「测试」确认 key + 模型好用。"""
+    ok, msg = llm.verify_key(body.key, timeout=25, model=body.model)
     return {"ok": ok, "msg": msg}
 
 
@@ -3819,19 +4295,47 @@ def my_llm_set(body: MyKeyIn, request: Request):
         return JSONResponse({"ok": False, "msg": "未登录"}, status_code=401)
     import userllm
     key = (body.key or "").strip()
+    model = (body.model or "").strip()
     if not key:
         st = userllm.clear_key(u.get("id", ""))
         return {"ok": True, "msg": "已清除，改回使用公共 Key", **st}
-    # 验证通过才存
-    ok, why = llm.verify_key(key, timeout=25)
+    # 验证通过才存（模型为空则用全局模型）
+    ok, why = llm.verify_key(key, timeout=25, model=model)
     if not ok:
         return JSONResponse({"ok": False, "msg": why}, status_code=400)
     try:
-        st = userllm.set_key(u.get("id", ""), key)
+        st = userllm.set_key(u.get("id", ""), key, model=model)
     except Exception as e:
         return JSONResponse({"ok": False, "msg": f"保存失败：{type(e).__name__}"},
                             status_code=500)
-    return {"ok": True, "msg": "已保存，之后都使用你自己的 Key", **st}
+    return {"ok": True, "msg": "已保存，之后都使用你自己的 Key 和模型", **st}
+
+
+class MyModelIn(BaseModel):
+    model: str = ""
+
+
+@app.post("/api/my/llm/model")
+def my_llm_set_model(body: MyModelIn, request: Request):
+    """只更新自定义模型，不用重新粘贴 Key。保存前用已存 Key 验证一次。"""
+    u = _user_of(request)
+    if not u:
+        return JSONResponse({"ok": False, "msg": "未登录"}, status_code=401)
+    import userllm
+    uid = u.get("id", "")
+    key = userllm.get_key(uid)
+    if not key:
+        return JSONResponse({"ok": False, "msg": "还没有配置自己的 Key"}, status_code=400)
+    model = (body.model or "").strip()
+    ok, why = llm.verify_key(key, timeout=25, model=model)
+    if not ok:
+        return JSONResponse({"ok": False, "msg": why}, status_code=400)
+    try:
+        st = userllm.set_key(uid, key, model=model)
+    except Exception as e:
+        return JSONResponse({"ok": False, "msg": f"保存失败：{type(e).__name__}"},
+                            status_code=500)
+    return {"ok": True, "msg": "模型已更新", **st}
 
 
 @app.get("/api/config/llm")
@@ -4026,7 +4530,9 @@ async def defense_start(request: Request):
     else:
         import defense_coach
         kb_id = defense_coach.manual_kb_id()
-    sess = defense_api.new_session("anon", meta, mode=mode, total=total, kb_id=kb_id)
+    difficulty = str(body.get("difficulty") or "basic")
+    sess = defense_api.new_session("anon", meta, mode=mode, total=total,
+                                   kb_id=kb_id, difficulty=difficulty)
     q, err = await _run_blocking(defense_api.make_first_question, sess,
                                  cfg=_cfg_with_user_key(request), user_key=ukey)
     if err:
@@ -4034,7 +4540,71 @@ async def defense_start(request: Request):
         return {"ok": False, "msg": err}
     return {"ok": True, "session": sess["id"], "question": q, "no": 1,
             "total": sess["total"], "mode": sess["mode"],
-            "reveal": defense_api.MODES[sess["mode"]]["reveal"]}
+            "reveal": defense_api.MODES[sess["mode"]]["reveal"],
+            "difficulty": sess["difficulty"],
+            "difficulty_label": defense_api.DIFFICULTIES[sess["difficulty"]]["label"]}
+
+
+@app.post("/api/defense/start_keywords")
+async def defense_start_keywords(request: Request):
+    """不上传 PPT：按学员输入的关键词匹配知识库，像导师一样提问。"""
+    u, err = _require_defense(request)
+    if err:
+        return err
+    import defense_api
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    keywords = str(body.get("keywords") or "").strip()
+    if len(keywords) < 2:
+        return {"ok": False, "msg": "请输入 2 个字以上的学习关键词"}
+    if len(keywords) > 300:
+        keywords = keywords[:300]
+    mode = str(body.get("mode") or "practice")
+    try:
+        total = int(body.get("total") or 0) or None
+    except Exception:
+        total = None
+    difficulty = str(body.get("difficulty") or "basic")
+    kb_id = str(body.get("kb_id") or "").strip()
+    kb_name = ""
+    hits = []
+    if kb_id:
+        kb_ = indexer.get_kb(kb_id)
+        if not kb_ or not users.can_read_kb(kb_, u, "defense"):
+            return {"ok": False, "msg": "没有这个知识库的答辩权限"}
+        kb_name = str(kb_.get("name") or "")
+        hits = defense_api.search_kb_keywords(kb_id, keywords, topk=10)
+    else:
+        m = defense_api.match_kb_for_keywords(keywords, u)
+        if not m.get("kb_id"):
+            return {"ok": False,
+                    "msg": m.get("reason") or "没有匹配到内容，请换一组关键词"}
+        kb_id, kb_name, hits = m["kb_id"], m["name"], m["hits"]
+    if not hits:
+        return {"ok": False,
+                "msg": f"「{kb_name or '知识库'}」里没有匹配到这些关键词，请换关键词或换库"}
+    material = defense_api.keyword_material(hits, keywords)
+    meta = {"id": "", "name": f"关键词练习：{keywords}", "pages": 0,
+            "slides": [], "images": 0, "chars": len(material)}
+    sess = defense_api.new_session(
+        "anon", meta, mode=mode, total=total, kb_id=kb_id,
+        difficulty=difficulty, material=material, keywords=keywords,
+        source="keywords")
+    q, err = await _run_blocking(defense_api.make_first_question, sess,
+                                 cfg=_cfg_with_user_key(request),
+                                 user_key=_user_llm_key(request))
+    if err:
+        defense_api.drop_session(sess["id"])
+        return {"ok": False, "msg": err}
+    return {"ok": True, "session": sess["id"], "question": q, "no": 1,
+            "total": sess["total"], "mode": sess["mode"],
+            "reveal": defense_api.MODES[sess["mode"]]["reveal"],
+            "difficulty": sess["difficulty"],
+            "difficulty_label": defense_api.DIFFICULTIES[sess["difficulty"]]["label"],
+            "kb_id": kb_id, "kb_name": kb_name, "matched": len(hits),
+            "source": "keywords", "keywords": keywords}
 
 
 @app.post("/api/defense/answer")

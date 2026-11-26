@@ -10,6 +10,11 @@ import sys as _sys
 _sys.path.insert(0, str(Path(__file__).parent / "app"))
 
 try:
+    import module_router
+except Exception:
+    module_router = None
+
+try:
     import docx
 except Exception:
     docx = None
@@ -71,6 +76,10 @@ def _join_with_images(txt: str, p: Path) -> str:
         return txt
     return (txt.rstrip() + "\n\n" + img) if txt.strip() else img
 
+
+# 有些 PPT 的色板/主题页会把 "R:8 G:64 B:156" 当正文文本；这类行
+# 对检索毫无价值，还会稀释 chunk。抽取时直接跳过。
+_RGB_LINE = re.compile(r"^(?:\s*[RGB]:\s*\d+\s*)+$", re.I)
 
 # ---- 图片位置标记：让 chunk 里留下 [image1.png]，前端才能把原图调出来 ----
 
@@ -158,12 +167,23 @@ def extract_pptx(p: Path) -> str:
     pages = di.markers_pptx() if (di and di.ext == ".pptx") else {}
     parts = []
     for i, slide in enumerate(prs.slides):
-        parts.append(f"[幻灯片 {i+1}]")
+        title = ""
+        try:
+            if slide.shapes.title is not None and slide.shapes.title.text:
+                title = " ".join(slide.shapes.title.text.split())
+        except Exception:
+            title = ""
+        head = f"[幻灯片 {i+1}]"
+        if title:
+            head += f" 标题：{title}"
+        parts.append(head)
+        # 标题占位符也保留在正文里：有些页只有标题、没有其他文本，
+        # 跳过会直接丢内容。前缀里再写一次标题无伤大雅。
         for shape in slide.shapes:
             if shape.has_text_frame:
                 for para in shape.text_frame.paragraphs:
                     t = "".join(run.text for run in para.runs).strip()
-                    if t:
+                    if t and not _RGB_LINE.match(t):
                         parts.append(t)
             if getattr(shape, "has_table", False):
                 for row in shape.table.rows:
@@ -440,10 +460,16 @@ def extract_dbf(p: Path) -> str:
     return "\n".join(lines)
 
 
+def extract_sql(p: Path) -> str:
+    """SQL 脚本只登记文件名，不读内容（实施通常只需知道有哪个脚本）。"""
+    return f"SQL 脚本文件：{p.name}"
+
+
 EXTRACTORS = {".docx": extract_docx, ".doc": extract_doc, ".pptx": extract_pptx,
               ".ppt": extract_pptx, ".xlsx": extract_xlsx, ".xls": extract_xls_xlrd,
               ".pdf": extract_pdf, ".txt": extract_txt, ".csv": extract_txt,
-              ".json": extract_txt, ".md": extract_txt, ".dbf": extract_dbf}
+              ".json": extract_txt, ".md": extract_txt, ".dbf": extract_dbf,
+              ".sql": extract_sql}
 
 
 _IMG_TOKEN = re.compile(
@@ -480,6 +506,92 @@ def chunks(text: str):
             cur += ("\n" + ln if cur else ln)
     if cur and not _only_images(cur):
         yield cur
+
+
+_SLIDE_RE = re.compile(r"(?=\[幻灯片\s*\d+\])")
+
+
+def _plain_chunks(text: str, size: int = None):
+    """不丢短块的按行切分（PPT 页内用；chunks() 会丢弃 <15 字的图注块）。"""
+    size = size or CHUNK_SIZE
+    cur = ""
+    for ln in (text or "").split("\n"):
+        if not ln.strip():
+            continue
+        if len(cur) + len(ln) > size and cur:
+            yield cur
+            cur = ln
+        else:
+            cur += ("\n" + ln if cur else ln)
+    if cur:
+        yield cur
+
+
+def _slide_chunks(text: str, path: str = ""):
+    """PPT 一页一块：每页独立，前缀写清幻灯片号/模块/页标题。
+
+    以前的 chunks() 只按 400 字切，可能把相邻两页拼进同一块；页标题也只是
+    正文里的一行，模型和检索都分不清“交易所指令”和“开放式基金/期货”。
+    这里按 [幻灯片 N] 切开，并把模块/标题写进块首，BM25、向量和重排都能看到。
+    """
+    for part in _SLIDE_RE.split(text or ""):
+        part = part.strip()
+        if not part:
+            continue
+        m = re.match(r"\[幻灯片\s*(\d+)\](?:\s*标题[:：]\s*([^\n]*))?", part)
+        if not m:
+            continue
+        no = int(m.group(1))
+        title = (m.group(2) or "").strip()
+        body = part[m.end():].strip()
+        if not body:
+            continue
+        if not title:
+            # 没有正式标题占位符时，用第一行有意义的文字当页标题
+            for ln in body.split("\n"):
+                s = " ".join(ln.split())
+                if len(s) >= 4 and not re.fullmatch(r"[\d\W_]+", s):
+                    title = s[:80]
+                    break
+        mods = []
+        if module_router is not None:
+            try:
+                # 页标题+正文强判定（模块名 + 业务动作词），避免行业介绍误标。
+                # 页面本身判断不出来时，退回文件名（如“14.期货/…”）。
+                mods = module_router.strong_modules(title + "\n" + body)
+                if not mods and path:
+                    pmods = module_router.all_modules(path)
+                    if len(pmods) == 1:
+                        mods = pmods
+            except Exception:
+                mods = []
+        module = mods[0] if len(mods) == 1 else ""
+        prefix = f"【幻灯片 {no}】"
+        if module:
+            prefix += f"【模块：{module}】"
+        if title:
+            prefix += f"【标题：{title}】"
+        if _only_images(body) and _IMG_TOKEN.search(body):
+            continue
+        for c in _plain_chunks(body):
+            meta = {"slide_no": no, "slide_title": title}
+            if module:
+                meta["module"] = module
+            yield prefix + "\n" + c, meta
+
+
+def chunks_with_meta(text: str, ext: str = "", path: str = ""):
+    """产出 (chunk_text, metadata)。非 PPT 保持原来的按行分块。"""
+    ext = (ext or "").lower()
+    if ext in (".pptx", ".ppt"):
+        yield from _slide_chunks(text, path)
+        return
+    if ext == ".sql":
+        # SQL 只有一行文件名，chunks() 的短块过滤会把它丢掉，用不丢短块的分块。
+        yield from ((c, {}) for c in _plain_chunks(text))
+        return
+    for c in chunks(text):
+        yield c, {}
 
 
 def main():
@@ -527,9 +639,12 @@ def main():
             stats["parsed"] += 1
             manifest["by_type"][ext] = manifest["by_type"].get(ext, 0) + 1
             doc_id = hashlib.md5(rel.encode("utf-8")).hexdigest()[:12]
-            chunks_ = list(chunks(text))
-            for i, c in enumerate(chunks_):
+            chunks_ = list(chunks_with_meta(text, ext, rel))
+            for i, (c, meta) in enumerate(chunks_):
                 rec = {"id": f"{doc_id}_{i:04d}", "path": rel, "chunk": i, "text": c}
+                for k, v in (meta or {}).items():
+                    if v not in (None, ""):
+                        rec[k] = v
                 fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
                 total_chunks += 1
                 stats["indexed"] += 1

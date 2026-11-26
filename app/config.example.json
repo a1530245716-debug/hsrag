@@ -4,10 +4,12 @@
     "port": 8000
   },
   "ask_limits": {
-    "global_max": 6,
+    "global_max": 10,
     "per_user_max": 2,
     "per_ip_per_min": 60,
-    "retry_after": 5
+    "retry_after": 5,
+    "queue_max": 50,
+    "queue_timeout": 600
   },
   "data_dir": "app/data",
   "indexing": {
