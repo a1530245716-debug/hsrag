@@ -144,7 +144,9 @@
 
 点右上角「**👥 公共 Key**」，或打开「⚙ 更多 → ⚙ 系统参数设置 → 我的大模型 Key」。
 
-> **图：我的大模型 Key**（在「系统参数设置」里；截图已从公开仓库移除，本地启动后可在浏览器查看对应界面。）
+![我的大模型 Key](/static/manual_img/ui-syscfg-mykey.webp)
+
+> 图：我的大模型 Key（在「系统参数设置」里）
 
 1. 把申请到的 Key 粘贴到输入框；
 2. 在「**模型**」文本框填这个 Key 支持的模型名（例如 `deepseek-flash`、`deepseek-v4-pro`，以平台/申请文档为准）；**不填则用管理员设置的全局模型**；
@@ -438,7 +440,7 @@ Invoke-WebRequest http://127.0.0.1:8000/api/health -UseBasicParsing
 
 ### 10.4 系统参数
 
-![系统参数](/static/manual_img/ui-syscfg-kb.webp)
+![系统参数](/static/manual_img/ui-syscfg-kb.webp?v=20261127)
 
 > 系统参数（界面示意，以当前版本为准）
 
