@@ -6,6 +6,14 @@
 
 ---
 
+### 20:38（11-26） | Claude Code | `app/static/manual_img/`、`app/static/manual.md` | 手册截图改为 WebP 压缩 | 手册图片过大，完整手册要等很久才全部显示
+
+- 9 张界面截图从 PNG（约 3.6MB）压缩为 WebP（约 568KB，最大宽 1100px）；
+- `manual.md` 图片路径同步改为 `.webp`；
+- 本地实测：打开「完整手册」1.2s 内 9/9 加载，点击可放大。
+
+---
+
 ### 20:30（11-26） | Claude Code | `app/static/index.html`、`app/static/manual.md`、`app/static/manual_img/` | 手册截图、快速上手/项目背景重写、输入栏排版、演示模式仅管理员、进入提示并入系统参数 | 人反馈手册图片不显示、文档太旧、三个开关挤输入框、演示模式权限、设置分散
 
 - 完整手册：新增 9 张界面截图（`/static/manual_img/`，来自 training 资产），

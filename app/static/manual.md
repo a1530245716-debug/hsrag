@@ -55,7 +55,7 @@
 
 在登录页点「**注册新账号**」。
 
-![注册页](/static/manual_img/ui-login.png)
+![注册页](/static/manual_img/ui-login.webp)
 
 > 注册页（界面示意，以当前版本为准）
 
@@ -75,7 +75,7 @@
 
 ### 2.3 登录
 
-![登录页](/static/manual_img/ui-login.png)
+![登录页](/static/manual_img/ui-login.webp)
 
 > 登录页（界面示意，以当前版本为准）
 
@@ -173,7 +173,7 @@
 
 ## 四、认识主界面
 
-![主界面/入口选择](/static/manual_img/ui-entry.png)
+![主界面/入口选择](/static/manual_img/ui-entry.webp)
 
 > 主界面/入口选择（界面示意，以当前版本为准）
 
@@ -199,7 +199,7 @@
 
 ### 5.2 提问
 
-![提问与回答](/static/manual_img/ui-answer.png)
+![提问与回答](/static/manual_img/ui-answer.webp)
 
 > 提问与回答（界面示意，以当前版本为准）
 
@@ -217,7 +217,7 @@
 
 ### 5.3 看引用与原文
 
-![引用与原文](/static/manual_img/ui-preview.png)
+![引用与原文](/static/manual_img/ui-preview.webp)
 
 > 引用与原文（界面示意，以当前版本为准）
 
@@ -257,7 +257,7 @@
 
 ### 6.2 上传 PPT、选择模式
 
-![模拟答辩](/static/manual_img/ui-defense-upload.png)
+![模拟答辩](/static/manual_img/ui-defense-upload.webp)
 
 > 模拟答辩（界面示意，以当前版本为准）
 
@@ -371,7 +371,7 @@
 
 ### 10.1 给新人分配知识库（只读、多选）
 
-![分配知识库权限](/static/manual_img/ui-share.png)
+![分配知识库权限](/static/manual_img/ui-share.webp)
 
 > 分配知识库权限（界面示意，以当前版本为准）
 
@@ -384,7 +384,7 @@
 
 ### 10.2 注册与账号
 
-![用户管理](/static/manual_img/ui-users.png)
+![用户管理](/static/manual_img/ui-users.webp)
 
 > 用户管理（界面示意，以当前版本为准）
 
@@ -423,7 +423,7 @@ Invoke-WebRequest http://127.0.0.1:8000/api/health -UseBasicParsing
 
 ### 10.4 系统参数
 
-![系统参数](/static/manual_img/ui-syscfg-kb.png)
+![系统参数](/static/manual_img/ui-syscfg-kb.webp)
 
 > 系统参数（界面示意，以当前版本为准）
 
