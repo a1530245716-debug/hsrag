@@ -6,6 +6,16 @@
 
 ---
 
+### 21:52（11-26） | Claude Code | `app/static/index.html` | 知识库输入框提示写清问题 | 人要求：默认灰字提醒把问题描述清楚，答案质量差别很大
+
+- 初始 placeholder：写清系统/模块、环境、目标，越具体回答越准（Enter 发送，可 Ctrl+V 贴图）。
+- 选中知识库后的动态 placeholder 同步加“写清系统/模块、环境、目标，越具体回答越准”；
+  手机端简化为“越具体回答越准”。
+- textarea 增加 title 提示：哪个系统/模块、哪个环境、目标、已试过什么。
+- 本地实测选中业务手册后 placeholder/title 正常，无 JS 报错。
+
+---
+
 ### 21:48（11-26） | Claude Code | `app/static/index.html` | 修复文件权重弹窗只看到下拉、看不到文件名 | 人反馈打开后不知道在设置哪个文件
 
 - 根因：`.modal select { width:100% }` 让每个权重下拉占满整行，`.wname` 被挤成 0 宽。

@@ -652,7 +652,7 @@
       <button class="btn" id="newChatBtn" style="display:none" onclick="resetChat()" title="清空上下文，开始新话题">🆕 新会话</button>
     </div>
     <div id="askRow">
-      <textarea id="q" rows="1" placeholder="输入问题：Enter 发送，Shift+Enter 换行（可 Ctrl+V 贴图，或拖图片到输入框）" disabled></textarea>
+      <textarea id="q" rows="1" title="问题描述越清楚，答案越准。建议写清：哪个系统/模块、哪个环境、你想达到什么目标、已经试过什么。" placeholder="输入问题：写清系统/模块、环境、目标，问题越具体回答越准（Enter 发送，可 Ctrl+V 贴图）" disabled></textarea>
       <button class="btn primary" id="sendBtn" onclick="ask()">发送</button>
     </div>
   </div>
@@ -1766,8 +1766,9 @@ function select(k){
   $('#q').disabled = false;
   // 手机上输入框窄，长提示会被截掉半句，只留关键信息
   $('#q').placeholder = window.innerWidth <= 820
-    ? `向「${k.name}」提问`
-    : `向「${k.name}」提问，可接着追问`;
+    ? `向「${k.name}」提问：越具体回答越准`
+    : `向「${k.name}」提问：写清系统/模块、环境、目标，越具体回答越准`;
+  $('#q').title = '问题描述越清楚，答案越准。建议写清：哪个系统/模块、哪个环境、你想达到什么目标、已经试过什么。';
   syncIndexState(k);   // 首次建库未完成时禁用提问，并显示索引进度
   if (changed) restoreKbSession(k);   // 恢复这个库上次的聊天记录
   renderKbs();
