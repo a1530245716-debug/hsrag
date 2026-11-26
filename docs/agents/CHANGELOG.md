@@ -6,6 +6,14 @@
 
 ---
 
+### 21:35（11-26） | Claude Code | `app/static/index.html` | 点踩反馈框增加资料质量提示 | 人要求：回答不好时提示可能是上传资料质量不高
+
+- 👎 弹出输入框顶部增加灰字提示：
+  “回答不好也可能是上传的资料不全、版本旧或质量不高；可以补充/更新资料并重建索引后再问。”
+- 本地注入 fbbox 实测提示和 textarea 都正常显示，无 JS 报错。
+
+---
+
 ### 21:28（11-26） | Claude Code | `app/kb_weights.py`、`app/kb.py`、`app/server.py`、`app/static/index.html` | 每个知识库可配置文件检索权重 | 人要求：默认都一样，用户设置自己的库，管理员可设所有库
 
 - 新增 `app/kb_weights.py`：`<kb_dir>/retrieval_settings.json` 存 `{文件相对路径: 权重}`，
