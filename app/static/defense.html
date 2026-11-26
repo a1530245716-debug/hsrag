@@ -227,7 +227,31 @@
                cursor:pointer; line-height:1; opacity:.8; }
   #viewer .x:hover { opacity:1; }
 
+  /* ---------- 弹窗（提示 / 反馈） ---------- */
+  .mask { position:fixed; inset:0; background:rgba(15,23,42,.45); display:none;
+          align-items:center; justify-content:center; z-index:90; padding:16px; }
+  .mask.show { display:flex; }
+  .dlg { background:#fff; color:var(--text); border-radius:14px; padding:20px 22px;
+         width:min(560px,94vw); max-height:88vh; overflow:auto;
+         box-shadow:0 18px 50px rgba(15,23,42,.25); }
+  .dlg h3 { margin:0 0 10px; font-size:17px; }
+  .dlg p { margin:8px 0; line-height:1.8; font-size:13.5px; }
+  .dlg .foot { display:flex; justify-content:flex-end; gap:8px; margin-top:16px; }
+  .dlg textarea, .dlg input[type=text] { width:100%; padding:9px 10px;
+        border:1px solid var(--line); border-radius:7px; font-size:13px;
+        font-family:inherit; line-height:1.7; outline:none; }
+  .dlg textarea { resize:vertical; }
+  .dlg textarea:focus, .dlg input[type=text]:focus { border-color:var(--accent); }
+  .dlg label.f { display:block; font-size:12px; color:var(--muted); margin:10px 0 4px; }
+  .fbkinds { display:flex; gap:8px; flex-wrap:wrap; }
+  .fbkind { border:1px solid var(--line); background:#fff; color:#475569; border-radius:999px;
+            padding:6px 12px; font-size:12.5px; cursor:pointer; font-family:inherit; }
+  .fbkind.on { border-color:#93c5fd; background:#eff6ff; color:#1d4ed8; font-weight:600; }
+  .betaTag { display:inline-block; background:#fff7ed; color:#b45309; border:1px solid #fed7aa;
+             border-radius:999px; padding:2px 9px; font-size:12px; font-weight:600; margin-bottom:6px; }
+
   @media (max-width:640px){
+    .dlg { padding:16px; }
     #top h1 { font-size:15px; } #top .sub { display:none; }
     #main { padding:14px 12px 30px; }
     .ansBox { margin-left:0; } .revealRow { margin-left:0; }
@@ -245,6 +269,7 @@
     <div id="progressBar"><i></i></div>
     <span id="progText">0 / 10</span>
   </div>
+  <button class="btn ghost sm" onclick="openFb()" title="提建议 / 说需求">💬 反馈</button>
   <a class="btn ghost sm" href="/" onclick="return backToQa(event)" title="回到项目问答">← 返回问答</a>
 </div>
 
@@ -311,6 +336,46 @@
   <div class="wrap">
     <textarea id="answer" placeholder="在这里作答…（Ctrl+Enter 提交）" rows="1"></textarea>
     <button class="btn primary" id="sendBtn">提交回答</button>
+  </div>
+</div>
+
+<!-- 实验推广阶段提醒 -->
+<div class="mask" id="betaMask">
+  <div class="dlg">
+    <div class="betaTag">实验推广阶段</div>
+    <h3>📣 温馨提示</h3>
+    <p>本项目目前处于 <b>实验推广阶段</b>，服务器性能有限：<b>多人同时提问时会自动排队，
+       回答速度会明显变慢</b>，请耐心等待。</p>
+    <p style="color:#6b7280">有问题、改进建议或新需求，可以点右上角「💬 反馈」提交。</p>
+    <div class="foot">
+      <button class="btn sm" onclick="closeBeta();openFb()">去反馈</button>
+      <button class="btn primary sm" onclick="closeBeta()">我知道了</button>
+    </div>
+  </div>
+</div>
+
+<!-- 反馈 / 提需求 -->
+<div class="mask" id="fbMask">
+  <div class="dlg">
+    <h3>💬 反馈 / 提需求</h3>
+    <p style="color:#6b7280;font-size:13px">用着不顺手、想补充资料、或需要新功能，都可以写在这里。管理员会看到。</p>
+    <label class="f">类型</label>
+    <div class="fbkinds" id="fbKinds">
+      <button type="button" class="fbkind on" data-kind="improve" onclick="pickFbKind(this)">💡 改进建议</button>
+      <button type="button" class="fbkind" data-kind="content" onclick="pickFbKind(this)">📚 内容补充</button>
+      <button type="button" class="fbkind" data-kind="feature" onclick="pickFbKind(this)">🧩 新需求</button>
+      <button type="button" class="fbkind" data-kind="other" onclick="pickFbKind(this)">💬 其他</button>
+    </div>
+    <label class="f">具体内容</label>
+    <textarea id="fbText" rows="5" maxlength="1000"
+      placeholder="例如：答辩出题太难了；或者希望支持上传 PDF 版 PPT…"></textarea>
+    <label class="f">联系方式（选填）</label>
+    <input id="fbContact" type="text" maxlength="120" placeholder="邮箱 / 手机 / 工号，方便我们回访">
+    <div id="fbMsg" style="min-height:18px;font-size:12.5px;margin-top:8px"></div>
+    <div class="foot">
+      <button class="btn sm" onclick="closeFb()">取消</button>
+      <button class="btn primary sm" id="fbSubmitBtn" onclick="submitFb()">提交反馈</button>
+    </div>
   </div>
 </div>
 
@@ -1089,6 +1154,64 @@ $('#viewer').onclick = () => $('#viewer').classList.remove('show');
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') $('#viewer').classList.remove('show');
 });
+
+// ---------------- 实验推广提醒 / 反馈 ----------------
+function maybeBetaNotice(){
+  try{
+    if (sessionStorage.getItem('rag.betaTip')) return;
+    sessionStorage.setItem('rag.betaTip', '1');
+  }catch(e){}
+  const m = $('#betaMask'); if (m) m.classList.add('show');
+}
+function closeBeta(){ const m = $('#betaMask'); if (m) m.classList.remove('show'); }
+
+let FB_KIND = 'improve';
+function openFb(){
+  FB_KIND = 'improve';
+  document.querySelectorAll('#fbKinds .fbkind').forEach(b =>
+    b.classList.toggle('on', b.dataset.kind === 'improve'));
+  const t = $('#fbText'); if (t) t.value = '';
+  const c = $('#fbContact'); if (c) c.value = '';
+  const msg = $('#fbMsg'); if (msg) msg.textContent = '';
+  const btn = $('#fbSubmitBtn'); if (btn) btn.disabled = false;
+  const m = $('#fbMask'); if (m) m.classList.add('show');
+  setTimeout(() => { try{ if (t) t.focus(); }catch(e){} }, 60);
+}
+function closeFb(){ const m = $('#fbMask'); if (m) m.classList.remove('show'); }
+function pickFbKind(el){
+  FB_KIND = el.dataset.kind || 'improve';
+  document.querySelectorAll('#fbKinds .fbkind').forEach(b => b.classList.toggle('on', b === el));
+}
+async function submitFb(){
+  const text = (($('#fbText') || {}).value || '').trim();
+  const msg = $('#fbMsg'), btn = $('#fbSubmitBtn');
+  if (!text){
+    if (msg) msg.innerHTML = '<span style="color:#b91c1c">写一句再提交吧</span>';
+    return;
+  }
+  btn.disabled = true;
+  if (msg) msg.textContent = '提交中…';
+  try{
+    const d = await api('/api/suggestion', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({kind: FB_KIND, content: text,
+        contact: (($('#fbContact') || {}).value || '').trim(),
+        source: 'defense', page: ''})});
+    if (!d || !d.ok) throw new Error((d && d.msg) || '提交失败');
+    if (msg) msg.innerHTML = '<span style="color:#059669">✅ 已收到，谢谢！</span>';
+    $('#fbText').value = '';
+    setTimeout(() => { closeFb(); toast('反馈已提交，谢谢！'); }, 900);
+  }catch(e){
+    if (msg) msg.innerHTML = '<span style="color:#b91c1c">' +
+      esc(e.message || '提交失败，请稍后再试') + '</span>';
+    btn.disabled = false;
+  }
+}
+// 点遮罩空白处关闭反馈弹窗
+$('#fbMask').addEventListener('click', e => { if (e.target === $('#fbMask')) closeFb(); });
+
+// 登录态确认后再弹提醒，避免未登录时闪一下又被重定向
+READY.then(ok => { if (ok) setTimeout(maybeBetaNotice, 400); }).catch(() => {});
 </script>
 </body>
 </html>

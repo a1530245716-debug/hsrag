@@ -283,6 +283,28 @@
   /* 写内容(笔记)弹窗 */
   .modal textarea { width:100%; padding:9px 10px; border:1px solid var(--line); border-radius:6px;
                     font-size:13px; line-height:1.7; font-family:inherit; resize:vertical; }
+  /* 反馈 / 提需求 */
+  .fbkinds { display:flex; gap:8px; flex-wrap:wrap; margin:2px 0 4px; }
+  .fbkind { border:1px solid var(--line); background:#fff; color:#475569; border-radius:999px;
+            padding:6px 12px; font-size:12.5px; cursor:pointer; font-family:inherit; }
+  .fbkind:hover { border-color:#bfdbfe; background:#f8fbff; }
+  .fbkind.on { border-color:#93c5fd; background:#eff6ff; color:#1d4ed8; font-weight:600; }
+  .fb-tip { margin:12px 0; padding:11px 30px 11px 14px; background:#f0f9ff; border:1px solid #bae6fd;
+            border-radius:8px; color:#075985; font-size:13px; line-height:1.7; position:relative; }
+  .fb-tip a { color:#0369a1; font-weight:600; cursor:pointer; }
+  .fbfeed { border:1px solid var(--line); border-radius:9px; padding:10px 12px; margin-bottom:10px;
+            background:#fff; }
+  .fbfeed.done { background:#fafafa; }
+  .fbfeed.done .c { color:#64748b; }
+  .fbfeed .h { display:flex; gap:8px; flex-wrap:wrap; align-items:center; font-size:12px; color:var(--muted); }
+  .fbfeed .k { padding:1px 7px; border-radius:4px; background:#eff6ff; color:#1d4ed8; font-weight:600; }
+  .fbfeed .k.content { background:#ecfdf5; color:#047857; }
+  .fbfeed .k.feature { background:#fdf4ff; color:#a21caf; }
+  .fbfeed .k.other { background:#f1f5f9; color:#475569; }
+  .fbfeed .c { margin-top:7px; font-size:13.5px; line-height:1.75; color:#1f2430;
+               white-space:pre-wrap; word-break:break-word; }
+  .fbfeed .ct { margin-top:6px; font-size:12px; color:var(--muted); }
+  .fbfeed .ops { margin-top:7px; display:flex; justify-content:flex-end; }
   /* 答案里的配图：跟在对应段落后，缩略图集 */
   .figbox { margin:10px 0 4px; }
   .figlabel { font-size:12px; color:var(--muted); margin-bottom:6px; }
@@ -485,6 +507,7 @@
       <input id="loginPwd" type="password" placeholder="密码" autocomplete="current-password">
       <button class="btn primary" onclick="doLogin()" id="loginBtn">登录</button>
       <div class="tip">没有账号？<a href="javascript:showRegister(true)">注册新账号</a></div>
+      <div class="tip" style="color:#64748b;margin-top:8px">进入后可点「⚙ 更多 → 💬 反馈」补充内容、提改进建议或新需求。</div>
     </div>
     <div id="registerForm" style="display:none">
       <input id="regEmail" type="email" placeholder="公司邮箱（就是你的账号）" autocomplete="username">
@@ -559,7 +582,9 @@
           <div onclick="reindex();closeMoreMenu()">🔄 重建索引</div>
           <div id="userMgmtItem" style="display:none" onclick="openUsers();closeMoreMenu()">👥 用户管理</div>
           <div id="qaStatsItem" style="display:none" onclick="openQaStats();closeMoreMenu()">📊 问答统计</div>
+          <div id="fbAdminItem" style="display:none" onclick="openFeedbackAdmin();closeMoreMenu()">📝 用户反馈</div>
           <div onclick="openDoc();closeMoreMenu()">📖 使用文档</div>
+          <div onclick="openFeedback('qa');closeMoreMenu()">💬 反馈 / 提需求</div>
           <div onclick="openMyKey();closeMoreMenu()">🔑 我的大模型 Key</div>
           <div id="llmCfgItem" style="display:none" onclick="openLlmCfg();closeMoreMenu()">🤖 大模型设置（全局）</div>
           <div id="sysCfgItem" style="display:none" onclick="openSysCfg();closeMoreMenu()">⚙ 系统参数设置</div>
@@ -894,6 +919,52 @@
     </div>
     <div class="foot" style="margin-top:6px">
       <button class="btn" id="myKeyClearBtn" style="color:#b91c1c" onclick="clearMyKey()">改回使用公共 Key</button>
+    </div>
+  </div>
+</div>
+
+<!-- 反馈 / 提需求 -->
+<div class="modal" id="fbModal">
+  <div class="card">
+    <h3>💬 反馈 / 提需求</h3>
+    <div style="font-size:13px;color:var(--muted);line-height:1.7;margin-bottom:10px">
+      用着不顺手、想补充资料、或需要新功能，都可以写在这里。管理员会看到，不方便留联系方式也能提交。
+    </div>
+    <label class="f">类型</label>
+    <div class="fbkinds" id="fbKinds">
+      <button type="button" class="fbkind on" data-kind="improve" onclick="pickFbKind(this)">💡 改进建议</button>
+      <button type="button" class="fbkind" data-kind="content" onclick="pickFbKind(this)">📚 内容补充</button>
+      <button type="button" class="fbkind" data-kind="feature" onclick="pickFbKind(this)">🧩 新需求</button>
+      <button type="button" class="fbkind" data-kind="other" onclick="pickFbKind(this)">💬 其他</button>
+    </div>
+    <label class="f">具体内容 <span id="fbCount" style="float:right;color:#94a3b8;font-weight:400">0/1000</span></label>
+    <textarea id="fbText" rows="5" maxlength="1000" oninput="updateFbCount()"
+      placeholder="例如：某项目的部署手册还缺 XX 章节；或者希望答案能导出成 Word…"></textarea>
+    <label class="f">联系方式（选填）</label>
+    <input id="fbContact" type="text" maxlength="120" placeholder="邮箱 / 手机 / 工号，方便我们回访">
+    <div id="fbMsg" style="min-height:18px;font-size:12.5px;margin-top:8px"></div>
+    <div class="foot">
+      <button class="btn" onclick="closeModal('fbModal')">取消</button>
+      <button class="btn primary" id="fbSubmitBtn" onclick="submitFeedback()">提交反馈</button>
+    </div>
+  </div>
+</div>
+
+<!-- 用户反馈列表（仅管理员） -->
+<div class="modal" id="fbAdminModal">
+  <div class="card" style="width:min(860px,96vw);max-height:86vh;display:flex;flex-direction:column">
+    <h3>📝 用户反馈 <span id="fbAdminSummary" style="font-size:12px;font-weight:400;color:var(--muted)"></span></h3>
+    <div class="qtabs" style="margin-bottom:10px">
+      <button class="qtab on" data-filter="unhandled" onclick="setFbFilter(this)">⏳ 待处理</button>
+      <button class="qtab" data-filter="all" onclick="setFbFilter(this)">全部</button>
+      <button class="qtab" data-filter="improve" onclick="setFbFilter(this)">💡 改进</button>
+      <button class="qtab" data-filter="content" onclick="setFbFilter(this)">📚 内容</button>
+      <button class="qtab" data-filter="feature" onclick="setFbFilter(this)">🧩 需求</button>
+    </div>
+    <div id="fbAdminList" style="overflow:auto;flex:1;padding-right:4px"></div>
+    <div class="foot">
+      <button class="btn" onclick="loadFeedbackAdmin()">刷新</button>
+      <button class="btn primary" onclick="closeModal('fbAdminModal')">关闭</button>
     </div>
   </div>
 </div>
@@ -1347,7 +1418,8 @@ function showFirstRunTip(){
     '① 点上方「+ 新建知识库」，给资料起个名字<br>' +
     '② 把 Word / PDF / PPT / Excel / DBF 拖进去，等索引跑完（几十页大约 1–2 分钟）<br>' +
     '③ 在下面直接提问，回答会引用你上传的资料<br>' +
-    '<span style="color:#64748b;font-size:12.5px">提示：资料越全，回答越准。同一份文档重复上传不会重复占空间。</span>';
+    '<span style="color:#64748b;font-size:12.5px">提示：资料越全，回答越准。同一份文档重复上传不会重复占空间。<br>' +
+    '觉得系统哪里可以改进、或者需要新功能？点右上角「⚙ 更多 → 💬 反馈」告诉我们。</span>';
   const close = document.createElement('span');
   close.textContent = '✕';
   close.style.cssText = 'position:absolute;right:10px;top:8px;cursor:pointer;color:#64748b;font-size:14px';
@@ -1355,6 +1427,8 @@ function showFirstRunTip(){
   bar.appendChild(close);
   const host = $('#chat') || $('#main') || document.body;
   host.insertBefore(bar, host.firstChild);
+  // 这条已经讲了反馈入口，别再叠加"进入知识库"的反馈提示
+  try{ const u = AUTH.user || {}; sessionStorage.setItem('rag.fbTip.' + (u.id || 'local'), '1'); }catch(e){}
   setTimeout(() => { try{ bar.remove(); }catch(e){} }, 180000);   // 3 分钟后自动收起
 }
 
@@ -1367,6 +1441,9 @@ function renderMe(){
   if (vu) vu.style.display = isAdmin ? 'block' : 'none';
   const qs = $('#qaStatsItem');
   if (qs) qs.style.display = isAdmin ? 'block' : 'none';
+  // 用户反馈列表含其他用户的意见，只给管理员看
+  const fba = $('#fbAdminItem');
+  if (fba) fba.style.display = isAdmin ? 'block' : 'none';
   // 全局大模型设置会改到所有人，只给管理员看
   const lc = $('#llmCfgItem');
   if (lc) lc.style.display = isAdmin ? 'block' : 'none';
@@ -2778,6 +2855,165 @@ function md(t){
 
 // ---- 大模型设置 & 使用文档 ----
 function closeModal(id){ document.getElementById(id).classList.remove('show'); }
+
+// ---- 反馈 / 提需求 ----
+let FB_KIND = 'improve';
+let FB_SOURCE = 'qa';
+
+function openFeedback(source){
+  FB_SOURCE = source || 'qa';
+  FB_KIND = 'improve';
+  document.querySelectorAll('#fbKinds .fbkind').forEach(b =>
+    b.classList.toggle('on', b.dataset.kind === 'improve'));
+  const t = $('#fbText');
+  if (t){ t.value = ''; updateFbCount(); }
+  const c = $('#fbContact');
+  if (c){ const u = AUTH.user || {}; c.value = u.username || u.email || ''; }
+  const m = $('#fbMsg'); if (m) m.textContent = '';
+  const b = $('#fbSubmitBtn'); if (b) b.disabled = false;
+  $('#fbModal').classList.add('show');
+  setTimeout(() => { try{ if (t) t.focus(); }catch(e){} }, 60);
+}
+function pickFbKind(el){
+  FB_KIND = el.dataset.kind || 'improve';
+  document.querySelectorAll('#fbKinds .fbkind').forEach(b => b.classList.toggle('on', b === el));
+}
+function updateFbCount(){
+  const t = $('#fbText'), n = $('#fbCount');
+  if (t && n) n.textContent = t.value.length + '/1000';
+}
+async function submitFeedback(){
+  const text = (($('#fbText') || {}).value || '').trim();
+  const msg = $('#fbMsg'), btn = $('#fbSubmitBtn');
+  if (!text){
+    if (msg) msg.innerHTML = '<span style="color:#b91c1c">写一句再提交吧</span>';
+    return;
+  }
+  btn.disabled = true;
+  if (msg) msg.textContent = '提交中…';
+  try{
+    const d = await api('/api/suggestion', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        kind: FB_KIND, content: text,
+        contact: (($('#fbContact') || {}).value || '').trim(),
+        source: FB_SOURCE, page: (cur && (cur.name || cur.id)) || ''})});
+    if (!d || !d.ok) throw new Error((d && d.msg) || '提交失败');
+    if (msg) msg.innerHTML = '<span style="color:#059669">✅ 已收到，谢谢！我们会尽快看。</span>';
+    $('#fbText').value = ''; updateFbCount();
+    setTimeout(() => { closeModal('fbModal'); }, 1200);
+  }catch(e){
+    if (msg) msg.innerHTML = '<span style="color:#b91c1c">' +
+      esc(e.message || '提交失败，请稍后再试') + '</span>';
+    btn.disabled = false;
+  }
+}
+
+// 进入知识库时提示一次：加内容 / 提建议 / 说需求，都走「更多 → 反馈」
+function maybeFeedbackTip(){
+  const u = AUTH.user || {};
+  const key = 'rag.fbTip.' + (u.id || 'local');
+  try{
+    if (sessionStorage.getItem(key)) return;
+    sessionStorage.setItem(key, '1');
+  }catch(e){}
+  const host = $('#chat');
+  if (!host) return;
+  const box = document.createElement('div');
+  box.className = 'fb-tip';
+  box.innerHTML = '📣 <b>用着不顺手，或者需要新功能？</b>' +
+    '加内容、提改进建议、说需求，都可以点右上角「⚙ 更多 → 💬 反馈」，我们会看。' +
+    ' <a onclick="openFeedback(\'qa\')">现在就反馈</a>';
+  const close = document.createElement('span');
+  close.textContent = '✕';
+  close.style.cssText = 'position:absolute;right:10px;top:8px;cursor:pointer;color:#64748b;font-size:13px';
+  close.onclick = () => box.remove();
+  box.appendChild(close);
+  host.insertBefore(box, host.firstChild);
+  host.scrollTop = 0;
+  setTimeout(() => { try{ box.remove(); }catch(e){} }, 120000);
+}
+
+// ---- 管理员：用户反馈列表 ----
+let FB_ADMIN = [];
+let FB_FILTER = 'unhandled';
+const FB_KIND_LABELS = {content:'内容补充', improve:'改进建议', feature:'新需求', other:'其他'};
+const FB_SOURCE_LABELS = {qa:'智能问答', defense:'模拟答辩'};
+
+function openFeedbackAdmin(){
+  FB_FILTER = 'unhandled';
+  document.querySelectorAll('#fbAdminModal .qtab').forEach(b =>
+    b.classList.toggle('on', b.dataset.filter === 'unhandled'));
+  $('#fbAdminModal').classList.add('show');
+  loadFeedbackAdmin();
+}
+async function loadFeedbackAdmin(){
+  const box = $('#fbAdminList');
+  box.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:13px">加载中…</div>';
+  try{
+    const d = await api('/api/suggestions?days=90&limit=400');
+    if (!d || !d.ok){
+      box.innerHTML = '<div style="padding:16px;color:#b91c1c;font-size:13px">' +
+        esc((d && d.msg) || '加载失败') + '</div>';
+      return;
+    }
+    FB_ADMIN = d.items || [];
+    const s = d.summary || {};
+    const sum = $('#fbAdminSummary');
+    if (sum) sum.textContent = '最近 90 天 · 共 ' + (s.total || 0) + ' 条，未处理 ' + (s.unhandled || 0) + ' 条';
+    renderFeedbackAdmin();
+  }catch(e){
+    box.innerHTML = '<div style="padding:16px;color:#b91c1c;font-size:13px">' +
+      esc(e.message || '加载失败') + '</div>';
+  }
+}
+function setFbFilter(el){
+  FB_FILTER = el.dataset.filter || 'unhandled';
+  document.querySelectorAll('#fbAdminModal .qtab').forEach(b => b.classList.toggle('on', b === el));
+  renderFeedbackAdmin();
+}
+function renderFeedbackAdmin(){
+  const box = $('#fbAdminList');
+  let items = FB_ADMIN || [];
+  if (FB_FILTER === 'unhandled') items = items.filter(x => !x.handled);
+  else if (FB_FILTER !== 'all') items = items.filter(x => x.kind === FB_FILTER);
+  if (!items.length){
+    box.innerHTML = '<div class="empty" style="padding:30px">暂时没有' +
+      (FB_FILTER === 'unhandled' ? '待处理的' : '') + '反馈</div>';
+    return;
+  }
+  box.innerHTML = items.map(it => {
+    const ts = it.ts ? new Date(it.ts * 1000).toLocaleString('zh-CN', {hour12:false}) : '';
+    return '<div class="fbfeed' + (it.handled ? ' done' : '') + '">' +
+      '<div class="h">' +
+        '<span class="k ' + esc(it.kind) + '">' + esc(FB_KIND_LABELS[it.kind] || '其他') + '</span>' +
+        '<span>' + esc(FB_SOURCE_LABELS[it.source] || it.source || '') + '</span>' +
+        '<span>' + esc(it.user || '匿名') + '</span>' +
+        '<span>' + esc(ts) + '</span>' +
+        (it.handled ? '<span style="color:#059669">✓ 已处理</span>' : '') +
+      '</div>' +
+      '<div class="c">' + esc(it.content || '') + '</div>' +
+      (it.contact ? '<div class="ct">联系方式：' + esc(it.contact) + '</div>' : '') +
+      (it.page ? '<div class="ct">来源：' + esc(it.page) + '</div>' : '') +
+      (!it.handled
+        ? '<div class="ops"><button class="btn" style="padding:2px 10px;font-size:12px" ' +
+          'onclick="markFeedbackHandled(\'' + it.id + '\')">标记已处理</button></div>'
+        : '') +
+    '</div>';
+  }).join('');
+}
+async function markFeedbackHandled(id){
+  try{
+    const d = await api('/api/suggestions/' + encodeURIComponent(id) + '/handled', {method:'POST'});
+    if (!d || !d.ok){ alert((d && d.msg) || '操作失败'); return; }
+    const it = FB_ADMIN.find(x => x.id === id);
+    if (it) it.handled = true;
+    renderFeedbackAdmin();
+    const left = FB_ADMIN.filter(x => !x.handled).length;
+    const sum = $('#fbAdminSummary');
+    if (sum) sum.textContent = '最近 90 天 · 共 ' + FB_ADMIN.length + ' 条，未处理 ' + left + ' 条';
+  }catch(e){ alert('操作失败：' + (e.message || '网络错误')); }
+}
 // ---- 我的大模型 Key（每个用户自己的）----
 // 公司网关每个 key 只有约 2 路并发，大家都挤公共 key 就会互相排队。
 // 让不配的人明确看到"你在用公共 key、人多会排队"，他才会有动力去申请自己的。
@@ -3830,6 +4066,7 @@ function pickHome(kind){
     if (!p.kb){ alert('未开通知识库权限，请联系管理员'); return; }
     sessionStorage.setItem('rag.homePicked', '1');
     closeModal('homeModal');
+    maybeFeedbackTip();   // 进入知识库时提一次：加内容 / 提建议 / 说需求
     setTimeout(() => { const q = $('#q'); if (q && !q.disabled) q.focus(); }, 60);
     return;
   }
@@ -3880,13 +4117,14 @@ async function boot(){
   syncDemoItem();     // 演示模式开关的记忆状态
   syncPermsUI();
   if (!sessionStorage.getItem('rag.homePicked')) showHome();
+  else maybeFeedbackTip();   // 直接进入知识库（如从答辩页返回）也提示一次
 }
 
 // 上下文开关的记忆：上次开着的仍开着，默认关
 try{ ctxOn = localStorage.getItem('rag.ctx') === '1'; }catch(e){ ctxOn = false; }
 initAuth().then(ok => { if (ok) boot(); });
 // 点击弹窗遮罩关闭
-['llmModal','docModal','myKeyModal'].forEach(id => {
+['llmModal','docModal','myKeyModal','fbModal','fbAdminModal'].forEach(id => {
   const el = document.getElementById(id);
   if (el) el.addEventListener('click', e => { if (e.target === el) el.classList.remove('show'); });
 });

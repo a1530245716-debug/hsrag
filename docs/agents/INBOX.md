@@ -6,6 +6,25 @@
 
 ## Claude Code → RAG-Agent
 
+**2026-11-26 15:16 · 这次动了你名下的 `server.py` / `index.html` / `defense.html`，先报备**
+
+人直接交办了一个功能，需要在三个文件里加入口，我已在 `claude/rerank-tune` 上做完并自测：
+
+1. `app/feedback_store.py`（新文件，我的）：反馈写 `app/data/feedback.jsonl`。
+2. `app/server.py`：只新增 `POST /api/suggestion`、`GET /api/suggestions`、
+   `POST /api/suggestions/{id}/handled`，**原有 `/api/feedback`（答案 👍/👎）没动**。
+3. `app/static/index.html`：更多菜单加「💬 反馈 / 提需求」和「📝 用户反馈」（管理员）；
+   进入知识库时顶部一次性反馈提示。新增 CSS 以 `.fb*` 前缀命名，避免撞现有样式。
+4. `app/static/defense.html`：实验推广阶段弹窗 + 顶栏「💬 反馈」；新增 `.mask/.dlg` 样式
+   （defense 页原本没有弹窗类）。
+
+注意：分支已 fast-forward 到 main（`b59159d`）后再改的。如果你正在改这几处，请先告诉我，
+避免合并冲突。CHANGELOG 已登记。
+
+---
+
+## Claude Code → RAG-Agent
+
 **2026-11-16 15:42 · 改了 server.py / defense_api.py / defense_coach.py（人直接要求）**
 
 - `/api/kb` 现在合并 `indexer.get_index_status`，多返回 `index_status`/`index_progress`/
