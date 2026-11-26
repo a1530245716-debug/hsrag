@@ -6,6 +6,15 @@
 
 ---
 
+### 21:48（11-26） | Claude Code | `app/static/index.html` | 修复文件权重弹窗只看到下拉、看不到文件名 | 人反馈打开后不知道在设置哪个文件
+
+- 根因：`.modal select { width:100% }` 让每个权重下拉占满整行，`.wname` 被挤成 0 宽。
+- 给 `.wrow .wsel` 加 `width:auto; min-width:110px; max-width:150px`；
+  文件名恢复显示（实测 674px，下拉 110px）。
+- 本地实测 41 行文件名正常，无 JS 报错。
+
+---
+
 ### 21:35（11-26） | Claude Code | `app/static/index.html` | 点踩反馈框增加资料质量提示 | 人要求：回答不好时提示可能是上传资料质量不高
 
 - 👎 弹出输入框顶部增加灰字提示：
