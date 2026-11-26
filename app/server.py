@@ -25,6 +25,7 @@ import indexer, kb, llm, auth, fallback, planner, users, qa_log, cache, imgserve
 import module_router
 import feedback_store
 import eval_store
+import kb_weights
 # 阶段 3：检索内核抽象。业务层只认 backend.retrieve，底下换 BM25/RAGFlow/Mock 都不改这里。
 import backend
 
@@ -1797,6 +1798,39 @@ class KbOwnerIn(BaseModel):
     owner: str = ""          # 目标用户的 id; 空串 = 交给当前管理员自己
 
 
+class KbWeightsIn(BaseModel):
+    weights: dict = {}       # {文件相对路径: 0.5~2.0}; 1.0 不存
+
+
+@app.get("/api/kb/{kb_id}/weights")
+def kb_weights_get(kb_id: str, request: Request):
+    kb_ = indexer.get_kb(kb_id)
+    if not kb_:
+        return JSONResponse({"ok": False, "msg": "知识库不存在"}, status_code=404)
+    u = _current_user(request)
+    if not users.is_admin(u) and kb_.get("owner") != u.get("id"):
+        return JSONResponse({"ok": False, "msg": "只有知识库归属人或管理员可以设置"},
+                            status_code=403)
+    return {"ok": True, "weights": kb_weights.load(kb_id)}
+
+
+@app.post("/api/kb/{kb_id}/weights")
+def kb_weights_set(kb_id: str, body: KbWeightsIn, request: Request):
+    kb_ = indexer.get_kb(kb_id)
+    if not kb_:
+        return JSONResponse({"ok": False, "msg": "知识库不存在"}, status_code=404)
+    u = _current_user(request)
+    if not users.is_admin(u) and kb_.get("owner") != u.get("id"):
+        return JSONResponse({"ok": False, "msg": "只有知识库归属人或管理员可以设置"},
+                            status_code=403)
+    try:
+        out = kb_weights.save(kb_id, body.weights)
+    except Exception as e:
+        return JSONResponse({"ok": False, "msg": f"保存失败: {type(e).__name__}"},
+                            status_code=500)
+    return {"ok": True, "weights": out}
+
+
 @app.post("/api/kb/{kb_id}/owner")
 def kb_set_owner(kb_id: str, body: KbOwnerIn, request: Request):
     """管理员把知识库转给指定用户，或收回名下。"""
@@ -2777,6 +2811,7 @@ def _multi_search(kb_id, queries, topk, rc, modules=None):
         # 多留些候选，重排后再做文件去重，否则去重会把好结果挤没
         rr = rerank.rerank(queries[0], cand, topk=topk * 2)
         if rr:
+            rr = kb.apply_file_weights(kb_id, rr)
             picked = _with_reserved(_diversify(rr, topk), reserved, topk)
             return _merge_manual(picked, manual_reserved, topk)
     except Exception as e:

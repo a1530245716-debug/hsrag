@@ -394,7 +394,7 @@ class BM25:
                                   + 0.1 * min(hit[1], 5))
         return tok_f, name_f
 
-    def query(self, q, topk=8):
+    def query(self, q, topk=8, file_weights=None):
         if self._post_idx is None:
             self.build()
         qcnt = Counter(tokenize(q))
@@ -434,6 +434,11 @@ class BM25:
             factor *= self._suppress_arr[cand]
         factor *= tok_f[pi]
         factor *= name_f[pi]
+        if file_weights:
+            # 用户给这个库某个文件设的权重（默认没有项 = 1.0）
+            fw = np.asarray([float(file_weights.get(p, 1.0))
+                             for p in self._paths_unique], dtype=np.float64)
+            factor *= fw[pi]
         final = scores[cand] * factor
 
         k = min(topk, cand.size)
@@ -676,11 +681,45 @@ def load_kb_indexes(kb_id):
         return ca
 
 
-def search(kb_id, q, topk=8):
+def _file_weights(kb_id):
+    try:
+        import kb_weights
+        return kb_weights.load(kb_id)
+    except Exception:
+        return {}
+
+
+def _apply_file_weights(results, weights):
+    """把用户文件权重加到最终分数：重排分用 logit 加法，fused 用乘法。"""
+    if not weights or not results:
+        return results
+    for r in results:
+        w = float(weights.get(r.get("path", ""), 1.0))
+        if abs(w - 1.0) < 1e-6:
+            continue
+        if r.get("rerank_score") is not None:
+            r["rerank_score"] = float(r["rerank_score"]) + math.log(w)
+        else:
+            r["fused"] = float(r.get("fused") or 0.0) * w
+    if any("rerank_score" in r for r in results):
+        results.sort(key=lambda x: -x.get("rerank_score", 0))
+    else:
+        results.sort(key=lambda x: -x.get("fused", 0))
+    return results
+
+
+def apply_file_weights(kb_id, results):
+    """给 server._multi_search 的最终重排结果补一次用户权重。"""
+    return _apply_file_weights(results, _file_weights(kb_id))
+
+
+def search(kb_id, q, topk=8, file_weights=None):
     ca = load_kb_indexes(kb_id)
     if ca is None or ca.N == 0:
         return None
-    return ca.query(q, topk=topk)
+    if file_weights is None:
+        file_weights = _file_weights(kb_id)
+    return ca.query(q, topk=topk, file_weights=file_weights)
 
 
 def state(kb_id):
@@ -750,7 +789,8 @@ def hybrid_search(kb_id, q, topk=8, enable_vector=True, enable_rerank=True):
     import llm as _llm
     cfg = _llm.load_config()
     rc = cfg.get("retrieval", {})
-    bm_results = search(kb_id, q, topk=max(topk * 4, 20))
+    fw = _file_weights(kb_id)
+    bm_results = search(kb_id, q, topk=max(topk * 4, 20), file_weights=fw)
     if bm_results is None:
         return None
 
@@ -827,4 +867,5 @@ def hybrid_search(kb_id, q, topk=8, enable_vector=True, enable_rerank=True):
             else:
                 results.sort(key=lambda x: -x.get("fused", 0))
 
+    results = _apply_file_weights(results, fw)
     return results[:topk]

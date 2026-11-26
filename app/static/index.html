@@ -322,6 +322,14 @@
   .thinkbox pre { margin:0; padding:8px 10px; max-height:220px; overflow:auto;
                   white-space:pre-wrap; word-break:break-word; color:#64748b;
                   font-family:inherit; line-height:1.7; border-top:1px solid #eef2f7; }
+  /* 文件权重行 */
+  .wrow { display:flex; align-items:center; gap:10px; padding:7px 4px;
+          border-bottom:1px solid #f1f3f5; font-size:12.5px; }
+  .wrow:last-child { border-bottom:none; }
+  .wrow .wname { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis;
+                 white-space:nowrap; color:#1f2430; }
+  .wrow .wsel { flex:none; padding:4px 7px; border:1px solid var(--line);
+                border-radius:6px; background:#fff; font-size:12.5px; }
   /* 答案里的配图：跟在对应段落后，缩略图集 */
   .figbox { margin:10px 0 4px; }
   .figlabel { font-size:12px; color:var(--muted); margin-bottom:6px; }
@@ -605,6 +613,7 @@
         <button class="btn" onclick="toggleMoreMenu(event)" title="更多操作">⚙ 更多</button>
         <div class="menu" id="moreMenu">
           <div onclick="reindex();closeMoreMenu()">🔄 重建索引</div>
+          <div id="kbWeightsItem" style="display:none" onclick="openKbWeights();closeMoreMenu()">⚖️ 文件权重</div>
           <div id="userMgmtItem" style="display:none" onclick="openUsers();closeMoreMenu()">👥 用户管理</div>
           <div id="qaStatsItem" style="display:none" onclick="openQaStats();closeMoreMenu()">📊 问答统计</div>
           <div id="fbAdminItem" style="display:none" onclick="openFeedbackAdmin();closeMoreMenu()">📝 用户反馈</div>
@@ -741,6 +750,30 @@
     <div class="foot">
       <button class="btn" onclick="closeSysCfg()">取消</button>
       <button class="btn primary" onclick="saveSysCfg()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 文件权重（知识库归属人/管理员） -->
+<div class="modal" id="kbWeightsModal">
+  <div class="card" style="width:min(860px,96vw);max-height:86vh;display:flex;flex-direction:column">
+    <h3>⚖️ 文件权重 <span id="kbWeightsName" style="font-size:12px;font-weight:400;color:var(--muted)"></span></h3>
+    <div style="font-size:12px;color:var(--muted);line-height:1.7;margin:-4px 0 10px">
+      默认全部 1.0；数值越大越优先被引用，越小越靠后。只影响当前知识库；
+      建议优先 1.3、强优先 1.6，普通资料保持 1.0。
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+      <input id="kbWeightsSearch" type="text" placeholder="搜索文件名…" oninput="renderKbWeights()"
+             style="flex:1;padding:7px 10px;border:1px solid var(--line);border-radius:7px;font-size:13px">
+      <button class="btn" onclick="setAllKbWeights(1)">全部恢复默认</button>
+    </div>
+    <div id="kbWeightsList" style="overflow:auto;flex:1;border:1px solid var(--line);border-radius:8px;padding:4px 8px">
+      加载中…
+    </div>
+    <div id="kbWeightsMsg" style="font-size:12.5px;min-height:18px;margin-top:8px"></div>
+    <div class="foot">
+      <button class="btn" onclick="closeModal('kbWeightsModal')">取消</button>
+      <button class="btn primary" onclick="saveKbWeights()">保存权重</button>
     </div>
   </div>
 </div>
@@ -1483,6 +1516,7 @@ function renderMe(){
   if (eva) eva.style.display = isAdmin ? 'block' : 'none';
   const dm = $('#demoModeItem');
   if (dm) dm.style.display = isAdmin ? 'block' : 'none';
+  syncKbWeightsItem();
   // 全局大模型设置会改到所有人，只给管理员看
   const lc = $('#llmCfgItem');
   if (lc) lc.style.display = isAdmin ? 'block' : 'none';
@@ -1597,6 +1631,94 @@ function renderKbs(){
   });
 }
 
+// ---- 文件权重（知识库归属人 / 管理员） ----
+let WEIGHT_FILES = [], WEIGHT_VALUES = {}, WEIGHT_KB = null;
+function syncKbWeightsItem(){
+  const el = $('#kbWeightsItem');
+  if (!el) return;
+  const ok = !!(cur && (window.__isAdmin || cur.mine));
+  el.style.display = ok ? 'block' : 'none';
+}
+async function openKbWeights(){
+  if (!cur) return;
+  WEIGHT_KB = cur.id;
+  $('#kbWeightsName').textContent = cur.name || '';
+  $('#kbWeightsSearch').value = '';
+  $('#kbWeightsMsg').textContent = '';
+  $('#kbWeightsList').innerHTML = '<div style="padding:14px;color:var(--muted)">加载中…</div>';
+  $('#kbWeightsModal').classList.add('show');
+  try{
+    const [fd, wd] = await Promise.all([
+      api('/api/kb/' + encodeURIComponent(cur.id) + '/files'),
+      api('/api/kb/' + encodeURIComponent(cur.id) + '/weights')
+    ]);
+    if (!fd || !fd.ok) throw new Error((fd && fd.msg) || '读取文件失败');
+    WEIGHT_FILES = (fd.files || []).slice().sort((a, b) =>
+      (a.path || '').localeCompare(b.path || '', 'zh'));
+    WEIGHT_VALUES = (wd && wd.ok && wd.weights) || {};
+    renderKbWeights();
+  }catch(e){
+    $('#kbWeightsList').innerHTML =
+      '<div style="padding:14px;color:#b91c1c">' + esc(e.message || '加载失败') + '</div>';
+  }
+}
+function weightOptions(w){
+  const opts = [[0.7, '0.7 降权'], [1.0, '1.0 普通'], [1.3, '1.3 优先'], [1.6, '1.6 强优先']];
+  if (!opts.some(x => Math.abs(x[0] - w) < 1e-6)) opts.push([w, w.toFixed(2)]);
+  return opts;
+}
+function renderKbWeights(){
+  const box = $('#kbWeightsList'); if (!box) return;
+  const q = ($('#kbWeightsSearch').value || '').trim().toLowerCase();
+  const rows = (WEIGHT_FILES || []).filter(f =>
+    !q || (f.path || '').toLowerCase().includes(q) ||
+    (f.name || '').toLowerCase().includes(q));
+  if (!rows.length){
+    box.innerHTML = '<div class="empty" style="padding:24px">没有匹配的文件</div>';
+    return;
+  }
+  box.innerHTML = rows.map(f => {
+    const p = f.path || '';
+    const w = Number(WEIGHT_VALUES[p] || 1.0);
+    return '<div class="wrow">' +
+      '<span class="wname" title="' + esc(p) + '">' +
+        esc(f.name || p.split('/').pop()) + '</span>' +
+      '<select class="wsel" data-path="' + encodeURIComponent(p) + '" onchange="setKbWeight(this)">' +
+        weightOptions(w).map(([v, t]) =>
+          '<option value="' + v + '" ' + (Math.abs(v - w) < 1e-6 ? 'selected' : '') + '>' +
+          t + '</option>').join('') +
+      '</select></div>';
+  }).join('');
+}
+function setKbWeight(el){
+  const p = decodeURIComponent(el.dataset.path || '');
+  const w = parseFloat(el.value || '1');
+  if (Math.abs(w - 1) < 1e-6) delete WEIGHT_VALUES[p];
+  else WEIGHT_VALUES[p] = w;
+}
+function setAllKbWeights(v){
+  WEIGHT_VALUES = {};
+  renderKbWeights();
+}
+async function saveKbWeights(){
+  if (!WEIGHT_KB) return;
+  const msg = $('#kbWeightsMsg');
+  document.querySelectorAll('#kbWeightsList .wsel').forEach(setKbWeight);
+  msg.textContent = '保存中…';
+  try{
+    const d = await api('/api/kb/' + encodeURIComponent(WEIGHT_KB) + '/weights', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({weights: WEIGHT_VALUES})
+    });
+    if (!d || !d.ok) throw new Error((d && d.msg) || '保存失败');
+    WEIGHT_VALUES = d.weights || {};
+    msg.innerHTML = '<span style="color:#047857">✅ 已保存，下一次提问生效</span>';
+    setTimeout(() => closeModal('kbWeightsModal'), 700);
+  }catch(e){
+    msg.innerHTML = '<span style="color:#b91c1c">' + esc(e.message || '保存失败') + '</span>';
+  }
+}
+
 // 重命名知识库
 async function promptRename(id){
   const kb = kbs.find(x => x.id === id);
@@ -1632,6 +1754,7 @@ function select(k){
     curOwner = '';
   }
   cur = k;
+  syncKbWeightsItem();
   $('#curName').textContent = k.name;
   const st = k.status === 'indexing' ? '索引中…'
            : (k.index_status === 'failed' || k.index_status === 'interrupted') ? '索引失败/中断'
@@ -4559,7 +4682,7 @@ function closeOnboard(openManual){
 try{ ctxOn = localStorage.getItem('rag.ctx') === '1'; }catch(e){ ctxOn = false; }
 initAuth().then(ok => { if (ok) boot(); });
 // 点击弹窗遮罩关闭
-['llmModal','docModal','myKeyModal','fbModal','fbAdminModal','evalModal'].forEach(id => {
+['llmModal','docModal','myKeyModal','fbModal','fbAdminModal','evalModal','kbWeightsModal'].forEach(id => {
   const el = document.getElementById(id);
   if (el) el.addEventListener('click', e => { if (e.target === el) el.classList.remove('show'); });
 });
