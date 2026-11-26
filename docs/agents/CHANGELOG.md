@@ -6,6 +6,48 @@
 
 ---
 
+### 17:10（11-26） | RAG-Agent | `.dockerignore` | 修 `__pycache__` 过滤不生效，验证生产镜像可离线构建 | 本机 Docker 此前只跑 demo，生产镜像从未在本机验证过
+
+### 问题
+
+`deploy/Dockerfile` 是本机→服务器的发版链路（服务器无外网，镜像在服务器上离线构建）。
+但**从未在本机验证过能否构建成功**——万一在服务器上才失败，没外网很难排查。
+
+本机 Docker 里只有 `tools/local_dev` 的演示栈（`demo_bff` + `mock_rag`，假数据），
+和真实的 8000 是两套东西。生产镜像 `rag-bff` 从没构建过。
+
+### 验证结果
+
+| 步骤 | 结果 |
+|---|---|
+| `docker load -i deploy/assets/base-python312.tar` | ✅ 载入 `python:3.12-slim` |
+| `docker build -f deploy/Dockerfile -t rag-bff .` | ✅ 8 步全过，离线装 47 个 wheel 用 18.8s |
+| 镜像内无 `app/data` / `config.json` | ✅ 只有代码和依赖 |
+| 镜像大小 | 913MB |
+| **实际跑容器**（挂 data/model/config） | ✅ 启动成功，health 200，向量一致性 ok |
+
+容器日志确认：jieba 加载、LLM 已配置、`Application startup complete`、
+`/api/health` 返回 `{"ok":true,...}`。
+
+### 修的问题
+
+`.dockerignore` 里的 `__pycache__` **只匹配根目录，不匹配子目录**，
+导致 `app/__pycache__` 被打进镜像。改成 `**/__pycache__` 后重新构建确认已排除。
+
+pyc 文件是宿主机 Python 3.11 编的，镜像里是 3.12，虽然一般不会用到，
+但带着不干净，且可能在某些情况下被误加载。
+
+### 发版链路（记录一下，避免以后再搞混）
+
+```
+本机：准备离线资产（docker 包 / base 镜像 / wheels / 源码包 / 数据包）
+   ↓ 拷贝到服务器
+服务器：装一次 Docker → docker build 镜像 → 换 tag 发版
+```
+
+**镜像在服务器上构建，不是本机构建后导出。** 本机 Docker 的作用是
+提前验证 Dockerfile 和依赖能装成功。
+
 ### 17:04（11-26） | Claude Code | 部署/验证 | 上线 `rag-bff:20261126-evalset`（点赞入评测候选 + `llm.thinking` 开关 + 合并 agent/phase1-limit） | 人要求点赞答案可进测试集；同时完成思考开关与并发合并
 
 - 容器 `rag-bff` healthy，`/api/health` 200；备份
