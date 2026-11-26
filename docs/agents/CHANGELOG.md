@@ -23,6 +23,12 @@
   - 结论：本业务以"查文档/给步骤"为主，建议关闭思考；复杂推理是否降质需更大评测集再确认。
 - 本地验证：eval_store 单测（去重/状态/导出）；管理员弹窗、收录过滤、导出、
   👍/👎 提交负载均通过 Playwright；无 JS 报错。**生产尚未切 thinking，等确认。**
+- **17:00 合并集成**：`agent/phase1-limit` 合入 main（`7942094`）后，非流式
+  `kb_ask` 单路新增了一处 `_manual_hits` 直调；已统一收敛到 `_manual_reserved()`，
+  自动跳过/过滤/`full`/`off` 行为与流式路径一致。
+  该合并把当时未提交的 `app/eval_store.py`、`app/server.py` 也一并带进去了；
+  已逐项核对导入/端点/前端调用齐全。`training/` 8.5MB 也随合并入库（若不想入库可再处理）。
+  本地检索验证：单路 manual 0 → filtered 1.1s；多路 `_multi_search` 2.2s。
 
 ---
 

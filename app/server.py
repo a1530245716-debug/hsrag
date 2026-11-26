@@ -2611,6 +2611,54 @@ def _manual_hits(kb_id, q, modules, topk=2, pool=64, rerank_n=16, mode="filtered
     return rr[:topk]
 
 
+def _manual_cfg(rc):
+    mh = rc.get("manual_hits") or {}
+    mode = str(mh.get("mode", "auto") or "auto").lower()
+    try:
+        pool = int(mh.get("pool", 64) or 64)
+    except Exception:
+        pool = 64
+    try:
+        rerank_n = int(mh.get("rerank_n", 16) or 16)
+    except Exception:
+        rerank_n = 16
+    return mode, pool, rerank_n
+
+
+def _manual_pages(records, modules):
+    """从记录里挑出"用户手册路径 + 当前模块"的片段（去重，保持顺序）。"""
+    out, seen = [], set()
+    for r in records or []:
+        rid = r.get("id") or f"{r.get('path')}#{r.get('chunk')}"
+        if rid in seen:
+            continue
+        if (module_router.is_manual_path(r.get("path") or "")
+                and module_router.matches(r, modules)):
+            seen.add(rid)
+            out.append(r)
+    return out
+
+
+def _manual_reserved(kb_id, q, modules, topk, rc, records):
+    """手册定向检索的统一入口（流式/非流式共用）。
+
+    auto（默认）：主链路记录里已有 >=2 条手册页 → 跳过；
+    否则按 filtered 只召回+过滤+重排前 rerank_n 条；mode=full 保留旧行为。
+    """
+    mode, pool, rerank_n = _manual_cfg(rc)
+    if not modules or mode == "off":
+        return []
+    manual_topk = min(2, topk)
+    in_main = _manual_pages(records, modules)
+    if mode in ("auto", "skip_if_main") and len(in_main) >= manual_topk:
+        print(f"[manual] skip: main candidates already have "
+              f"{len(in_main)} manual pages", file=sys.stderr)
+        return []
+    return _manual_hits(kb_id, q, modules, topk=manual_topk, pool=pool,
+                        rerank_n=rerank_n,
+                        mode="full" if mode == "full" else "filtered")
+
+
 def _merge_manual(picked, manual, topk):
     """手册页优先放在引用前面，按 id 去重。"""
     out, seen = [], set()
@@ -2664,36 +2712,9 @@ def _multi_search(kb_id, queries, topk, rc, modules=None):
                   file=sys.stderr)
     # 手册定向检索：主链路已经有足够的手册页就跳过（省一次全量重排）；
     # 没有才跑 filtered（先过滤手册路径+模块，只重排少量候选）。
-    mh = rc.get("manual_hits") or {}
-    mh_mode = str(mh.get("mode", "auto") or "auto").lower()
-    try:
-        mh_pool = int(mh.get("pool", 64) or 64)
-    except Exception:
-        mh_pool = 64
-    try:
-        mh_rerank_n = int(mh.get("rerank_n", 16) or 16)
-    except Exception:
-        mh_rerank_n = 16
-    manual_topk = min(2, topk)
-    manual_reserved = []
-    if modules and mh_mode != "off":
-        in_main, seen_m = [], set()
-        for r in list(cand or []) + list(reserved or []):
-            rid = r.get("id") or f"{r.get('path')}#{r.get('chunk')}"
-            if rid in seen_m:
-                continue
-            if (module_router.is_manual_path(r.get("path") or "")
-                    and module_router.matches(r, modules)):
-                seen_m.add(rid)
-                in_main.append(r)
-        if mh_mode in ("auto", "skip_if_main") and len(in_main) >= manual_topk:
-            print(f"[manual] skip: main candidates already have "
-                  f"{len(in_main)} manual pages", file=sys.stderr)
-        else:
-            manual_reserved = _manual_hits(
-                kb_id, queries[0], modules, topk=manual_topk,
-                pool=mh_pool, rerank_n=mh_rerank_n,
-                mode="full" if mh_mode == "full" else "filtered")
+    manual_reserved = _manual_reserved(
+        kb_id, queries[0], modules, topk, rc,
+        list(cand or []) + list(reserved or []))
     if modules and not cand and not reserved:
         return manual_reserved[:topk]
     # 统一重排: 用原问题作为 query(最终要回答的仍是原问题)
@@ -3279,7 +3300,7 @@ def kb_ask(kb_id: str, body: AskIn, request: Request):
             if _drop:
                 print(f"[module] {kb_id} 过滤其他模块片段 {_drop} 个（{'、'.join(mods)}）",
                       file=sys.stderr)
-            _mh = _manual_hits(kb_id, q_eff, mods, topk=min(2, top_k))
+            _mh = _manual_reserved(kb_id, q_eff, mods, top_k, rc, results)
             if _mh:
                 results = _merge_manual(results, _mh, top_k)
     if results is None:
