@@ -152,8 +152,11 @@
   .refs .ref-imgs img:hover { transform:scale(1.08); box-shadow:0 0 0 2px var(--accent); }
   .ref-link { color:var(--accent); text-decoration:none; word-break:break-all; }
   .ref-link:hover { text-decoration:underline; }
-  #inputbar { padding:14px 20px; border-top:1px solid var(--line); background:var(--panel);
-              display:flex; gap:10px; align-items:flex-end; }
+  #inputbar { padding:10px 20px 14px; border-top:1px solid var(--line); background:var(--panel);
+              display:flex; flex-direction:column; gap:8px; }
+  #askTools { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+  #askTools .btn { padding:5px 10px; font-size:12.5px; flex:0 0 auto; }
+  #askRow { display:flex; gap:10px; align-items:flex-end; width:100%; }
   #inputbar input, #inputbar textarea { flex:1; padding:10px 14px; border:1px solid var(--line);
               border-radius:8px; font-size:14px; font-family:inherit; }
   #inputbar textarea { resize:none; min-height:42px; max-height:140px; line-height:1.5; overflow-y:auto; }
@@ -353,6 +356,9 @@
   .ask-imgs .cnt { font-size:12px; color:var(--muted); }
   #inputbar.ask-drop, #askImgs.ask-drop { outline:2px dashed var(--accent); outline-offset:-2px;
                                           background:#f0f9ff; border-radius:8px; }
+  /* 使用手册里的截图 */
+  .md-img { max-width:100%; height:auto; display:block; margin:10px 0; cursor:zoom-in;
+            border:1px solid var(--line); border-radius:8px; }
 
   .note-imgs { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0; }
   .note-imgs .ni { position:relative; width:84px; height:84px; border-radius:8px; overflow:hidden; border:1px solid var(--line); }
@@ -490,7 +496,10 @@
     .msg.assistant .tbl th, .msg.assistant .tbl td { padding:4px 6px; }
 
     /* 输入栏：输入框独占一行，按钮统一到第二行，别挤成一团 */
-    #inputbar { padding:8px 10px calc(8px + env(safe-area-inset-bottom)); gap:6px; flex-wrap:wrap; }
+    #inputbar { padding:8px 10px calc(8px + env(safe-area-inset-bottom)); gap:6px; }
+    #askTools { gap:5px; }
+    #askTools .btn { flex:0 0 auto; padding:6px 9px; font-size:12px; min-height:30px; }
+    #askRow { flex-wrap:wrap; gap:6px; }
     #inputbar input, #inputbar textarea { flex:1 1 100%; font-size:15px; padding:10px 12px; }
     #inputbar button { flex:1 1 auto; padding:9px 12px; font-size:13px; min-height:38px; }
     #inputbar #sendBtn { flex:0 0 30%; font-weight:600; }
@@ -600,13 +609,12 @@
           <div id="qaStatsItem" style="display:none" onclick="openQaStats();closeMoreMenu()">📊 问答统计</div>
           <div id="fbAdminItem" style="display:none" onclick="openFeedbackAdmin();closeMoreMenu()">📝 用户反馈</div>
           <div id="evalAdminItem" style="display:none" onclick="openEvalCandidates();closeMoreMenu()">📋 测试集候选</div>
-          <div id="noticeCfgItem" style="display:none" onclick="openNoticeCfg();closeMoreMenu()">📢 进入提示</div>
           <div onclick="openDoc();closeMoreMenu()">📖 使用文档</div>
           <div onclick="openFeedback('qa');closeMoreMenu()">💬 反馈 / 提需求</div>
           <div onclick="openMyKey();closeMoreMenu()">🔑 我的大模型 Key</div>
           <div id="llmCfgItem" style="display:none" onclick="openLlmCfg();closeMoreMenu()">🤖 大模型设置（全局）</div>
           <div id="sysCfgItem" style="display:none" onclick="openSysCfg();closeMoreMenu()">⚙ 系统参数设置</div>
-<div id="demoModeItem" onclick="toggleDemoMode();closeMoreMenu()">🧪 演示模式（不走缓存）</div>
+<div id="demoModeItem" style="display:none" onclick="toggleDemoMode();closeMoreMenu()">🧪 演示模式（不走缓存）</div>
 <div onclick="clearAnswerCache()">🧹 清空答案缓存</div>
           <div class="sep"></div>
           <div onclick="doLogout();closeMoreMenu()">🚪 退出登录</div>
@@ -627,12 +635,16 @@
   </div>
   <div id="askImgs" class="ask-imgs" style="display:none"></div>
   <div id="inputbar">
-    <textarea id="q" rows="1" placeholder="输入问题：Enter 发送，Shift+Enter 换行（可 Ctrl+V 贴图，或拖图片到输入框）" disabled></textarea>
-    <button class="btn" id="ctxBtn" onclick="toggleCtx()" title="默认关闭：每次提问独立理解。开启后会把最近几轮对话带进去，方便追问">💬 上下文：关</button>
-    <button class="btn" id="lenBtn" onclick="cycleLen()" title="控制回答详略：简答适合现场演示快速看结论，详细适合做资料">📏 标准</button>
-    <button class="btn" id="thinkBtn" onclick="toggleThink()" title="开启后先展示模型深度思考过程（更慢）；关闭直接出答案（更快）">🧠 深度思考：关</button>
-<button class="btn" id="newChatBtn" style="display:none" onclick="resetChat()" title="清空上下文，开始新话题">🆕 新会话</button>
-    <button class="btn primary" id="sendBtn" onclick="ask()">发送</button>
+    <div id="askTools">
+      <button class="btn" id="ctxBtn" onclick="toggleCtx()" title="默认关闭：每次提问独立理解。开启后会把最近几轮对话带进去，方便追问">💬 上下文：关</button>
+      <button class="btn" id="lenBtn" onclick="cycleLen()" title="控制回答详略：简答适合现场演示快速看结论，详细适合做资料">📏 标准</button>
+      <button class="btn" id="thinkBtn" onclick="toggleThink()" title="开启后先展示模型深度思考过程（更慢）；关闭直接出答案（更快）">🧠 深度思考：关</button>
+      <button class="btn" id="newChatBtn" style="display:none" onclick="resetChat()" title="清空上下文，开始新话题">🆕 新会话</button>
+    </div>
+    <div id="askRow">
+      <textarea id="q" rows="1" placeholder="输入问题：Enter 发送，Shift+Enter 换行（可 Ctrl+V 贴图，或拖图片到输入框）" disabled></textarea>
+      <button class="btn primary" id="sendBtn" onclick="ask()">发送</button>
+    </div>
   </div>
 </main>
 
@@ -671,6 +683,9 @@
         <button class="sysrow" data-sys="defense" onclick="selectSysSection('defense')">
           <span>新账号默认模拟答辩</span><small id="sysSumDef">加载中…</small>
         </button>
+        <button class="sysrow" data-sys="notice" onclick="selectSysSection('notice')">
+          <span>进入提示</span><small id="sysSumNotice">加载中…</small>
+        </button>
       </div>
       <div class="sysdetail">
         <section class="syspane" data-pane="kb">
@@ -696,6 +711,29 @@
           <div style="font-size:12px;color:var(--muted);margin-top:6px">
             与问答知识库分开配置；全部不选 = 不分配；未设置过时默认业务手册。
           </div>
+        </section>
+        <section class="syspane" data-pane="notice" style="display:none">
+          <h4>进入提示</h4>
+          <div style="font-size:12px;color:var(--muted);line-height:1.7;margin-bottom:10px">
+            用户进入知识库 / 模拟答辩时看到的提醒；正文支持换行。保存后，用户下一次进入时生效。
+          </div>
+          <div style="font-weight:600;font-size:13.5px;color:#334155;margin:4px 0 6px">知识库</div>
+          <label style="display:flex;align-items:center;gap:7px;font-size:13px;color:#475569;cursor:pointer;margin-bottom:4px">
+            <input type="checkbox" id="noticeKbEnabled"> 显示此提示
+          </label>
+          <label class="f">标题</label>
+          <input id="noticeKbTitle" type="text" maxlength="120">
+          <label class="f">正文</label>
+          <textarea id="noticeKbBody" rows="5" maxlength="4000"></textarea>
+          <hr style="border:0;border-top:1px solid var(--line);margin:14px 0">
+          <div style="font-weight:600;font-size:13.5px;color:#334155;margin:4px 0 6px">模拟答辩</div>
+          <label style="display:flex;align-items:center;gap:7px;font-size:13px;color:#475569;cursor:pointer;margin-bottom:4px">
+            <input type="checkbox" id="noticeDefEnabled"> 显示此提示
+          </label>
+          <label class="f">标题</label>
+          <input id="noticeDefTitle" type="text" maxlength="120">
+          <label class="f">正文</label>
+          <textarea id="noticeDefBody" rows="4" maxlength="4000"></textarea>
         </section>
       </div>
     </div>
@@ -1053,40 +1091,6 @@
   </div>
 </div>
 
-<!-- 进入提示文案（管理员） -->
-<div class="modal" id="noticeCfgModal">
-  <div class="card" style="width:min(760px,96vw);max-height:88vh;display:flex;flex-direction:column">
-    <h3>📢 进入提示文案</h3>
-    <div style="font-size:12px;color:var(--muted);line-height:1.7;margin:-4px 0 10px">
-      用户进入知识库 / 模拟答辩时看到的提醒；正文支持换行。保存后，用户下一次进入时生效。
-    </div>
-    <div style="overflow:auto;flex:1;padding-right:4px">
-      <div style="font-weight:600;font-size:13.5px;color:#334155;margin:4px 0 6px">知识库</div>
-      <label style="display:flex;align-items:center;gap:7px;font-size:13px;color:#475569;cursor:pointer;margin-bottom:4px">
-        <input type="checkbox" id="noticeKbEnabled"> 显示此提示
-      </label>
-      <label class="f">标题</label>
-      <input id="noticeKbTitle" type="text" maxlength="120">
-      <label class="f">正文</label>
-      <textarea id="noticeKbBody" rows="6" maxlength="4000"></textarea>
-      <hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
-      <div style="font-weight:600;font-size:13.5px;color:#334155;margin:4px 0 6px">模拟答辩</div>
-      <label style="display:flex;align-items:center;gap:7px;font-size:13px;color:#475569;cursor:pointer;margin-bottom:4px">
-        <input type="checkbox" id="noticeDefEnabled"> 显示此提示
-      </label>
-      <label class="f">标题</label>
-      <input id="noticeDefTitle" type="text" maxlength="120">
-      <label class="f">正文</label>
-      <textarea id="noticeDefBody" rows="5" maxlength="4000"></textarea>
-    </div>
-    <div id="noticeCfgMsg" style="font-size:12.5px;min-height:18px;margin-top:8px"></div>
-    <div class="foot">
-      <button class="btn" onclick="closeModal('noticeCfgModal')">取消</button>
-      <button class="btn primary" onclick="saveNoticeCfg()">保存</button>
-    </div>
-  </div>
-</div>
-
 <!-- 大模型设置弹窗 -->
 <div class="modal" id="llmModal">
   <div class="card">
@@ -1123,258 +1127,94 @@
     </div>
     <div class="tabpane on" id="tab-manual">
       <div class="box">
-        <b>两个独立场景：</b>
-        <b>知识库问答</b>用于接手项目、查部署/环境/操作，入口在左侧知识库；
-        <b>模拟答辩</b>用于培训后的考核、导师模拟提问和自测，入口在右上角「🎓 模拟答辩」。
-        两者权限分开，不是一条流水线。
+        <b>新人AI导师有两个独立入口：</b>
+        <b>知识库问答</b>用于了解项目、查资料；
+        <b>模拟答辩</b>用于按关键词/PPT 练习，AI 导师提问并评价。
+        两个入口的权限由管理员分开开通，未开通的会置灰。
       </div>
-      <h4>一、3 分钟快速开始</h4>
+      <p style="font-size:12.5px;color:var(--muted)">详细操作和管理员功能见「完整手册」标签。</p>
+      <h4>一、登录与入口</h4>
       <ol>
-        <li>在公司内网用 Chrome / Edge 打开管理员提供的系统地址。</li>
-        <li>没有账号就点「注册新账号」，用公司邮箱注册；已有账号直接登录。</li>
-        <li>登录后先在左侧选择一个知识库。看不到知识库或入口是灰的，找管理员开通/分享。</li>
-        <li>在底部输入问题，按 Enter 发送；答案出来后点正文里的 <b>[1] [2]</b> 看引用原文。</li>
+        <li>用公司邮箱注册 / 登录；忘记密码找管理员重置。</li>
+        <li>登录后选择入口：📚 知识库 或 🎓 模拟答辩；未开通的入口会置灰。</li>
       </ol>
-      <div class="box">
-        <b>完整流程：</b>注册/登录 → 选知识库 → 提问 → 看引用 → 需要补资料时新建/上传 → 等索引完成再问。<br>
-        一个项目建议建一个独立知识库；选错库，系统就找不到对应资料。
-      </div>
-
-      <h4>二、注册与登录</h4>
-      <p><b>注册</b></p>
+      <h4>二、知识库：选库提问</h4>
       <ol>
-        <li>登录页点「注册新账号」。</li>
-        <li>填<b>公司邮箱</b>（邮箱就是你的登录账号）、设置密码（至少 6 位）。</li>
-        <li>如果页面出现「邮箱验证码」或「邀请码」，按管理员提供的方式填写。</li>
-        <li>点「注册并登录」。新账号默认的知识库/答辩权限由管理员在「系统参数设置」里决定。</li>
+        <li>左侧选择一个知识库。没有权限的库也会显示，但会置灰并标「🔒 未授权」；
+            点它只会提示联系管理员开通，不会进入。</li>
+        <li>输入框输入问题，Enter 发送，Shift+Enter 换行。</li>
+        <li><b>图片提问</b>：截图直接 Ctrl+V 粘贴，或把图片拖进输入框，
+            会随问题一起提交；一次可以贴多张。</li>
+        <li>回答下方有引用，点角标定位原文；点文件名可预览。</li>
+        <li>输入栏可切换「💬 上下文」「📏 回答详略」「🧠 深度思考」。</li>
       </ol>
-      <p><b>登录</b></p>
-      <ul>
-        <li>用账号密码登录；同一浏览器不同标签页可以各自登录不同账号。</li>
-        <li>右上角显示当前用户名；「更多」菜单里可以退出登录。</li>
-        <li>看不到某个知识库不是系统坏了，是管理员没有把这个库分享给你。</li>
-      </ul>
-
-      <h4>三、知识库：选择、新建、上传</h4>
-      <p><b>1. 选择知识库</b></p>
-      <ul>
-        <li>左侧是你能访问的知识库，单击选中（蓝色高亮）。</li>
-        <li>一个知识库通常对应一个项目/一套资料；切换库后，聊天记录也会跟着切换。</li>
-        <li>共享给你的库是只读的：可以提问，不能改别人的库。需要补资料找管理员或库的负责人。</li>
-      </ul>
-
-      <p><b>2. 新建知识库</b></p>
+      <h4>三、深度思考</h4>
+      <p>默认关闭，回答更快。复杂问题可点「🧠 深度思考」打开：页面会先展示模型思考过程，
+         答案出来后仍可在答案上方折叠查看。</p>
+      <h4>四、模拟答辩（新人AI导师）</h4>
       <ol>
-        <li>左侧展开「+ 新建知识库」。</li>
-        <li>填名称（可留空，默认取文件夹名）。</li>
-        <li>选资料：可以从电脑选文件、选整个文件夹、上传 zip 压缩包，或者直接把文件/文件夹拖到右侧页面。</li>
-        <li>点「创建并建索引」。不填路径也能建：拖文件进去会自动建库。</li>
+        <li>右上角「🎓 模拟答辩」进入，会在新标签页打开，不用重新登录。</li>
+        <li>两种方式：<b>上传 PPT 演练</b>，或 <b>关键词直练</b>（不用 PPT）。</li>
+        <li>选择题数、出题难度和出题依据的知识库，AI 导师逐题提问并评价。</li>
+        <li>练习模式可随时看参考答案和依据；答辩模式答完统一看解析。</li>
       </ol>
-      <p>支持 Word / PDF / PPT / Excel / 文本 / CSV / JSON / DBF / 图片等；zip 会在服务端安全解压后批量导入。
-        文件夹里已有的 zip 套压缩包也会在索引时自动解压（最多 3 层），内部文档正常参与检索。</p>
-      <p>SQL 脚本只按<b>文件名</b>登记，不读取脚本内容——实施时通常只需要知道有哪个脚本。</p>
-
-      <p><b>3. 索引与补资料</b></p>
+      <h4>五、补充内容与反馈</h4>
       <ul>
-        <li>首次建库要解析文档、分块、建索引和向量，文件多时可能需要几分钟到十几分钟；页面会显示进度。</li>
-        <li><b>索引完成再提问效果最好</b>；索引中提问可能搜不到新加的内容。</li>
-        <li>补资料：右上「添加文件」→ 选文件/文件夹/zip；也可以直接拖拽，多文件会自动并行处理。</li>
-        <li>「✍️ 写内容」适合记录口头经验、群里聊出来的结论：直接打字，支持 <b>Ctrl+V 粘贴截图</b>，也能继续编辑已有笔记。</li>
-        <li>资料变动很多或索引异常时，「更多 → 🔄 重建索引」。</li>
+        <li>「✍️ 写内容」记录经验，支持 Ctrl+V 粘贴截图。</li>
+        <li>「添加」上传文件/文件夹/zip；支持 PDF、Word、PPT、Excel、DBF、SQL、
+            文本、图片等，zip 会自动解压。</li>
+        <li>「⚙ 更多 → 💬 反馈 / 提需求」提交资料补充、改进建议、新需求；
+            觉得回答有用可以点 👍，会作为测试素材。</li>
+        <li>「⚙ 更多 → 📖 使用文档 → 完整手册」查看详细说明。</li>
       </ul>
-
-      <p><b>4. 权限与共享</b></p>
+      <h4>六、常见问题</h4>
       <ul>
-        <li>知识库有归属：自己的库自己管理；管理员可以把库只读分享给别人，也可以转交。</li>
-        <li>「智能问答」和「模拟答辩」的共享是<b>分开的</b>：一个库分给了问答，不代表答辩也能用。</li>
-        <li>需要访问某个项目的库：把账号发给管理员，在「用户管理 → 分配知识库权限」里勾选。</li>
-      </ul>
-
-      <h4>四、提问、引用与追问</h4>
-      <p><b>1. 怎么问</b></p>
-      <ol>
-        <li>先选中知识库。</li>
-        <li>底部输入框输入问题，<b>Enter 发送</b>，<b>Shift+Enter 换行</b>。</li>
-        <li>回答逐字流式输出；生成过程中可以点「⏹ 停止」。</li>
-        <li>底部的 <b>📏 标准</b> 可以切换「简答 / 标准 / 详细」：现场演示看结论用简答，整理资料用详细。</li>
-      </ol>
-
-      <p><b>2. 回答下面的按钮</b></p>
-      <ul>
-        <li><b>↻ 换个回答</b>：同一个问题原地再检索/生成一次，不新增重复提问；出错了会变成「↻ 重试」。</li>
-        <li><b>🧠 大模型本地回答</b>：不查知识库，直接让大模型凭自身知识回答；适合知识库里没有的通用问题，但可能不准。</li>
-        <li><b>👍 / 👎</b>：点踩可以写原因，管理员会在问答统计/反馈里看到，作为补资料和改进的依据。</li>
-      </ul>
-
-      <p><b>3. 引用和预览（核实答案的唯一办法）</b></p>
-      <ul>
-        <li>正文里的 <b>[1] [2]</b> 和下方引用区的序号一一对应；点角标会展开对应引用并高亮。</li>
-        <li>点引用里的文件名会打开原文档预览，左侧是<b>文档大标题/小标题目录</b>，命中片段会定位并高亮。</li>
-        <li>重要结论一定点开引用核对原文；文档说了算，不是模型说了算。</li>
-      </ul>
-
-      <p><b>4. 追问和上下文</b></p>
-      <ul>
-        <li>输入框右边 <b>💬 上下文：关</b> 是默认值：每次提问独立理解，适合大多数交付问题。</li>
-        <li>要追问时点成 <b>💬 上下文：开</b>，例如先问「这个接口怎么调」，再问「那它的超时怎么配」，系统会结合上文理解「它」。</li>
-        <li>开启后底部出现「🆕 清空上文（已记 N 轮）」；换话题时点它清空，避免串题。</li>
-      </ul>
-
-      <p><b>5. 多人同时问 / 排队</b></p>
-      <ul>
-        <li>系统默认同时回答 10 个问题；再多会<b>自动排队</b>，页面显示“第 N 位 / 前面还有几人 / 预计约多少秒”，轮到后自动继续，不用重新问。</li>
-        <li>一个人同时最多 2 个问题；第 3 个会提示稍后再试。</li>
-        <li>如果显示「排队已满」或 429，说明排队人数也到上限了，等一会再试。</li>
-      </ul>
-
-      <p><b>6. 问得更准</b></p>
-      <ul>
-        <li>问具体：把系统名、模块名、环境写出来，例如「O32 交易所指令怎么下单」比「怎么下单」准。</li>
-        <li>交易所 / 开放式基金 / 期货 / 固收是不同模块，问题里写清；系统会按模块过滤，避免拿其他模块的片段拼答案。</li>
-        <li>多个小问题最好分开问；但「我刚接手，这个项目是什么、有哪些系统、进展到哪一步」这种整体摸底可以直接问，系统会自动拆解。</li>
-        <li>问操作步骤时，优先用用户手册/培训资料里的原词；答案没找到就换个说法，或确认选对了知识库。</li>
-      </ul>
-
-      <h4>五、模拟答辩（AI 扮演评委）</h4>
-      <ol>
-        <li>点右上角「🎓 模拟答辩」。</li>
-        <li>选一种入口：<b>上传 PPT 演练</b>（.pptx / .ppt，最大 60MB），或 <b>关键词直练</b>（不用 PPT）。</li>
-        <li>选择模式、<b>出题难度</b>、题目数量和出题依据的知识库。</li>
-        <li>点「开始演练」，逐题作答；底部输入答案，Ctrl+Enter 或点「提交回答」。</li>
-      </ol>
-      <p><b>两种模式</b></p>
-      <ul>
-        <li><b>📖 练习模式</b>：每答完一题，立刻能看参考答案、依据和关键得分点，适合边学边练。</li>
-        <li><b>🎯 答辩模式</b>：全程不给答案，全部答完统一看解析，更接近真评委。</li>
-      </ul>
-      <p><b>难度</b></p>
-      <ul>
-        <li><b>基础（默认）</b>：按实施工程师带新人的角度问——这个模块做什么、在哪操作、分几步、怎么确认成功；业务只问皮毛，不考深层规则。</li>
-        <li><b>标准</b>：结合流程和业务适度追问。</li>
-        <li><b>挑战</b>：多步链路、异常/回滚、边界条件。</li>
-      </ul>
-      <p><b>关键词直练（不用 PPT）</b></p>
-      <ul>
-        <li>输入学习关键词（例如“交易所指令 下单 审核 分发”），系统自动匹配已有权限的知识库并整理学习内容。</li>
-        <li>也可以手动指定依据库；找不到内容时换关键词或换库。</li>
-        <li>适合复盘某个模块/流程，或手上没有 PPT 时直接开练。</li>
-      </ul>
-      <p><b>设置</b></p>
-      <ul>
-        <li>题目数量：按需要选 3 / 5 / 更多题。</li>
-        <li>出题依据知识库：上传后系统会根据 PPT 内容推荐一个你有权限的库，前端预选并显示理由；你可以随时改。</li>
-        <li>首题会在 PPT 解析后后台预生成，等待时间更短。</li>
-      </ul>
-      <p><b>过程与报告</b></p>
-      <ul>
-        <li>回答含糊时评委会追问；同一个点最多追问 2 次，答偏/复读后会换方向。</li>
-        <li>每题答完会生成诊断；最后汇总逐题得分、做得好的、还要补的、概念混淆点和建议。</li>
-        <li>如果没有答辩入口、或没有可选知识库：找管理员在「用户管理」里开通「模拟答辩」，并在系统参数里配默认答辩库/单独分享答辩库。</li>
-      </ul>
-
-      <h4>六、系统设置（管理员）</h4>
-      <p>「更多」菜单里是管理员功能，普通用户看不到或只能看到一部分。</p>
-      <p><b>1. 用户管理</b></p>
-      <ul>
-        <li>添加用户：账号、姓名、角色（普通/管理员）、密码（留空自动生成）、知识库/模拟答辩入口权限。</li>
-        <li>重置密码、修改账号/姓名/备注、删除用户。</li>
-        <li>注册邀请码：需要控制自助注册时，把邀请码发给对方。</li>
-        <li>「📤 分配知识库权限」：按用户分别勾选「智能问答」「模拟答辩」两列，都是只读共享。</li>
-      </ul>
-      <p><b>2. 系统参数设置</b></p>
-      <ul>
-        <li><b>新账号默认知识库</b>：是否开通知识库入口 + 默认只读共享哪些库。</li>
-        <li><b>新账号默认模拟答辩</b>：是否开通答辩入口 + 默认答辩库；<b>和问答默认库分开配置</b>。</li>
-        <li>全部不选 = 不给默认库；未设置过时默认业务手册。保存后只影响之后新建的账号，不会改已有用户。</li>
-      </ul>
-      <p><b>3. 大模型设置（全局）</b></p>
-      <ul>
-        <li>协议、接口地址 base_url、模型名、API Key；保存后立即生效，不需要重启。</li>
-        <li>只影响<b>没有自己 Key/模型</b>的用户；用户在「我的 Key」填的个人模型不会被全局设置覆盖。</li>
-        <li>全局模型必须被全局 Key 支持；不支持会报 401/403/422，填之前先测试。</li>
-      </ul>
-      <p><b>4. 问答统计 / 反馈 / 重建索引</b></p>
-      <ul>
-        <li>「📊 问答统计」看今日/近期提问量、耗时、兜底率、差评和最近问答明细；差评原因就是补资料的线索。</li>
-        <li>「🔄 重建索引」用于大量更新资料或索引异常；索引完成前提问可能搜不到新内容。</li>
-        <li>持久化日志在服务器 `/opt/rag/logs`，按天保存，排障时看最新日志。</li>
-      </ul>
-
-      <h4>七、个人 Key / 模型（可选）</h4>
-      <p>公共 Key 是大家共用的，人多时会排队。急用或想更稳定，可以申请自己的 <b>LightCode UIS Key</b>：</p>
-      <ol>
-        <li>点右上角「公共 Key / 我的 Key」，按弹窗里的「LightCode UIS 大模型控制台」申请入口和「公司大模型申请文档」操作。</li>
-        <li>在「我的 Key」粘贴 Key，模型填该 Key 支持的模型名（如 <code>deepseek-flash</code>、<code>deepseek-v4-pro</code>）。</li>
-        <li>点「先测试」，确认「key 可用」后「测试并保存」。</li>
-        <li>之后你的问题走自己的 Key；已保存过 Key 只想换模型时，Key 留空、改模型后直接点「测试并保存」即可。</li>
-        <li>提示 422 / 模型不支持：说明模型名不对，换该 Key 支持的模型；提示 401/403 先确认 Key 没过期。</li>
-      </ol>
-
-      <h4>八、常见问题</h4>
-      <div class="box"><b>问：看不到知识库 / 入口是灰的？</b><br>找管理员开通入口权限，并把对应项目库分享给你；新账号默认权限由「系统参数设置」决定。</div>
-      <div class="box"><b>问：一直排队 / 很慢？</b><br>公共 Key 或全局名额在排队。看页面显示的位置/预计等待；急用可填个人 Key，或错开时间。</div>
-      <div class="box"><b>问：429 是什么？</b><br>你同时问了 2 个以上，或队列满/等待超时。等当前问题完成后再试；不要连点发送。</div>
-      <div class="box"><b>问：上传后搜不到？</b><br>先看索引是否完成；再确认当前选的是这个知识库；还不行点「重建索引」或补更准确的文件。</div>
-      <div class="box"><b>问：回答「没找到」？</b><br>可能这个库没有该内容，或问法和文档用词差太远。换库、换问法，或把对应手册/PPT 补进库。</div>
-      <div class="box"><b>问：问交易所，怎么扯到开放式基金/期货了？</b><br>问题里写清模块（交易所/开放式基金/期货/固收）；系统会按模块过滤，但前提是库里确实有该模块的资料。</div>
-      <div class="box"><b>问：两个人同时问会互相卡吗？</b><br>不会互相顶掉；系统会排队并显示预计等待，全局最多同时回答 10 个。</div>
-      <div class="box"><b>问：我的回答能保存到知识库吗？</b><br>看你的库权限；共享库只读，自己的库可以加文件/写内容。</div>
-
-      <h4>九、使用注意</h4>
-      <ul>
-        <li>仅在公司内网使用，资料不出内网；不要上传与工作无关的私人文件。</li>
-        <li>涉及账号、密码、生产变更的操作，以原文档和公司流程为准，回答只作辅助。</li>
-        <li>重要结论点开引用核对原文；引用来自哪个库、哪份文件，比“看起来像”更重要。</li>
+        <li><b>排队/变慢</b>：多人同时提问会自动排队，页面会显示等待秒数，请勿重复发送；
+            急用可申请自己的大模型 Key。</li>
+        <li><b>知识库没答上</b>：先确认选对库；仍没有就点「反馈」补充资料。</li>
+        <li><b>权限</b>：看不到或置灰的库，找管理员在「用户管理」里开通/分配。</li>
       </ul>
     </div>
     <div class="tabpane" id="tab-bg">
-      <h4>建立目的与背景</h4>
-      <p>项目的核心定位：<b>按项目建专属知识库</b>，帮助实施人员及相关人员快速上手项目，并在项目后续实施与日常工作中随时问答检索。</p>
-      <p>实际工作中，每个项目的资料往往量大且分散——需求文档、设计方案、接口文档、部署手册、周报月报、环境配置、遗留问题清单等散落各处。实施人员要快速熟悉一个新项目，或在成长过程中随时查找某个知识点，靠翻海量文档很耗时。</p>
-      <p>这个工具把<b>每个项目各自的文档</b>统一建成独立的知识库（一个文件夹 = 一个项目知识库），通过检索 + 大模型智能问答，把"翻文档找答案"变成"直接提问得答案"，并给出引用来源。天然支持按项目切换、随时补充完善。</p>
+      <h4>项目定位</h4>
+      <p>「新人AI导师」面向新入职、转岗和接手项目的同事，目标是把“翻文档、找人问、没人陪练”
+         变成可随时使用的项目导师。系统分为两个独立但互补的模块：</p>
+      <ul>
+        <li><b>知识库问答</b>：帮助新人了解项目情况，助力快速上手。</li>
+        <li><b>模拟答辩</b>：基于学习的关键字，AI 模拟导师提问并评价；
+            帮助新人自检学习效果，助力查漏补缺，释放导师精力。</li>
+      </ul>
+
       <h4>解决的痛点</h4>
       <ul>
-        <li><b>快速上手</b>：新进实施人员面对海量项目文档，无需逐篇翻阅即可快速检索学习、掌握项目全貌，显著缩短上手周期。</li>
-        <li><b>项目实施辅助</b>：实施过程中遇到问题，直接提问即可定位相关依据，减少反复翻文档、找人问。</li>
-        <li><b>按项目隔离</b>：每个项目独立知识库，互不干扰，聚焦当前项目，避免无关信息干扰，响应更快。</li>
-        <li><b>交接提效</b>：人员变动或接手他人项目时，可依托已沉淀的项目知识独立掌握全貌与历史遗留问题，降低对个人的依赖。</li>
-        <li><b>信息集中</b>：日报、周报、环境配置、临时性文档等零散高价值资料统一入库，避免丢失与盲区。</li>
-        <li><b>本地轻量、合规安全</b>：本地私有部署，数据不出内网环境，适合金融企业项目环境。</li>
+        <li><b>资料分散</b>：需求、方案、接口、部署手册、周报、遗留问题散落各处，逐篇翻阅耗时。</li>
+        <li><b>上手周期长</b>：新人对项目没有全局认识，不知道从哪问、问谁。</li>
+        <li><b>导师时间被占</b>：同一个问题反复回答，缺少标准化的练习和反馈。</li>
+        <li><b>经验留不下来</b>：口头经验、临时结论、环境信息没有沉淀。</li>
+        <li><b>权限与安全</b>：项目资料需要按人/按库隔离，数据不出内网。</li>
       </ul>
-      <h4>用到的技术栈</h4>
+
+      <h4>现在具备的能力（2026-11）</h4>
       <ul>
-        <li><b>后端</b>：Python + FastAPI + Uvicorn</li>
-        <li><b>检索</b>：中文分词（jieba）+ BM25 关键词检索 + <b>本地语义向量（bge-small-zh, ONNX）</b> + <b>Rerank 精排（bge-reranker-base int8）</b>；
-            关键词与语义两路并行召回后融合，再按权威性/版本新旧/文件名命中加权，块级索引 + 内存缓存 + 启动预热</li>
-        <li><b>批量导入</b>：支持上传 zip 压缩包（服务端安全解压）；文件夹里的 zip 也会自动解压并索引内部文档（最多 3 层）</li>
-        <li><b>文档解析</b>：python-docx / python-pptx / openpyxl / xlrd / pymupdf(PDF) + 直接读 Office 内部结构定位图片；
-            支持 Word、Excel、PPT、PDF、文本、CSV、JSON、DBF 等</li>
-        <li><b>文档内图片</b>：按需从原文档解压（docx 的 word/media、pptx 的 ppt/media 等），转换后缓存；
-            矢量格式 EMF/WMF 自动转 PNG，所以引用区和预览页里的图都能直接看</li>
-        <li><b>预览渲染</b>：不靠外部 Office，直接按文档结构生成网页——标题层级、表格、图片位置都与原文档一致</li>
-        <li><b>大模型</b>：支持 Anthropic / OpenAI 协议的本地或云模型，走公司内网部署的大模型（如需外部可经 UIS 代理 key 接入）；
-            流式输出，单次输出撞上限会自动接着写，写完为止</li>
-        <li><b>安全</b>：账号密码（PBKDF2）+ 登录 token、外网目录浏览禁用、登录有效期、知识库按用户/共享隔离</li>
-        <li><b>前端</b>：原生 HTML / CSS / JavaScript 单页，轻量无框架（阶段状态提示、停止/重试、流式输出、引用角标、图片放大）</li>
-        <li><b>部署</b>：本地私有部署，数据全部落在本机 <code>app/data/</code>（每库独立索引 + 语义向量），不出内网</li>
+        <li><b>知识库问答</b>：按项目建库、上传文件/文件夹/zip、后台建索引、混合检索 + 重排 + 大模型回答、引用定位、原文预览。</li>
+        <li><b>图片提问</b>：截图 Ctrl+V 粘贴或拖进输入框，随问题一起提交；不再需要点图片按钮。</li>
+        <li><b>深度思考</b>：可开/关；开启时展示模型思考过程，关闭时回答更快。</li>
+        <li><b>模拟答辩</b>：上传 PPT 或关键词直练；基础/标准/挑战难度；练习/答辩模式；逐题评价和报告。</li>
+        <li><b>权限可见</b>：没有权限的知识库也会显示但置灰，点击提示找管理员开通；管理员可分别分配问答/答辩权限。</li>
+        <li><b>反馈与改进</b>：更多菜单可提交资料补充、改进建议、新需求；点赞的问答会整理为测试素材。</li>
+        <li><b>使用文档</b>：内置快速上手和完整手册；首次进入有引导；进入提示文案可由管理员修改。</li>
       </ul>
-      <h4>知识库怎么来</h4>
-      <p>两种建法，进同一个管道：</p>
-      <ul>
-        <li><b>指向本地文件夹</b>：一个文件夹 = 一个项目知识库，适合资料已经很规整的项目。</li>
-        <li><b>直接拖文件上传</b>：先建一个空库，再把文件/文件夹拖进去，适合随手收集的零散资料。</li>
-        <li>建好后<b>增量索引</b>：只处理新增和有改动的文件，没变的文件直接复用旧结果，所以补料之后重建很快。</li>
-        <li>索引完成后自动补语义向量，页面会显示进度，跑完再提问效果最好。</li>
-      </ul>
-      <h4>架构简览</h4>
+
+      <h4>技术架构简览（非技术同事可跳过）</h4>
       <div class="box">
-        文件夹 / 上传目录 → 解析抽文本（同时记录每张图在文档里的位置）→ 分块 →
-        建立每库独立索引（chunks.jsonl）+ 语义向量库（vectors.npy）<br>
-        提问 → 问题拆解（必要时补一条架构类子查询）→ BM25 + 向量并行混合召回 → 融合去重 → 重排精排 →
+        文件夹 / 上传目录 → 解析抽文本 → 分块 → 每库独立索引（chunks.jsonl）+ 语义向量（vectors.npy）<br>
+        提问 → 问题理解/拆解 → BM25 + 向量混合召回 → 融合去重 → 重排精排 →
         组装提示词 → 大模型流式生成 → 界面展示 + 引用来源 + 图片缩略图
       </div>
+      <p style="font-size:12.5px;color:var(--muted)">部署在公司内网；知识库和问答数据按权限隔离；
+         支持个人大模型 Key，避免多人挤公共 Key 排队。</p>
     </div>
-    <div class="foot"><button class="btn primary" onclick="closeModal('docModal')">关闭</button></div>
+        <div class="foot"><button class="btn primary" onclick="closeModal('docModal')">关闭</button></div>
   </div>
 </div>
 
@@ -1641,8 +1481,8 @@ function renderMe(){
   if (fba) fba.style.display = isAdmin ? 'block' : 'none';
   const eva = $('#evalAdminItem');
   if (eva) eva.style.display = isAdmin ? 'block' : 'none';
-  const ncfg = $('#noticeCfgItem');
-  if (ncfg) ncfg.style.display = isAdmin ? 'block' : 'none';
+  const dm = $('#demoModeItem');
+  if (dm) dm.style.display = isAdmin ? 'block' : 'none';
   // 全局大模型设置会改到所有人，只给管理员看
   const lc = $('#llmCfgItem');
   if (lc) lc.style.display = isAdmin ? 'block' : 'none';
@@ -2196,6 +2036,10 @@ function updateSysSummaries(){
   const a = $('#sysSumKb'), b = $('#sysSumDef');
   if (a) a.textContent = (kbOn ? '入口开' : '入口关') + ' · 默认库 ' + kbN + ' 个';
   if (b) b.textContent = (defOn ? '入口开' : '入口关') + ' · 默认库 ' + defN + ' 个';
+  const nk = !!($('#noticeKbEnabled') && $('#noticeKbEnabled').checked);
+  const nd = !!($('#noticeDefEnabled') && $('#noticeDefEnabled').checked);
+  const n = $('#sysSumNotice');
+  if (n) n.textContent = '知识库' + (nk ? '开' : '关') + ' · 答辩' + (nd ? '开' : '关');
 }
 async function openSysCfg(){
   $('#sysCfgModal').classList.add('show');
@@ -2203,9 +2047,10 @@ async function openSysCfg(){
   $('#sysKbList').innerHTML = '<div style="color:var(--muted)">加载中…</div>';
   $('#sysDefKbList').innerHTML = '<div style="color:var(--muted)">加载中…</div>';
   try{
-    const [s, kd] = await Promise.all([
+    const [s, kd, nd] = await Promise.all([
       api('/api/admin/settings'),
-      api('/api/kb', {cache:'no-store'})
+      api('/api/kb', {cache:'no-store'}),
+      api('/api/notice')
     ]);
     if (!s || !s.ok) throw new Error((s && s.msg) || '读取设置失败');
     const perms = (s.registration || {}).perms || {};
@@ -2214,6 +2059,15 @@ async function openSysCfg(){
     const list = ((kd && kd.kbs) || []).filter(k => k.name);
     renderKbChecks($('#sysKbList'), list, s.effective_kb_ids);
     renderKbChecks($('#sysDefKbList'), list, s.effective_defense_kb_ids);
+    const n = (nd && nd.ok && nd.notice) || {};
+    const nkb = n.kb || {}, ndef = n.defense || {};
+    $('#noticeKbEnabled').checked = nkb.enabled !== false;
+    $('#noticeKbTitle').value = nkb.title || '';
+    $('#noticeKbBody').value = nkb.body || '';
+    $('#noticeDefEnabled').checked = ndef.enabled !== false;
+    $('#noticeDefTitle').value = ndef.title || '';
+    $('#noticeDefBody').value = ndef.body || '';
+    NOTICE_CFG = n;
     updateSysSummaries();
     selectSysSection('kb');
   }catch(e){
@@ -2229,13 +2083,36 @@ async function saveSysCfg(){
   const defIds = Array.from(document.querySelectorAll('#sysDefKbList input:checked')).map(x => x.value);
   const msg = $('#sysCfgMsg');
   msg.textContent = '保存中…'; msg.style.color = 'var(--muted)';
+  const noticePayload = {
+    kb: {
+      enabled: !!$('#noticeKbEnabled').checked,
+      title: ($('#noticeKbTitle').value || '').trim(),
+      body: $('#noticeKbBody').value || ''
+    },
+    defense: {
+      enabled: !!$('#noticeDefEnabled').checked,
+      title: ($('#noticeDefTitle').value || '').trim(),
+      body: $('#noticeDefBody').value || ''
+    }
+  };
   try{
-    const r = await api('/api/admin/settings', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({kb, defense, kb_ids: ids, defense_kb_ids: defIds})
-    });
+    const [r, nr] = await Promise.all([
+      api('/api/admin/settings', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({kb, defense, kb_ids: ids, defense_kb_ids: defIds})
+      }),
+      api('/api/notice', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(noticePayload)
+      })
+    ]);
     if (!r || !r.ok) throw new Error((r && r.msg) || '保存失败');
-    msg.textContent = '✅ 已保存，后续新注册账号按此分配。';
+    if (!nr || !nr.ok) throw new Error((nr && nr.msg) || '进入提示保存失败');
+    NOTICE_CFG = nr.notice || NOTICE_CFG;
+    const nkb = (NOTICE_CFG && NOTICE_CFG.kb) || {};
+    if ($('#noticeTitle')) $('#noticeTitle').textContent = nkb.title || '';
+    if ($('#noticeBody')) $('#noticeBody').innerHTML = esc(nkb.body || '').replace(/\n/g, '<br>');
+    msg.textContent = '✅ 已保存，后续新注册账号和进入提示按此配置。';
     msg.style.color = '#047857';
     updateSysSummaries();
   }catch(e){
@@ -2780,7 +2657,7 @@ async function ask(retryQ, reuseNode, fbMode){
     const resp = await fetch(`/api/kb/${cur.id}/ask/stream`, withAuth({ method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({question:q, history,
-        no_cache: isRetry || demoMode(),     // 换个回答 / 演示模式：强制现算，不读缓存
+        no_cache: isRetry || (window.__isAdmin && demoMode()),   // 换个回答 / 管理员演示模式：强制现算
         fallback_mode: fbMode || '',         // 知识库没命中时用户选的那条兜底路
         answer_len: lenMode,                 // 简答 / 标准 / 详细
         thinking: thinkOn,                   // 前端按钮：开/关模型思考
@@ -3183,6 +3060,8 @@ function md(t){
     .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
     .replace(/`([^`\n]+)`/g, '<code>$1</code>')
     .replace(/(^|[^*>])\*([^*\n]+)\*/g, '$1<i>$2</i>')
+    .replace(/!\[([^\]]*)\]\((\/static\/manual_img\/[^)\s]+)\)/g,
+      (m, alt, src) => `<img class="md-img" src="${src}" alt="${alt}" onclick="showFigViewer(this.src, this.alt)">`)
     .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
     .replace(/[（(]\s*片段[^）)]*[）)]/g, m => cite(m))
     .replace(/【\s*片段[^】]*】/g, m => cite(m))
@@ -4565,49 +4444,6 @@ async function maybeShowNotice(){
   const el = document.getElementById('noticeModal');
   if (el) el.classList.add('show');
 }
-async function openNoticeCfg(){
-  const msg = $('#noticeCfgMsg');
-  if (msg) msg.textContent = '';
-  $('#noticeCfgModal').classList.add('show');
-  try{
-    const d = await api('/api/notice');
-    const n = (d && d.notice) || {};
-    const kb = n.kb || {}, df = n.defense || {};
-    $('#noticeKbEnabled').checked = kb.enabled !== false;
-    $('#noticeKbTitle').value = kb.title || '';
-    $('#noticeKbBody').value = kb.body || '';
-    $('#noticeDefEnabled').checked = df.enabled !== false;
-    $('#noticeDefTitle').value = df.title || '';
-    $('#noticeDefBody').value = df.body || '';
-    NOTICE_CFG = n;
-  }catch(e){ if (msg) msg.textContent = '加载失败：' + (e.message || '网络错误'); }
-}
-async function saveNoticeCfg(){
-  const msg = $('#noticeCfgMsg');
-  const payload = {
-    kb: {
-      enabled: !!$('#noticeKbEnabled').checked,
-      title: ($('#noticeKbTitle').value || '').trim(),
-      body: $('#noticeKbBody').value || ''
-    },
-    defense: {
-      enabled: !!$('#noticeDefEnabled').checked,
-      title: ($('#noticeDefTitle').value || '').trim(),
-      body: $('#noticeDefBody').value || ''
-    }
-  };
-  try{
-    const d = await api('/api/notice', {method:'POST',
-      headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
-    if (!d || !d.ok){ if (msg) msg.textContent = (d && d.msg) || '保存失败'; return; }
-    NOTICE_CFG = d.notice;
-    const kb = d.notice.kb || {};
-    if ($('#noticeTitle')) $('#noticeTitle').textContent = kb.title || '';
-    if ($('#noticeBody')) $('#noticeBody').innerHTML = esc(kb.body || '').replace(/\n/g, '<br>');
-    if (msg) msg.textContent = '已保存';
-    setTimeout(() => closeModal('noticeCfgModal'), 400);
-  }catch(e){ if (msg) msg.textContent = '保存失败：' + (e.message || '网络错误'); }
-}
 function closeNotice(){
   try{
     if (document.getElementById('noticeNoMore')?.checked){
@@ -4723,7 +4559,7 @@ function closeOnboard(openManual){
 try{ ctxOn = localStorage.getItem('rag.ctx') === '1'; }catch(e){ ctxOn = false; }
 initAuth().then(ok => { if (ok) boot(); });
 // 点击弹窗遮罩关闭
-['llmModal','docModal','myKeyModal','fbModal','fbAdminModal','evalModal','noticeCfgModal'].forEach(id => {
+['llmModal','docModal','myKeyModal','fbModal','fbAdminModal','evalModal'].forEach(id => {
   const el = document.getElementById(id);
   if (el) el.addEventListener('click', e => { if (e.target === el) el.classList.remove('show'); });
 });
