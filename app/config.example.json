@@ -67,6 +67,11 @@
       "batch_size": 32
     },
     "rerank_top_k": 8,
+    "manual_hits": {
+      "mode": "auto",
+      "pool": 64,
+      "rerank_n": 16
+    },
     "normalize": [
       ["\\bo[\\s\\-_]*trade\\b", "demo"],
       ["\\bo[\\s\\-_]*order\\b", "oorder"],

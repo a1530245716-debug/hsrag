@@ -6,6 +6,25 @@
 
 ---
 
+### 16:40（11-26） | Claude Code | `app/server.py`、`app/config.example.json` | 手册定向检索 `_manual_hits` 减负：主链路已有手册页则跳过，否则先过滤再只重排少量候选 | 单人 how-to 问题仅 `_manual_hits` 就约 30s，58 个候选全量重排只取 2 条
+
+- 实测根因：`_manual_hits` → `backend.retrieve(enable_rerank=True)` → `hybrid_search`
+  对 **58 个候选**（BM25 top48 + 向量 top15 合并）全部重排；最终只过滤出 2 条手册页。
+  单条约 250 token，4 核 CPU、无 GPU，约 0.5s/条 → 约 30s。
+- 新增 `retrieval.manual_hits` 配置：
+  - `mode`: `auto`（默认）| `full`（旧行为）| `filtered`（总是过滤后重排）| `off`
+  - `pool`: 召回候选池，默认 64
+  - `rerank_n`: 过滤后最多重排多少条，默认 16
+- `auto`：主链路 `cand + reserved` 里已有 >=2 条"手册路径 + 当前模块"的片段 → **跳过**
+  `_manual_hits`（本问题主链路已有 5 条手册页）；否则走 `filtered`：
+  召回不重排 → 只留手册路径+模块 → 按 fused 取前 `rerank_n` 条再重排。
+- 日志：`[manual] skip ...` / `[manual] filtered rerank N/M cands in Xs`，便于线上核对。
+- 本地 CPU 验证（比例参考）：本问题 `auto`/`filtered` 2~3s，`full` 10.5s；
+  待生产 4 核容器 A/B 与模块评测确认引用质量。
+- 保留 `mode=full` 可一键回滚；`app/config.json` 不必改，代码默认 `auto`。
+
+---
+
 ### 15:16（11-26） | Claude Code | `app/feedback_store.py`、`app/server.py`、`app/static/index.html`、`app/static/defense.html` | 新增「反馈 / 提需求」入口 + 登录提示 + 答辩页实验推广提醒 | 人明确要求：登录进入知识库时提示可在「更多 → 反馈」加内容/提建议/说需求；进入模拟答辩也要提醒实验阶段排队与反馈入口
 
 - 新增 `app/feedback_store.py`：反馈写 `app/data/feedback.jsonl`（追加写、20MB 轮转、可按 `RAG_FEEDBACK_DIR` 覆盖）；
