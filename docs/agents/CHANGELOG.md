@@ -6,6 +6,15 @@
 
 ---
 
+### 21:12（11-26） | Claude Code | `app/static/defense.html` | 答辩开屏提示增加「不再显示这条提示」勾选框 | 人反馈开屏提示没有“下次不再提醒”选项
+
+- 提示弹窗底部新增勾选框；勾选后点「我知道了」/「去反馈」都会记到
+  `localStorage.rag.betaNoMore.v1.<uid>`，之后进入答辩页不再弹。
+- 未勾选则每次进入仍提示；管理员仍可在「系统参数设置 → 进入提示」关闭或改文案。
+- 本地实测：勾选关闭后刷新不再弹；localStorage key 正确；无 JS 报错。
+
+---
+
 ### 20:38（11-26） | Claude Code | `app/static/manual_img/`、`app/static/manual.md` | 手册截图改为 WebP 压缩 | 手册图片过大，完整手册要等很久才全部显示
 
 - 9 张界面截图从 PNG（约 3.6MB）压缩为 WebP（约 568KB，最大宽 1100px）；

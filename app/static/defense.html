@@ -433,6 +433,10 @@
       本项目目前处于实验推广阶段，服务器性能有限：多人同时提问时会自动排队，回答速度会明显变慢，请耐心等待。<br><br>
       有问题、改进建议或新需求，可以点右上角「💬 反馈」提交。
     </div>
+    <label style="display:flex;align-items:center;gap:7px;font-size:13px;color:#475569;
+                  cursor:pointer;margin:14px 0 2px">
+      <input type="checkbox" id="betaNoMore"> 不再显示这条提示
+    </label>
     <div class="foot">
       <button class="btn sm" onclick="closeBeta();openFb()">去反馈</button>
       <button class="btn primary sm" onclick="closeBeta()">我知道了</button>
@@ -598,9 +602,11 @@ READY.catch(() => {});
 
 // 返回问答要不要直接进知识库，取决于知识库权限；没有就回入口选择页
 let MY_PERMS = { kb: false, defense: false };
+let ME_USER = null;
 READY.then(() => {
   api('/api/me').then(d => {
     if (d && d.ok && d.user){
+      ME_USER = d.user;
       MY_PERMS = d.user.perms || { kb: false, defense: false };
       if (d.user.role === 'admin') MY_PERMS = { kb: true, defense: true };
     }
@@ -1433,8 +1439,12 @@ document.addEventListener('keydown', e => {
 });
 
 // ---------------- 实验推广提醒 / 反馈 ----------------
+function betaNoMoreKey(){
+  return 'rag.betaNoMore.v1.' + ((ME_USER && ME_USER.id) || 'anon');
+}
 async function maybeBetaNotice(){
-  // 每次进入都提示（管理员可在「进入提示」里关闭）；不再按标签页只弹一次
+  // 每次进入都提示；勾过「不再显示」或管理员关闭后不再弹
+  try{ if (localStorage.getItem(betaNoMoreKey()) === '1') return; }catch(e){}
   try{
     const d = await api('/api/notice');
     const n = (d && d.notice && d.notice.defense) || {};
@@ -1443,9 +1453,13 @@ async function maybeBetaNotice(){
     if (t && n.title) t.textContent = n.title;
     if (b && n.body) b.innerHTML = esc(n.body).replace(/\n/g, '<br>');
   }catch(e){}
+  const nb = $('#betaNoMore'); if (nb) nb.checked = false;
   const m = $('#betaMask'); if (m) m.classList.add('show');
 }
-function closeBeta(){ const m = $('#betaMask'); if (m) m.classList.remove('show'); }
+function closeBeta(){
+  try{ if ($('#betaNoMore') && $('#betaNoMore').checked) localStorage.setItem(betaNoMoreKey(), '1'); }catch(e){}
+  const m = $('#betaMask'); if (m) m.classList.remove('show');
+}
 
 let FB_KIND = 'improve';
 function openFb(){
