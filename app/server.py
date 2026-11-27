@@ -2639,18 +2639,17 @@ def _looks_like_not_found(answer):
     return any(m in a[:80] for m in _NOT_FOUND_MARKS) and len(a) < 500
 
 
-def _diversify(results, topk, max_per_path=2):
-    """同一份文件最多占 max_per_path 个引用位。
+def _diversify(results, topk, max_per_path=4):
+    """限制单文件占用的引用位，但不要因为"多样性"把答案所在的同一份文档拆掉。
 
-    检索经常出现"一份部署手册的 4 个块霸占 8 个引用位"的情况，
-    模型看到的全是同一份文档，其它同样相关的文档（系统概述、环境信息）挤不进来。
-    这里保证引用尽量覆盖不同文件，剩下的席位才按原顺序补齐。
-    用户手册例外：操作步骤常跨页/跨小节，允许最多 4 块，避免只拿到目录页。
+    旧版非手册文件最多 2 块；现实中不少问题（操作步骤、参数表、某模块说明）
+    的答案就在一份文档的连续几块里，卡 2 块会让其它弱相关文档挤进来。
+    现在非手册最多 4 块、用户手册最多 6 块；如果文件种类不够，最后仍按顺序补齐。
     """
     out, cnt = [], {}
     for r in results:
         p = r.get("path") or ""
-        cap = 4 if module_router.is_manual_path(p) else max_per_path
+        cap = 6 if module_router.is_manual_path(p) else max_per_path
         if cnt.get(p, 0) >= cap:
             continue
         cnt[p] = cnt.get(p, 0) + 1
@@ -3786,6 +3785,19 @@ def _user_image_blocks(images):
     return blocks
 
 
+_BROAD_Q_RE = re.compile(
+    r"整体|总体|概述|概览|架构|全貌|主要功能|有哪些功能|包含哪些|包括哪些|"
+    r"有哪些模块|包含哪些模块|项目.{0,6}(介绍|情况|做什么)|"
+    r"(介绍|说说).{0,8}(项目|系统|平台)|(项目|系统|平台).{0,8}(介绍|架构|模块|功能)|"
+    r"新人.{0,8}(上手|入门|学习路径)|业务流程|整体流程|大致.{0,4}(介绍|流程|架构)"
+)
+
+
+def _is_broad_ask(q):
+    q = (q or "").strip()
+    return bool(q) and len(q) <= 80 and bool(_BROAD_Q_RE.search(q))
+
+
 def _build_ask_context(sources, q, history=None, answer_len="normal", images=None, modules=None):
     """组装 messages: [最近几轮对话...] + 当前问题(带检索片段 + 用户贴的图)。
 
@@ -3828,6 +3840,12 @@ def _build_ask_context(sources, q, history=None, answer_len="normal", images=Non
             "只使用明确提到该模块的片段；不要把其他模块的步骤拼进来；"
             "如果片段来自多个模块，先说明歧义并询问用户；"
             "没有对应片段时回答未找到，不要用相邻模块补全。")
+    if _is_broad_ask(q):
+        sys_prompt += (
+            "\n【范围类问题】用户问的是整体/概括性问题。请先用本次检索到的片段给出已知信息"
+            "（分点、带引用），不要只反问；如果片段不足以覆盖整个范围，明确说明资料不足的部分，"
+            "并在回答末尾提出 1–3 个具体的澄清选项（例如：整体架构 / 某个模块 / 新人上手路径 / "
+            "环境部署），让用户选择下一步。已知信息和澄清问题都要给。")
     return sys_prompt, msgs
 
 
