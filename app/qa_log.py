@@ -130,13 +130,18 @@ def _iter(days=None):
                 yield r
 
 
-def stats(days=7):
-    """汇总统计, 供页面/命令行看。"""
+def stats(days=7, uid=None):
+    """汇总统计, 供页面/命令行看。uid 非空时只统计该用户的提问。"""
     asks, fbs = [], {}
     for r in _iter(days):
         if r.get("t") == "ask":
+            if uid and r.get("uid") != uid:
+                continue
             asks.append(r)
         elif r.get("t") == "fb":
+            if uid and r.get("uid") != uid:
+                # 保留别人对这条提问的反馈也可以，但个人统计只认自己的反馈更直观
+                continue
             fbs[r.get("id")] = r
     n = len(asks)
     if not n:
@@ -145,11 +150,12 @@ def stats(days=7):
     def vote_of(x):
         return x.get("vote") if isinstance(x, dict) else x
 
-    fb_vals = [vote_of(x) for x in fbs.values()]
+    # 只统计“本时间段内的提问”收到的反馈，避免反馈已计入、差评列表却看不到
+    fb_asks = [a for a in asks if a["id"] in fbs]
+    fb_vals = [vote_of(fbs[a["id"]]) for a in fb_asks]
     fb_total = len(fb_vals)
     good = sum(1 for v in fb_vals if v > 0)
-    bad = fb_total - good
-    fb_asks = [a for a in asks if a["id"] in fbs]
+    bad = sum(1 for v in fb_vals if v < 0)
     fallback_n = sum(1 for a in asks if a.get("fallback"))
     scores = [a.get("top_score", 0) for a in asks if a.get("hits")]
     lat = sorted(a.get("ms", 0) for a in asks if a.get("ms"))
@@ -175,7 +181,7 @@ def stats(days=7):
         "fallback": {"count": fallback_n, "rate": pct(fallback_n, n)},
         "avg_top_score": round(sum(scores) / len(scores), 2) if scores else 0,
         "latency_ms": {"p50": lat[len(lat) // 2] if lat else 0,
-                       "p90": lat[int(len(lat) * 0.9)] if lat else 0,
+                       "p90": lat[min(len(lat) - 1, int(len(lat) * 0.9))] if lat else 0,
                        "avg": int(sum(lat) / len(lat)) if lat else 0},
         "rewritten": sum(1 for a in asks if a.get("rewritten")),
         "split": sum(1 for a in asks if a.get("split")),

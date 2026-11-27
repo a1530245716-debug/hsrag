@@ -134,8 +134,9 @@ class AskIn(BaseModel):
     top_k: int = 0
     model: str = ""      # 可选覆盖配置文件里的模型
     thinking: bool | None = None   # 前端按钮：开/关思考；None=沿用配置
+    fast: bool = False             # 前端「快速」：跳过重排，优先速度（排序可能不够准）
     history: list = []   # 最近几轮对话 [{"q": 问, "a": 答}], 用于多轮上下文(仅存前端内存)
-    no_cache: bool = False   # True = 跳过答案缓存, 强制重新检索+生成(演示用)
+    no_cache: bool = False   # True = 跳过答案缓存, 强制重新检索+生成(换个回答用)
     fallback_mode: str = ""  # "" 正常 | "web"/"llm" 用户选了兜底来源 | "none" 用户说不用
     answer_len: str = "normal"   # "brief" 简答 | "normal" 标准 | "detail" 详细
     images: list = []        # 用户随问题贴的图 [{"name","data":dataURL}]，只本轮生效、不落盘
@@ -1255,15 +1256,7 @@ def api_suggestion_handled(fid: str, request: Request):
 def api_qa_stats(request: Request, days: int = 7):
     """问答统计(管理员看全量, 普通用户看自己的)。"""
     u = _current_user(request)
-    st = qa_log.stats(days=days)
-    if not users.is_admin(u):
-        # 普通用户只看自己那部分: 用全量统计但过滤问题列表
-        mine = [r for r in qa_log.load(days=days, limit=500) if r.get("uid") == u.get("id")]
-        st = dict(st)
-        st["asks"] = len(mine)
-        st["top_questions"] = _counter([(r.get("q") or "").strip() for r in mine if r.get("q")], 10)
-        st["fallback_questions"] = [r.get("q") for r in mine if r.get("fallback")][:10]
-        st["worst"] = [r for r in mine if r.get("vote") == -1][:10]
+    st = qa_log.stats(days=days, uid=None if users.is_admin(u) else u.get("id"))
     return {"ok": True, "stats": st}
 
 
@@ -1558,6 +1551,8 @@ def admin_overview(request: Request):
     n_today, ms_sum, fb, errs = 0, 0, 0, 0
     users_today = {}
     for r in qa_log._iter(days=1):
+        if r.get("t") != "ask":
+            continue
         ts = r.get("ts")
         try:
             d = time.strftime("%Y-%m-%d", time.localtime(float(ts)))
@@ -1575,7 +1570,10 @@ def admin_overview(request: Request):
         if (r.get("source_type") or "") in ("error", "timeout", "none"):
             errs += 1
         name = r.get("user") or "（未知）"
-        users_today[name] = users_today.get(name, 0) + 1
+        # 用 uid 去重，避免两个同名账号被算成一个人
+        key = r.get("uid") or name
+        rec = users_today.setdefault(key, {"name": name, "n": 0})
+        rec["n"] += 1
 
     try:
         st7 = qa_log.stats(days=7)
@@ -1617,7 +1615,8 @@ def admin_overview(request: Request):
             "fallback": fb,
             "errors": errs,
             "active_users": len(users_today),
-            "by_user": sorted(users_today.items(), key=lambda x: -x[1])[:10],
+            "by_user": sorted(([v["name"], v["n"]] for v in users_today.values()),
+                              key=lambda x: -x[1])[:10],
         },
         "week": st7,
         "kbs": kbs,
@@ -2682,7 +2681,7 @@ def _manual_query(q, modules):
     return ""
 
 
-def _manual_hits(kb_id, q, modules, topk=2, pool=64, rerank_n=16, mode="filtered"):
+def _manual_hits(kb_id, q, modules, topk=2, pool=64, rerank_n=16, mode="filtered", enable_rerank=True):
     """模块 + 操作类问题：额外做一次“用户手册定向检索”。
 
     综合手册（O3.2 基础用户手册）一页里可能同时出现股票/债券/基金/回购，
@@ -2700,7 +2699,7 @@ def _manual_hits(kb_id, q, modules, topk=2, pool=64, rerank_n=16, mode="filtered
     if mode == "full":
         try:
             rs = backend.retrieve(kb_id, sub, top_k=max(12, topk * 3),
-                                  enable_vector=True, enable_rerank=True) or []
+                                  enable_vector=True, enable_rerank=enable_rerank) or []
         except Exception as e:
             print(f"[manual] 手册定向检索失败: {e}", file=sys.stderr)
             return []
@@ -2732,6 +2731,8 @@ def _manual_hits(kb_id, q, modules, topk=2, pool=64, rerank_n=16, mode="filtered
     if not manual:
         return []
     pool_n = manual[:max(rerank_n, topk)]
+    if not enable_rerank:
+        return manual[:topk]
     t0 = time.time()
     try:
         import rerank
@@ -2772,7 +2773,7 @@ def _manual_pages(records, modules):
     return out
 
 
-def _manual_reserved(kb_id, q, modules, topk, rc, records):
+def _manual_reserved(kb_id, q, modules, topk, rc, records, enable_rerank=True):
     """手册定向检索的统一入口（流式/非流式共用）。
 
     auto（默认）：主链路记录里已有 >=2 条手册页 → 跳过；
@@ -2789,7 +2790,8 @@ def _manual_reserved(kb_id, q, modules, topk, rc, records):
         return []
     return _manual_hits(kb_id, q, modules, topk=manual_topk, pool=pool,
                         rerank_n=rerank_n,
-                        mode="full" if mode == "full" else "filtered")
+                        mode="full" if mode == "full" else "filtered",
+                        enable_rerank=enable_rerank)
 
 
 def _merge_manual(picked, manual, topk):
@@ -2806,7 +2808,7 @@ def _merge_manual(picked, manual, topk):
     return out
 
 
-def _multi_search(kb_id, queries, topk, rc, modules=None):
+def _multi_search(kb_id, queries, topk, rc, modules=None, enable_rerank=True):
     """多路检索(查询拆解后用): 各路只做召回, 合并去重后**统一重排一次**。
 
     相比"每路各重排一次", 延迟从数十秒降到 2~3 秒。
@@ -2847,20 +2849,21 @@ def _multi_search(kb_id, queries, topk, rc, modules=None):
     # 没有才跑 filtered（先过滤手册路径+模块，只重排少量候选）。
     manual_reserved = _manual_reserved(
         kb_id, queries[0], modules, topk, rc,
-        list(cand or []) + list(reserved or []))
+        list(cand or []) + list(reserved or []), enable_rerank=enable_rerank)
     if modules and not cand and not reserved:
         return manual_reserved[:topk]
     # 统一重排: 用原问题作为 query(最终要回答的仍是原问题)
-    try:
-        import rerank
-        # 多留些候选，重排后再做文件去重，否则去重会把好结果挤没
-        rr = rerank.rerank(queries[0], cand, topk=topk * 2)
-        if rr:
-            rr = kb.apply_file_weights(kb_id, rr)
-            picked = _with_reserved(_diversify(rr, topk), reserved, topk)
-            return _merge_manual(picked, manual_reserved, topk)
-    except Exception as e:
-        print(f"[ask] 合并重排跳过: {e}")
+    if enable_rerank:
+        try:
+            import rerank
+            # 多留些候选，重排后再做文件去重，否则去重会把好结果挤没
+            rr = rerank.rerank(queries[0], cand, topk=topk * 2)
+            if rr:
+                rr = kb.apply_file_weights(kb_id, rr)
+                picked = _with_reserved(_diversify(rr, topk), reserved, topk)
+                return _merge_manual(picked, manual_reserved, topk)
+        except Exception as e:
+            print(f"[ask] 合并重排跳过: {e}")
     picked = _with_reserved(_diversify(cand, topk), reserved, topk)
     return _merge_manual(picked, manual_reserved, topk)
 
@@ -3423,19 +3426,21 @@ def kb_ask(kb_id: str, body: AskIn, request: Request):
     plan_ = planner.plan_queries(q_eff, cfg=cfg)
     queries = plan_["queries"]
     if len(queries) > 1:
-        results = _multi_search(kb_id, queries, top_k, rc, modules=mods)
+        results = _multi_search(kb_id, queries, top_k, rc, modules=mods,
+                                enable_rerank=not body.fast)
     else:
         results = backend.retrieve(
             kb_id, q_eff, top_k=top_k,
             enable_vector=rc.get("enable_vector", True),
-            enable_rerank=rc.get("enable_rerank", True),
+            enable_rerank=(not body.fast) and rc.get("enable_rerank", True),
         )
         if results is not None and mods:
             results, _drop = module_router.filter_records(results, mods)
             if _drop:
                 print(f"[module] {kb_id} 过滤其他模块片段 {_drop} 个（{'、'.join(mods)}）",
                       file=sys.stderr)
-            _mh = _manual_reserved(kb_id, q_eff, mods, top_k, rc, results)
+            _mh = _manual_reserved(kb_id, q_eff, mods, top_k, rc, results,
+                                   enable_rerank=not body.fast)
             if _mh:
                 results = _merge_manual(results, _mh, top_k)
     if results is None:
@@ -4091,7 +4096,7 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
             _stale = bool(_st.get("stale") or _st.get("loading"))
         except Exception:
             _stale = False
-        # 首问先看缓存(追问依赖上下文, 不走缓存; 演示模式/换个回答也不走)
+        # 首问先看缓存(追问依赖上下文, 不走缓存; 换个回答也不走)
         # 带图更不能走缓存: 缓存键只有问题文本, 同一句话配不同图会拿到上一次的答案
         # 模块问题也不走缓存：旧缓存的答案可能把其他模块的内容拼进来了
         if not hist and not body.no_cache and not has_img and not mods:
@@ -4107,6 +4112,8 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
                                    "stale": _stale})
                 return
         yield sse("status", {"text": "正在理解问题…"})
+        if body.fast:
+            yield sse("status", {"text": "⚡ 快速模式：跳过重排，优先速度；引用排序可能不够准"})
         # 多轮: 依赖上文的追问 → 先改写成独立问题
         rw = planner.rewrite_query(q, hist, cfg=cfg)
         q_eff = rw["q"] if rw["rewritten"] else q
@@ -4125,13 +4132,14 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
         if len(queries) > 1:
             yield sse("plan", {"queries": queries,
                                "status": f"已拆解为 {len(queries) - 1} 个子问题，正在多路检索…"})
-            results = _multi_search(kb_id, queries, topk_, rc, modules=mods)
+            results = _multi_search(kb_id, queries, topk_, rc, modules=mods,
+                                    enable_rerank=not body.fast)
         else:
             yield sse("status", {"text": "正在检索知识库…"})
             results = backend.retrieve(
                 kb_id, q_eff, top_k=topk_,
                 enable_vector=rc.get("enable_vector", True),
-                enable_rerank=rc.get("enable_rerank", True),
+                enable_rerank=(not body.fast) and rc.get("enable_rerank", True),
             )
             if results is not None and mods:
                 results, _drop = module_router.filter_records(results, mods)
@@ -4348,7 +4356,7 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
             full += _cwarn
         try:
             # 带图的答案不写缓存：缓存键只有问题文本，会把"看图得出的结论"污染给下次纯文字提问
-            if not hist and not rw["rewritten"] and not body.no_cache and not has_img and not mods:
+            if not hist and not rw["rewritten"] and not body.no_cache and not body.fast and not has_img and not mods:
                 cache.put(kb_id, q, full, results)
             qa_id = qa_log.record(q, kb_id, _current_user(request), full,
                                   sources, "kb", False, int((time.time() - _t_start) * 1000),
@@ -4467,7 +4475,7 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
             _stale = bool(_st.get("stale") or _st.get("loading"))
         except Exception:
             _stale = False
-        # 首问先看缓存(追问依赖上下文, 不走缓存; 演示模式/换个回答也不走)
+        # 首问先看缓存(追问依赖上下文, 不走缓存; 换个回答也不走)
         # 带图更不能走缓存: 缓存键只有问题文本, 同一句话配不同图会拿到上一次的答案
         # 模块问题也不走缓存：旧缓存的答案可能把其他模块的内容拼进来了
         if not hist and not body.no_cache and not has_img and not mods:
@@ -4483,6 +4491,8 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
                                    "stale": _stale})
                 return
         yield sse("status", {"text": "正在理解问题…"})
+        if body.fast:
+            yield sse("status", {"text": "⚡ 快速模式：跳过重排，优先速度；引用排序可能不够准"})
         # 多轮: 依赖上文的追问 → 先改写成独立问题
         rw = await run_in_threadpool(planner.rewrite_query, q, hist, cfg=cfg)
         q_eff = rw["q"] if rw["rewritten"] else q
@@ -4501,14 +4511,15 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
         if len(queries) > 1:
             yield sse("plan", {"queries": queries,
                                "status": f"已拆解为 {len(queries) - 1} 个子问题，正在多路检索…"})
-            results = await run_in_threadpool(_multi_search, kb_id, queries, topk_, rc, mods)
+            results = await run_in_threadpool(_multi_search, kb_id, queries, topk_, rc, mods,
+                                              enable_rerank=not body.fast)
         else:
             yield sse("status", {"text": "正在检索知识库…"})
             results = await run_in_threadpool(
                 backend.retrieve,
                 kb_id, q_eff, top_k=topk_,
                 enable_vector=rc.get("enable_vector", True),
-                enable_rerank=rc.get("enable_rerank", True),
+                enable_rerank=(not body.fast) and rc.get("enable_rerank", True),
             )
             if results is not None and mods:
                 results, _drop = module_router.filter_records(results, mods)
@@ -4740,7 +4751,7 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
             full += _cwarn
         try:
             # 带图的答案不写缓存：缓存键只有问题文本，会把"看图得出的结论"污染给下次纯文字提问
-            if not hist and not rw["rewritten"] and not body.no_cache and not has_img and not mods:
+            if not hist and not rw["rewritten"] and not body.no_cache and not body.fast and not has_img and not mods:
                 cache.put(kb_id, q, full, results)
             qa_id = qa_log.record(q, kb_id, _current_user(request), full,
                                   sources, "kb", False, int((time.time() - _t_start) * 1000),

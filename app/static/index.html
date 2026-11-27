@@ -647,7 +647,6 @@
           <div id="userMgmtItem" style="display:none" onclick="openUsers();closeMoreMenu()">👥 用户管理</div>
           <div onclick="openDoc();closeMoreMenu()">📖 使用文档</div>
           <div id="sysCfgItem" onclick="openSysCfg();closeMoreMenu()">⚙ 系统参数设置</div>
-<div id="demoModeItem" style="display:none" onclick="toggleDemoMode();closeMoreMenu()">🧪 演示模式（不走缓存）</div>
 <div onclick="clearAnswerCache()">🧹 清空答案缓存</div>
           <div class="sep"></div>
           <div onclick="doLogout();closeMoreMenu()">🚪 退出登录</div>
@@ -664,13 +663,14 @@
     <span class="ibTrack"><i></i></span>
   </div>
   <div id="chat">
-    <div class="empty">← 在左侧选择或新建一个知识库,然后开始提问</div>
+    <div class="empty">← 还没有选择知识库：左侧「＋ 新建知识库」建自己的库，或把文件/文件夹直接拖进来；也可以选择已有/分享的库。</div>
   </div>
   <div id="askImgs" class="ask-imgs" style="display:none"></div>
   <div id="inputbar">
     <div id="askTools">
       <button class="btn" id="ctxBtn" onclick="toggleCtx()" title="默认关闭：每次提问独立理解。开启后会把最近几轮对话带进去，方便追问">💬 上下文：关</button>
       <button class="btn" id="lenBtn" onclick="cycleLen()" title="控制回答详略：简答适合现场演示快速看结论，详细适合做资料">📏 标准</button>
+      <button class="btn" id="fastBtn" onclick="toggleFast()" title="开启后跳过重排，回答更快；引用排序可能不够准，复杂问题建议关闭">⚡ 快速：关</button>
       <button class="btn" id="thinkBtn" onclick="toggleThink()" title="开启后先展示模型深度思考过程（更慢）；关闭直接出答案（更快）">🧠 深度思考：关</button>
       <button class="btn" id="newChatBtn" style="display:none" onclick="resetChat()" title="清空上下文，开始新话题">🆕 新会话</button>
     </div>
@@ -943,7 +943,7 @@
            style="border:1px solid var(--line);border-radius:10px;padding:18px;text-align:center;cursor:pointer">
         <div style="font-size:30px">📚</div>
         <div style="font-weight:600;margin:6px 0">知识库</div>
-        <div style="font-size:12.5px;color:var(--muted)">帮助新人了解项目情况，助力快速上手</div>
+        <div style="font-size:12.5px;color:var(--muted)">帮助新人了解项目情况，助力快速上手<br>也可以自己建库、上传资料</div>
         <div id="homeKbLock" style="font-size:12px;color:#b45309;margin-top:6px"></div>
       </div>
       <div id="homeDef" onclick="pickHome('defense')"
@@ -973,7 +973,9 @@
       「⚙ 更多 → 📖 使用文档」里查看。
     </div>
     <ul style="font-size:13px;line-height:1.9;color:#475569;margin:0 0 12px;padding-left:20px">
-      <li><b>知识库</b>：选项目库直接提问，回答带引用，可点开原文核对。</li>
+      <li><b>快速模式</b>：多人同时用或觉得慢时，可开「⚡ 快速」跳过重排，回答更快，但引用排序可能不够准；复杂问题建议关闭。</li>
+      <li><b>自己建库</b>：左侧「＋ 新建知识库」，把 Word/PDF/PPT/Excel/文本/图片拖进去；未选库时直接把文件拖到页面也会自动新建。索引完成后选中即可提问，你建的库归你，可自己分配权限。</li>
+      <li><b>知识库</b>：选项目库直接提问，回答带引用，可点开原文核对；也可以选择别人分享给你的库。</li>
       <li><b>模拟答辩</b>：按关键词或上传 PPT，AI 导师提问并评价，帮助查漏补缺。</li>
       <li><b>深度思考</b>：默认关闭更快；复杂问题可以打开，查看模型思考过程。</li>
       <li><b>反馈</b>：加内容、提建议、说需求，在「⚙ 更多 → 💬 反馈 / 提需求」提交；管理员在「📊 统计与反馈」统一查看。</li>
@@ -1253,27 +1255,41 @@
         <li>用公司邮箱注册 / 登录；忘记密码找管理员重置。</li>
         <li>登录后选择入口：📚 知识库 或 🎓 模拟答辩；未开通的入口会置灰。</li>
       </ol>
-      <h4>二、知识库：选库提问</h4>
+      <h4>二、创建自己的知识库</h4>
       <ol>
-        <li>左侧选择一个知识库。没有权限的库也会显示，但会置灰并标「🔒 未授权」；
-            点它只会提示联系管理员开通，不会进入。</li>
+        <li>左侧点「＋ 新建知识库」，名称可留空（默认取资料名）。</li>
+        <li>把 Word / PDF / PPT / Excel / DBF / SQL / 文本 / 图片拖进虚线框，
+            或点「选择文件 / 选择文件夹」。也可以直接把文件或文件夹拖到页面左侧/中间：
+            <b>未选中知识库时会自动新建一个</b>。</li>
+        <li>等索引完成（几十页约 1–3 分钟，页面有进度），选中这个库就能提问。</li>
+        <li>你创建的库归你所有：可查看文件、设置文件权重、重命名/删除，并可在「⋯ → 📤 分配权限」
+            把只读权限分给其他人；不需要管理员代建。</li>
+      </ol>
+      <h4>三、知识库：选库提问</h4>
+      <ol>
+        <li>左侧选择一个知识库；如果还没有自己的库，先按上一节创建，也可以选择别人分享的库。
+            没有权限的库也会显示，但会置灰并标「🔒 未授权」；点它只会提示联系创建人/管理员开通，不会进入。</li>
         <li>输入框输入问题，Enter 发送，Shift+Enter 换行。</li>
         <li><b>图片提问</b>：截图直接 Ctrl+V 粘贴，或把图片拖进输入框，
             会随问题一起提交；一次可以贴多张。</li>
         <li>回答下方有引用，点角标定位原文；点文件名可预览。</li>
-        <li>输入栏可切换「💬 上下文」「📏 回答详略」「🧠 深度思考」。</li>
+        <li>输入栏可切换「💬 上下文」「📏 回答详略」「⚡ 快速」「🧠 深度思考」。</li>
       </ol>
-      <h4>三、深度思考</h4>
+      <p style="font-size:12.5px;color:var(--muted);line-height:1.8">
+        <b>⚡ 快速</b>：默认关闭；开启后跳过重排，回答更快，但引用排序可能不够准。
+        复杂问题建议关闭；多人同时使用时可用它减轻本地重排的 CPU 压力。
+      </p>
+      <h4>四、深度思考</h4>
       <p>默认关闭，回答更快。复杂问题可点「🧠 深度思考」打开：页面会先展示模型思考过程，
          答案出来后仍可在答案上方折叠查看。</p>
-      <h4>四、模拟答辩（新人AI导师）</h4>
+      <h4>五、模拟答辩（新人AI导师）</h4>
       <ol>
         <li>右上角「🎓 模拟答辩」进入，会在新标签页打开，不用重新登录。</li>
         <li>两种方式：<b>上传 PPT 演练</b>，或 <b>关键词直练</b>（不用 PPT）。</li>
         <li>选择题数、出题难度和出题依据的知识库，AI 导师逐题提问并评价。</li>
         <li>练习模式可随时看参考答案和依据；答辩模式答完统一看解析。</li>
       </ol>
-      <h4>五、补充内容与反馈</h4>
+      <h4>六、补充内容与反馈</h4>
       <ul>
         <li>「✍️ 写内容」记录经验，支持 Ctrl+V 粘贴截图。</li>
         <li>「添加」上传文件/文件夹/zip；支持 PDF、Word、PPT、Excel、DBF、SQL、
@@ -1282,7 +1298,7 @@
             觉得回答有用可以点 👍，会作为测试素材。</li>
         <li>「⚙ 更多 → 📖 使用文档 → 完整手册」查看详细说明。</li>
       </ul>
-      <h4>六、常见问题</h4>
+      <h4>七、常见问题</h4>
       <ul>
         <li><b>排队/变慢</b>：多人同时提问会自动排队并显示等待时间；当前主要瓶颈是本地资料检索/重排，不是大模型接口并发，个人 Key 不会改善这部分。请勿重复发送，急用可错峰。</li>
         <li><b>知识库没答上</b>：先确认选对库；仍没有就点「反馈」补充资料。</li>
@@ -1596,8 +1612,6 @@ function renderMe(){
   if (fba) fba.style.display = isAdmin ? 'block' : 'none';
   const eva = $('#evalAdminItem');
   if (eva) eva.style.display = isAdmin ? 'block' : 'none';
-  const dm = $('#demoModeItem');
-  if (dm) dm.style.display = isAdmin ? 'block' : 'none';
   const hubItem = $('#hubItem');
   if (hubItem) hubItem.textContent = isAdmin ? '📊 统计与反馈' : '💬 反馈 / 提需求';
   syncKbWeightsItem();
@@ -1976,13 +1990,24 @@ async function delKb(id){
     chatHistory = [];
     syncNewChatBtn();
     const box = $('#chat');
-    if (box) box.innerHTML = '<div class="empty">← 在左侧选择或新建一个知识库,然后开始提问</div>';
+    if (box) box.innerHTML = '<div class="empty">← 还没有选择知识库：左侧「＋ 新建知识库」建自己的库，或把文件/文件夹直接拖进来；也可以选择已有/分享的库。</div>';
   }
   await loadKbs();
   if (!cur){ $('#curName').textContent='未选择知识库'; $('#curMeta').textContent=''; $('#q').disabled = true; }
 }
 async function reindex(){
   if (!cur) return alert('请先选择知识库');
+  const detail = (cur.file_count || 0) + ' 个文件 · ' + (cur.chunk_count || 0) + ' 块';
+  const ok = confirm(
+    '确定重建「' + cur.name + '」的索引吗？\n\n' +
+    '影响：\n' +
+    '• 重建在后台进行，文件多时可能需要几分钟；期间检索/回答可能变慢，结果可能暂时不完整。\n' +
+    '• 索引完成后才会包含最新资料；重建不会删除文件或权限。\n' +
+    '• 重建会占用服务器 CPU，多人同时使用时会进一步变慢。\n\n' +
+    '当前：' + detail + '\n\n' +
+    '点击“确定”开始重建，点击“取消”不做任何操作。'
+  );
+  if (!ok) return;
   addMsg('assistant', '⏳ 已开始后台重建索引，**期间可以继续提问**（索引完成后自动生效，会提示）。');
   await runIndexInline(cur.id);
 }
@@ -2623,27 +2648,6 @@ document.addEventListener('click', e => {
 });
 
 // 顶栏「更多」菜单
-// ---------------- 演示模式：一律不走答案缓存 ----------------
-// 演示时同一个问题问第二遍会命中缓存、瞬间出现一模一样的答案，看着像提前录好的。
-// 开了这个开关，每次提问都真实重新检索 + 生成；状态存在 localStorage，刷新不丢。
-function demoMode(){ return localStorage.getItem('rag.nocache') === '1'; }
-function syncDemoItem(){
-  const el = $('#demoModeItem');
-  if (el) el.textContent = '🧪 演示模式（不走缓存）' + (demoMode() ? ' ✅' : '');
-}
-function toggleDemoMode(){
-  localStorage.setItem('rag.nocache', demoMode() ? '0' : '1');
-  syncDemoItem();
-  const box = $('#chat');
-  if (box){
-    const tip = document.createElement('div');
-    tip.className = 'msg';
-    tip.innerHTML = '<div style="color:#6b7280;font-size:13px;line-height:1.7">' +
-      (demoMode() ? '🧪 演示模式已开启：接下来每个问题都会真实检索+生成，不会命中缓存。'
-                  : '🧪 演示模式已关闭：相同问题再问会直接复用上次的答案。') + '</div>';
-    box.appendChild(tip); box.scrollTop = box.scrollHeight;
-  }
-}
 async function clearAnswerCache(){
   closeMoreMenu();
   try{
@@ -2845,6 +2849,29 @@ try{ lenMode = localStorage.getItem('rag.len') || 'normal'; }catch(e){}
 // 思考开关：默认关（更快）；开启后把模型思考过程流式展示出来
 let thinkOn = false;
 try{ thinkOn = localStorage.getItem('rag.think') === '1'; }catch(e){}
+let fastOn = false;
+try{ fastOn = localStorage.getItem('rag.fast') === '1'; }catch(e){}
+function syncFastBtn(){
+  const b = $('#fastBtn'); if (!b) return;
+  b.textContent = fastOn ? '⚡ 快速：开' : '⚡ 快速：关';
+  b.classList.toggle('primary', fastOn);
+  b.title = fastOn ? '已开启：跳过重排，回答更快；引用排序可能不够准，复杂问题建议关闭'
+                   : '已关闭：完整重排，排序更准但更慢；点一下开启快速模式';
+}
+function toggleFast(){
+  fastOn = !fastOn;
+  try{ localStorage.setItem('rag.fast', fastOn ? '1' : '0'); }catch(e){}
+  syncFastBtn();
+  const box = $('#chat');
+  if (box){
+    const tip = document.createElement('div');
+    tip.className = 'msg';
+    tip.innerHTML = '<div style="color:#6b7280;font-size:13px;line-height:1.7">' +
+      (fastOn ? '⚡ 快速模式已开启：会跳过重排，回答更快，但引用排序可能不如标准模式准；复杂问题建议关闭。'
+              : '⚡ 快速模式已关闭：恢复完整重排，速度会慢一些，引用排序更准。') + '</div>';
+    box.appendChild(tip); box.scrollTop = box.scrollHeight;
+  }
+}
 function syncThinkBtn(){
   const b = $('#thinkBtn'); if (!b) return;
   b.textContent = thinkOn ? '🧠 深度思考：开' : '🧠 深度思考：关';
@@ -3054,10 +3081,11 @@ async function ask(retryQ, reuseNode, fbMode){
     const resp = await fetch(`/api/kb/${cur.id}/ask/stream`, withAuth({ method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({question:q, history,
-        no_cache: isRetry || (window.__isAdmin && demoMode()),   // 换个回答 / 管理员演示模式：强制现算
+        no_cache: isRetry,                       // 换个回答：强制现算
         fallback_mode: fbMode || '',         // 知识库没命中时用户选的那条兜底路
         answer_len: lenMode,                 // 简答 / 标准 / 详细
         thinking: thinkOn,                   // 前端按钮：开/关模型思考
+        fast: fastOn,                        // 快速模式：跳过重排
         images: imgs}),                      // 本轮贴的图（历史轮次不带图）
       signal: ac.signal }));
     if (resp.status === 401){ showLogin('登录已过期，请重新登录'); return; }
@@ -5013,7 +5041,7 @@ async function boot(){
   syncCtxBtn();
   syncLenBtn();       // 回答详略的记忆状态
   syncThinkBtn();     // 思考开关的记忆状态
-  syncDemoItem();     // 演示模式开关的记忆状态
+  syncFastBtn();      // 快速模式的记忆状态
   syncPermsUI();
   if (!sessionStorage.getItem('rag.homePicked')) showHome();
   else maybeShowNotice();
