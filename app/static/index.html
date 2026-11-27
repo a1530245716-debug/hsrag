@@ -1007,7 +1007,7 @@
   <div class="card" style="width:min(720px,95vw)">
     <h3>📤 分配知识库权限</h3>
     <div style="font-size:12px;color:var(--muted);margin:-6px 0 14px;line-height:1.8">
-      把某个知识库分别<b>只读</b>分给「智能问答」和「模拟答辩」用户：
+      知识库创建人或管理员可以把某个库分别<b>只读</b>分给「智能问答」和「模拟答辩」用户：
       能提问、能看引用，但不能改、不能删。两列互不影响。
     </div>
 
@@ -1687,7 +1687,7 @@ function toggleKbMenu(ev, id){
   const actions = [
     ['📂 查看文件', `openKbFiles('${id}')`],
     canManage ? ['⚖️ 文件权重', `openKbWeightsFor('${id}')`] : null,
-    window.__isAdmin ? ['📤 分配权限', `openShare('${id}')`] : null,
+    (window.__isAdmin || k.mine) ? ['📤 分配权限', `openShare('${id}')`] : null,
     canManage ? ['✎ 重命名', `promptRename('${id}')`] : null,
     canManage ? ['✕ 删除', `delKb('${id}')`, 'danger'] : null,
   ].filter(Boolean);
@@ -1730,19 +1730,31 @@ function renderKbs(){
     const idxBad = k.index_status === 'failed' || k.index_status === 'interrupted';
     const mgr = locked ? '' :
       `<button class="kbdots" title="更多操作" onclick="event.stopPropagation();toggleKbMenu(event,'${k.id}')">⋯</button>`;
-    const meta = locked ? '🔒 未授权 · 请联系管理员开通'
+    const ownerName = k.owner_name || '';
+    const ownerContact = k.owner_contact || '';
+    const ownerTag = k.mine ? '👤 我创建的'
+      : (ownerName ? `👤 创建人：${esc(ownerName)}${ownerContact ? '（' + esc(ownerContact) + '）' : ''}` : '');
+    const meta = locked
+      ? ('🔒 未授权' + (ownerTag ? ' · ' + ownerTag : '') + ' · 找 TA 开通')
       : `${k.folder ? '' : '纯上传型 · '}${
         indexing ? '索引中…' : idxBad ? '<span style="color:#b91c1c">索引失败/中断</span>'
-        : (k.chunk_count ? '已就绪' : '未建索引')}${
-        (window.__isAdmin && k.owner_name && !k.mine) ? ` · <span style="color:#b45309">👤 ${esc(k.owner_name)}</span>` : ''}`;
+        : (k.chunk_count ? '已就绪' : '未建索引')}${ownerTag ? ' · ' + ownerTag : ''}`;
+    const metaTitle = (locked ? '未授权，请联系创建人开通' : (k.folder || '（未绑定目录，纯上传型）')) +
+      (ownerName ? ' · 创建人：' + ownerName + (ownerContact ? '（' + ownerContact + '）' : '') : '');
     div.innerHTML = `
       <div class="row">
         <span class="name ${indexing?'dim':''}">${locked ? '🔒 ' : ''}${esc(k.name)}</span>
         ${mgr}
       </div>
-      <div class="meta" title="${esc(locked ? '未授权，请联系管理员开通' : (k.folder || '（未绑定目录，纯上传型）'))}">${meta}</div>`;
+      <div class="meta" title="${esc(metaTitle)}">${meta}</div>`;
     div.onclick = () => {
-      if (locked){ alert('该知识库未授权，请联系管理员开通'); return; }
+      if (locked){
+        const who = ownerName
+          ? ('创建人' + (ownerContact ? '（' + ownerContact + '）' : '') + '或管理员')
+          : '管理员';
+        alert('该知识库未授权，请联系' + who + '开通');
+        return;
+      }
       select(k);
     };
     el.appendChild(div);
@@ -2265,10 +2277,10 @@ function openShare(kbId){
   (async () => {
     try{
       const d = await api('/api/kb');
-      const list = (d.kbs || []).filter(k => k.name);
+      const list = (d.kbs || []).filter(k => k.name && (window.__isAdmin || k.mine));
       if (!list.length){
         sel.innerHTML = '<option value="">暂无知识库</option>';
-        $('#shareUsers').innerHTML = '<div style="padding:12px;color:var(--muted);font-size:13px">还没有知识库</div>';
+        $('#shareUsers').innerHTML = '<div style="padding:12px;color:var(--muted);font-size:13px">你还没有可以分配权限的知识库</div>';
         return;
       }
       sel.innerHTML = list.map(k => {
@@ -2494,7 +2506,7 @@ async function loadShareUsers(){
   try{
     const [kd, ud] = await Promise.all([
       api('/api/kb/' + encodeURIComponent(kid) + '/share'),
-      api('/api/users'),
+      api('/api/share/users'),
     ]);
     if (!kd.ok){ box.innerHTML = '<div style="padding:12px;color:#b91c1c;font-size:13px">' + esc(kd.msg || '读取失败') + '</div>'; return; }
     const kb = (kbs || []).find(k => k.id === kid) || {};

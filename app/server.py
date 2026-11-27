@@ -1727,6 +1727,29 @@ def fs_drives():
 
 # ---------------- API: 知识库 ----------------
 
+@app.get("/api/share/users")
+def share_user_options(request: Request):
+    """分配权限时可选的用户目录（登录即可读；不暴露管理员字段）。"""
+    u = _current_user(request)
+    if not u:
+        return JSONResponse({"ok": False, "msg": "未登录"}, status_code=401)
+    reg = indexer.load_registry()
+    out = []
+    for x in users.load_users():
+        if users.is_admin(x):
+            continue
+        uid = x.get("id") or ""
+        out.append({
+            "id": uid,
+            "name": x.get("name") or x.get("username") or uid,
+            "username": x.get("username") or "",
+            "email": x.get("email") or "",
+            "kb_count": sum(1 for kb in reg if kb.get("owner") == uid),
+        })
+    out.sort(key=lambda z: (z.get("name") or "", z.get("username") or ""))
+    return {"ok": True, "users": out}
+
+
 @app.get("/api/kb")
 def kb_list(request: Request, mode: str = "qa"):
     """列出知识库。mode=qa 看问答共享；mode=defense 看答辩共享。"""
@@ -1734,7 +1757,10 @@ def kb_list(request: Request, mode: str = "qa"):
     admin = users.is_admin(u)
     read_mode = "defense" if mode == "defense" else "qa"
     reg = indexer.load_registry()
-    owner_names = {x["id"]: x.get("name", "") for x in users.load_users()}
+    owners = {x["id"]: {
+        "name": x.get("name") or x.get("username") or x.get("id") or "",
+        "contact": x.get("username") or x.get("email") or "",
+    } for x in users.load_users()}
     out = []
     for kb_ in reg:
         # 管理员全部可读；普通用户可读自己的 + 对应入口分享的。
@@ -1762,13 +1788,14 @@ def kb_list(request: Request, mode: str = "qa"):
         kb_["index_error"] = str(ist.get("error") or "")
         kb_["index_attempt"] = ist.get("attempt") or 0
         kb_["can_read"] = can_read
+        _owner = owners.get(kb_.get("owner"), {})
+        kb_["owner_name"] = _owner.get("name", "")
+        kb_["owner_contact"] = _owner.get("contact", "")
         if not can_read:
-            kb_["owner_name"] = ""
             kb_["mine"] = False
             kb_["shared"] = False
             kb_["readonly"] = True
         else:
-            kb_["owner_name"] = owner_names.get(kb_.get("owner"), "")
             kb_["mine"] = (kb_.get("owner") == u.get("id"))
             # 不是自己的、又能看到 → 是别人分享的。前端据此显示"只读"标记、隐藏改名/删除
             kb_["shared"] = bool(not admin and not kb_["mine"])
@@ -1899,13 +1926,16 @@ class KbShareIn(BaseModel):
 
 @app.post("/api/kb/{kb_id}/share")
 def kb_set_share(kb_id: str, body: KbShareIn, request: Request):
-    """管理员把知识库分别分享给问答/答辩用户（只读，不能改）。"""
-    u, err = _require_admin(request)
-    if err:
-        return err
+    """知识库创建人（或管理员）把库分别分享给问答/答辩用户（只读，不能改）。"""
+    u = _current_user(request)
+    if not u:
+        return JSONResponse({"ok": False, "msg": "未登录"}, status_code=401)
     kb_ = indexer.get_kb(kb_id)
     if not kb_:
         return JSONResponse({"ok": False, "msg": "知识库不存在"}, status_code=404)
+    if not users.resolve_owner_of_kb(kb_, u):
+        return JSONResponse({"ok": False, "msg": "只有知识库创建人或管理员可以分配权限"},
+                            status_code=403)
 
     owner = kb_.get("owner")
     all_users = {x["id"]: x for x in users.load_users()}
@@ -1943,7 +1973,7 @@ def kb_set_share(kb_id: str, body: KbShareIn, request: Request):
 
 @app.get("/api/kb/{kb_id}/share")
 def kb_get_share(kb_id: str, request: Request):
-    """看这个库分享给了谁。管理员可看任意库；普通人只能看自己的。"""
+    """看这个库分享给了谁。能看到这个库的用户都可以查看列表；can_edit 表示能否修改分配。"""
     u = _current_user(request)
     kb_ = indexer.get_kb(kb_id)
     if not kb_:
