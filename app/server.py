@@ -2507,8 +2507,8 @@ _TRIM_DEFAULTS = {
     "enabled": True,
     # 两段文字的 5 字滑窗重合度 >= 此值，判为重复，只保留分数高的那条
     "dup_ratio": 0.85,
-    # 同一份文档最多保留几条（同一份长文档切成很多块时，内容往往高度相似）
-    "same_doc_keep": 3,
+    # 注意：不再有“同一份文档最多保留 3 条”的硬上限。同文档的去重交给
+    # 下面的 5 字滑窗重合度；内容不同的块即使来自同一文件也要保留。
     # 这条片段里出现了"前面都没有的技术名词"（JDK / Redis / Zookeeper…），
     # 就绝不删——它可能正是唯一讲这个点的那一段。
     "protect_unique_terms": True,
@@ -2591,10 +2591,6 @@ def _trim_by_scores(results, cfg=None):
     for idx, r in enumerate(results):
         text = r.get("text") or ""
         doc = r.get("path") or ""
-
-        if doc_count.get(doc, 0) >= conf["same_doc_keep"]:
-            dropped.append(idx + 1)
-            continue
 
         sh = _shingles(text)
 
