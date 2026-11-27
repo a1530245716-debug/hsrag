@@ -1070,6 +1070,18 @@
   </div>
 </div>
 
+<!-- 本次更新提示：每个账号每个版本一次 -->
+<div class="modal" id="releaseModal">
+  <div class="card" style="width:min(560px,94vw)">
+    <h3 id="releaseTitle">🆕 本次更新</h3>
+    <div id="releaseMeta" style="font-size:12px;color:var(--muted);margin:-4px 0 10px"></div>
+    <ul id="releaseItems" style="font-size:13.5px;line-height:1.9;color:#334155;margin:0 0 4px;padding-left:20px"></ul>
+    <div class="foot">
+      <button class="btn primary" onclick="closeRelease()">知道了</button>
+    </div>
+  </div>
+</div>
+
 <!-- 拖拽上传遮罩与状态 -->
 <div id="droplay"><div class="zone"><b>松开鼠标，上传这些文件</b><p id="droplayHint">已选中知识库 = 批量加入；未选中 = 自动新建知识库</p></div></div>
 <div class="dropstatus" id="dropstatus"></div>
@@ -4810,6 +4822,51 @@ async function loadNoticePublic(){
   }catch(e){}
   return NOTICE_CFG || {};
 }
+// ---- 本次上线更新说明：每个账号每个版本弹一次 ----
+let RELEASE_INFO = null, RELEASE_TIMER = null, RELEASE_DONE = false;
+function releaseKey(){
+  const u = AUTH.user || {};
+  return 'rag.release.v1.' + (u.id || u.username || 'anon');
+}
+async function maybeReleaseNotice(){
+  if (RELEASE_DONE || !AUTH.user) return;
+  try{
+    const d = await api('/api/release');
+    if (!d || !d.ok || !d.release || !Array.isArray(d.release.items) || !d.release.items.length) return;
+    RELEASE_INFO = d.release;
+    const ver = String(d.release.version || d.release.date || '1');
+    try{ if (localStorage.getItem(releaseKey()) === ver){ RELEASE_DONE = true; return; } }catch(e){}
+    tryShowRelease();
+  }catch(e){}
+}
+function tryShowRelease(){
+  if (RELEASE_DONE || !RELEASE_INFO || !AUTH.user) return;
+  // 等首次引导 / 入口选择 / 进入提示 / 使用文档等弹窗都关掉，避免叠在一起
+  if (document.querySelector('.modal.show')){
+    clearTimeout(RELEASE_TIMER);
+    RELEASE_TIMER = setTimeout(tryShowRelease, 1200);
+    return;
+  }
+  const m = $('#releaseModal');
+  if (!m) return;
+  RELEASE_DONE = true;
+  $('#releaseTitle').textContent = '🆕 ' + (RELEASE_INFO.title || '本次更新');
+  const meta = [];
+  if (RELEASE_INFO.date) meta.push('更新时间：' + RELEASE_INFO.date);
+  if (RELEASE_INFO.version) meta.push('版本 ' + RELEASE_INFO.version);
+  $('#releaseMeta').textContent = meta.join(' · ');
+  $('#releaseItems').innerHTML = RELEASE_INFO.items.map(x => '<li>' + esc(x) + '</li>').join('');
+  m.classList.add('show');
+}
+function closeRelease(){
+  try{
+    if (RELEASE_INFO) localStorage.setItem(releaseKey(), String(RELEASE_INFO.version || RELEASE_INFO.date || '1'));
+  }catch(e){}
+  RELEASE_DONE = true;
+  const m = $('#releaseModal');
+  if (m) m.classList.remove('show');
+}
+
 async function maybeShowNotice(){
   try{ if (localStorage.getItem(noticeKey()) === '1') return; }catch(e){}
   const n = await loadNoticePublic();
@@ -4914,6 +4971,7 @@ async function boot(){
   if (!sessionStorage.getItem('rag.homePicked')) showHome();
   else maybeShowNotice();
   maybeShowOnboarding();
+  setTimeout(maybeReleaseNotice, 1200);
 }
 
 // 首次使用引导：每个账号在本浏览器第一次进入时弹一次
@@ -4945,6 +5003,8 @@ initAuth().then(ok => { if (ok) boot(); });
 });
 const ob = document.getElementById('onboardModal');
 if (ob) ob.addEventListener('click', e => { if (e.target === ob) closeOnboard(false); });
+const rel = document.getElementById('releaseModal');
+if (rel) rel.addEventListener('click', e => { if (e.target === rel) closeRelease(); });
 
 // 看大图：点背景关、Esc 关。点图片本身不关（用户可能想按住看细节）
 (function(){

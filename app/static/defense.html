@@ -444,6 +444,18 @@
   </div>
 </div>
 
+<!-- 本次更新提示：每个账号每个版本一次 -->
+<div class="mask" id="releaseMask">
+  <div class="dlg" style="width:min(540px,94vw)">
+    <h3 id="relTitle">🆕 本次更新</h3>
+    <div id="relMeta" style="font-size:12px;color:var(--muted);margin:-4px 0 8px"></div>
+    <ul id="relItems" style="font-size:13.5px;line-height:1.9;color:#334155;margin:0;padding-left:20px"></ul>
+    <div class="foot">
+      <button class="btn primary sm" onclick="closeReleaseDefense()">知道了</button>
+    </div>
+  </div>
+</div>
+
 <!-- 反馈 / 提需求 -->
 <div class="mask" id="fbMask">
   <div class="dlg">
@@ -610,7 +622,7 @@ READY.then(() => {
       MY_PERMS = d.user.perms || { kb: false, defense: false };
       if (d.user.role === 'admin') MY_PERMS = { kb: true, defense: true };
     }
-    if (d && d.ok) setTimeout(maybeBetaNotice, 400);
+    if (d && d.ok){ setTimeout(maybeBetaNotice, 400); setTimeout(maybeReleaseNoticeDefense, 1600); }
   }).catch(() => {});
 }).catch(() => {});
 
@@ -1439,6 +1451,46 @@ document.addEventListener('keydown', e => {
 });
 
 // ---------------- 实验推广提醒 / 反馈 ----------------
+// ---- 本次上线更新说明（答辩页） ----
+let REL_DEF = null, REL_DONE_DEF = false, REL_TIMER_DEF = null;
+function relDefKey(){
+  return 'rag.release.v1.' + ((ME_USER && ME_USER.id) || 'anon');
+}
+async function maybeReleaseNoticeDefense(){
+  if (REL_DONE_DEF || !ME_USER) return;
+  try{
+    const d = await api('/api/release');
+    if (!d || !d.ok || !d.release || !Array.isArray(d.release.items) || !d.release.items.length) return;
+    REL_DEF = d.release;
+    const ver = String(d.release.version || d.release.date || '1');
+    try{ if (localStorage.getItem(relDefKey()) === ver){ REL_DONE_DEF = true; return; } }catch(e){}
+    tryShowReleaseDefense();
+  }catch(e){}
+}
+function tryShowReleaseDefense(){
+  if (REL_DONE_DEF || !REL_DEF) return;
+  if ($('#betaMask').classList.contains('show') || $('#fbMask').classList.contains('show')){
+    clearTimeout(REL_TIMER_DEF);
+    REL_TIMER_DEF = setTimeout(tryShowReleaseDefense, 1200);
+    return;
+  }
+  REL_DONE_DEF = true;
+  $('#relTitle').textContent = '🆕 ' + (REL_DEF.title || '本次更新');
+  const meta = [];
+  if (REL_DEF.date) meta.push('更新时间：' + REL_DEF.date);
+  if (REL_DEF.version) meta.push('版本 ' + REL_DEF.version);
+  $('#relMeta').textContent = meta.join(' · ');
+  $('#relItems').innerHTML = REL_DEF.items.map(x => '<li>' + esc(x) + '</li>').join('');
+  $('#releaseMask').classList.add('show');
+}
+function closeReleaseDefense(){
+  try{
+    if (REL_DEF) localStorage.setItem(relDefKey(), String(REL_DEF.version || REL_DEF.date || '1'));
+  }catch(e){}
+  REL_DONE_DEF = true;
+  $('#releaseMask').classList.remove('show');
+}
+
 function betaNoMoreKey(){
   return 'rag.betaNoMore.v1.' + ((ME_USER && ME_USER.id) || 'anon');
 }
@@ -1459,6 +1511,7 @@ async function maybeBetaNotice(){
 function closeBeta(){
   try{ if ($('#betaNoMore') && $('#betaNoMore').checked) localStorage.setItem(betaNoMoreKey(), '1'); }catch(e){}
   const m = $('#betaMask'); if (m) m.classList.remove('show');
+  setTimeout(maybeReleaseNoticeDefense, 400);
 }
 
 let FB_KIND = 'improve';
@@ -1473,7 +1526,7 @@ function openFb(){
   const m = $('#fbMask'); if (m) m.classList.add('show');
   setTimeout(() => { try{ if (t) t.focus(); }catch(e){} }, 60);
 }
-function closeFb(){ const m = $('#fbMask'); if (m) m.classList.remove('show'); }
+function closeFb(){ const m = $('#fbMask'); if (m) m.classList.remove('show'); setTimeout(maybeReleaseNoticeDefense, 400); }
 function pickFbKind(el){
   FB_KIND = el.dataset.kind || 'improve';
   document.querySelectorAll('#fbKinds .fbkind').forEach(b => b.classList.toggle('on', b === el));
@@ -1505,6 +1558,7 @@ async function submitFb(){
 }
 // 点遮罩空白处关闭反馈弹窗
 $('#fbMask').addEventListener('click', e => { if (e.target === $('#fbMask')) closeFb(); });
+$('#releaseMask').addEventListener('click', e => { if (e.target === $('#releaseMask')) closeReleaseDefense(); });
 
 // 登录态确认后（/api/me 成功）再弹提醒，避免未登录时闪一下又被重定向
 syncThinkBtn();

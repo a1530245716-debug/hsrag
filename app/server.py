@@ -7,7 +7,7 @@
 - 路由 /api:知识库管理与问答
 - 静态 /    :轻量单页前端
 """
-import base64, html as _html, os, re, sys, shutil, threading, time, urllib.parse, zipfile
+import base64, html as _html, json, os, re, sys, shutil, threading, time, urllib.parse, zipfile
 import asyncio
 import contextlib
 from concurrent.futures import ThreadPoolExecutor
@@ -1442,6 +1442,21 @@ def api_manual(request: Request):
     except Exception as e:
         print(f"[manual] 读取失败: {type(e).__name__}", file=sys.stderr)
         return {"ok": False, "msg": "使用手册暂不可用"}
+
+
+@app.get("/api/release")
+def api_release():
+    """本次上线更新说明（app/release_notes.json），每个账号每个版本弹一次。"""
+    p = APP_DIR / "release_notes.json"
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+        items = d.get("items") if isinstance(d, dict) else None
+        if not isinstance(items, list) or not items:
+            return {"ok": False, "msg": "暂无更新说明"}
+        return {"ok": True, "release": d}
+    except Exception as e:
+        print(f"[release] 读取失败: {type(e).__name__}", file=sys.stderr)
+        return {"ok": False, "msg": "暂无更新说明"}
 
 
 @app.get("/api/notice")

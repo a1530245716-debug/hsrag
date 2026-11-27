@@ -6,6 +6,21 @@
 
 ---
 
+### 00:30（11-27） | Claude Code | `app/server.py`、`app/static/index.html`、`app/static/defense.html`、`app/release_notes.json`、`deploy/release_to_server.py` | 每次上线给所有用户弹更新说明 | 人要求：后续每次上生产都弹提示做了什么更新，目前不动生产
+
+- 新接口 `GET /api/release` 读 `app/release_notes.json`（登录后返回）。
+- 主页面和模拟答辩页都增加「🆕 本次更新」弹窗：
+  - 每个账号每个版本只弹一次（localStorage 按用户 + 版本）；
+  - 等首次引导/入口选择/进入提示/使用文档等弹窗关闭后再弹，不叠加；
+  - 「知道了」或点遮罩关闭并记住该版本。
+- `deploy/release_to_server.py` 发版前校验：`release_notes.json.version` 必须等于本次 `--tag`，
+  items 不能为空；不一致直接中止，避免弹旧内容；紧急可用 `--skip-release-check`。
+- 本次**未部署生产**（按要求）；下一次上线需把 `release_notes.json` 更新为对应 tag。
+- 本地实测：主页面/答辩页、管理员/普通用户、手机端、关闭后刷新不再弹、无 JS 报错；
+  版本不匹配时发版脚本直接拒绝（exit 2）。
+
+---
+
 ### 00:09（11-27） | Claude Code | 文档/截图 + 测试记录 | 系统设置整合后全流程、10 人并发、排版 | 人要求：多测并发和所有界面，有问题直接修
 
 - **全窗口冒烟**：0 issues；桌面 1280 / 平板 768 / 手机 375 / 1440 均无横向溢出；

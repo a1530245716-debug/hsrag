@@ -15,6 +15,7 @@
 """
 import argparse
 import getpass
+import json
 import os
 import sys
 import time
@@ -88,6 +89,8 @@ def main():
     ap.add_argument("--tag", required=True, help="镜像 tag，如 20261126-feedback")
     ap.add_argument("--src", required=True, help="本地源码包（含 deploy/wheels）")
     ap.add_argument("--timeout", type=int, default=1800, help="构建/重启总超时秒数")
+    ap.add_argument("--skip-release-check", action="store_true",
+                    help="跳过 app/release_notes.json 的版本校验（仅紧急情况）")
     args = ap.parse_args()
 
     local = Path(args.src)
@@ -98,6 +101,24 @@ def main():
     if not tag or "/" in tag or " " in tag:
         print("tag 不合法", file=sys.stderr)
         return 2
+
+    # 每次上生产都必须有一次面向所有用户的更新说明；版本号与实际 tag 对齐，
+    # 防止发版后弹窗还显示上一次的内容。紧急情况可用 --skip-release-check。
+    if not args.skip_release_check:
+        notes_path = Path(__file__).resolve().parent.parent / "app" / "release_notes.json"
+        try:
+            notes = json.loads(notes_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            print(f"读不到更新说明 {notes_path}: {e}", file=sys.stderr)
+            return 2
+        if str(notes.get("version") or "") != tag:
+            print(f"发版前请先更新 {notes_path}：version 应为本次 tag {tag!r}，"
+                  f"当前是 {notes.get('version')!r}；items 写这次用户能感知的变化。",
+                  file=sys.stderr)
+            return 2
+        if not isinstance(notes.get("items"), list) or not notes.get("items"):
+            print(f"{notes_path} 的 items 不能为空", file=sys.stderr)
+            return 2
 
     pwd = os.environ.get("RAG_DEPLOY_PASS")
     if not pwd:
