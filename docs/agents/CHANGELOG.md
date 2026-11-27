@@ -6,6 +6,19 @@
 
 ---
 
+### 01:10（11-27） | Claude Code | 手册/UI 文案/`system_settings.py`/`server.py` | 修正「大模型并发/个人 Key」错误描述 | 人反馈：现在主要不是大模型并发，外部大模型已解决；统一改为本地检索/重排瓶颈
+
+- 手册第三章重写：默认使用管理员配置的全局模型；个人 Key 改为**可选**，
+  明确它只影响自己的模型调用，不能改善本地检索/重排速度；3.4 报错表同步修正。
+- 手册 FAQ、快速上手「六、常见问题」、首次引导、知识库/答辩提示、我的 Key 面板、
+  topbar 徽标提示、清除 Key 确认、服务端 429/超时提示，统一不再把申请个人 Key 当解决方案。
+- `system_settings.py` 增加旧默认提示迁移：只替换「服务器性能有限/回答速度会明显变慢」旧句，
+  保留管理员自定义内容；生产旧存储提示会在下次部署后自动显示新口径。
+- `release_notes.json` 增加一条「性能/提示文案修正」，供下次上线弹窗。
+- 未部署生产；本地验证迁移、主页面提示、快速上手、答辩提示、我的 Key 面板均正确，无 JS 报错。
+
+---
+
 ### 00:30（11-27） | Claude Code | `app/server.py`、`app/static/index.html`、`app/static/defense.html`、`app/release_notes.json`、`deploy/release_to_server.py` | 每次上线给所有用户弹更新说明 | 人要求：后续每次上生产都弹提示做了什么更新，目前不动生产
 
 - 新接口 `GET /api/release` 读 `app/release_notes.json`（登录后返回）。

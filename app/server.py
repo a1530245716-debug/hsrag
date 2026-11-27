@@ -3932,7 +3932,7 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
         q_raw = q = "请看看这几张图，说明这是什么情况、该怎么处理"
         cmd_only = False
     # 当前用户自己的大模型 key（见 userllm.py）。空串表示没配，用全局 key。
-    # 各用各的 key，就不会全挤在公司网关那 2 路通道上互相排队。
+    # 个人 Key 只影响自己的模型调用；多人变慢主要来自本地检索/重排。
     _ukeys = _user_llm_key(request)
     # planner（改写/拆解）和 fallback 只吃 cfg，这里一并带上，避免主问答与拆解用不同 key
     cfg = _apply_thinking_choice(_cfg_with_user_key(request),
@@ -4235,8 +4235,8 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
                 if _ukeys:
                     tail_tip = "· 若经常这样，可能是你自己的 Key 额度受限，换一把试试"
                 else:
-                    tail_tip = ("· 若经常这样，多半是公共 Key 在排队——"
-                                "点右上角「🔑 我的 Key」填一个自己的 Key 会稳定很多")
+                    tail_tip = ("· 若经常这样，可能是模型接口偶发慢，或本地检索/重排繁忙；"
+                                "可稍后重试/错峰，个人 Key 不会改善重排速度")
                 tip = (f"⚠️ 大模型超时：{why}。\n\n"
                        "已检索到的片段见下方引用。可以：\n"
                        "· 点「↻ 重试」再试一次（网关常是偶发慢）\n"
@@ -4252,16 +4252,15 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
                 if _ukeys:
                     msg = "⚠️ 大模型调用太频繁（429），等十几秒再试。"
                 else:
-                    msg = ("⚠️ 大模型调用太频繁（429）。你正在用公共 Key，"
-                           "大家共用它的并发额度——点右上角「🔑 我的 Key」"
-                           "填一个自己的会好很多。")
+                    msg = ("⚠️ 大模型接口限流（429），请等十几秒再试。"
+                           "多人同时提问变慢主要来自本地检索/重排，个人 Key 不会改善这部分。")
 
             elif "401" in err or "403" in err:
                 # 自己的 key 出问题就让他自己换，别叫人去找管理员（管理员也帮不上）
                 if _ukeys:
                     msg = ("⚠️ 你自己填的大模型 Key 鉴权失败（401/403）。\n"
                            "它可能已过期或权限不足。点右上角「🔑 我的 Key」换一把，"
-                           "或改回使用公共 Key。")
+                           "或改回使用全局模型。")
                 else:
                     msg = "⚠️ 大模型鉴权失败（401/403），api_key 可能过期了，联系管理员。"
             else:
@@ -4628,8 +4627,8 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
                 if _ukeys:
                     tail_tip = "· 若经常这样，可能是你自己的 Key 额度受限，换一把试试"
                 else:
-                    tail_tip = ("· 若经常这样，多半是公共 Key 在排队——"
-                                "点右上角「🔑 我的 Key」填一个自己的 Key 会稳定很多")
+                    tail_tip = ("· 若经常这样，可能是模型接口偶发慢，或本地检索/重排繁忙；"
+                                "可稍后重试/错峰，个人 Key 不会改善重排速度")
                 tip = (f"⚠️ 大模型超时：{why}。\n\n"
                        "已检索到的片段见下方引用。可以：\n"
                        "· 点「↻ 重试」再试一次（网关常是偶发慢）\n"
@@ -4645,16 +4644,15 @@ async def _run_ask_stream(kb_id, body, request, kb_, _json, on_finish=None):
                 if _ukeys:
                     msg = "⚠️ 大模型调用太频繁（429），等十几秒再试。"
                 else:
-                    msg = ("⚠️ 大模型调用太频繁（429）。你正在用公共 Key，"
-                           "大家共用它的并发额度——点右上角「🔑 我的 Key」"
-                           "填一个自己的会好很多。")
+                    msg = ("⚠️ 大模型接口限流（429），请等十几秒再试。"
+                           "多人同时提问变慢主要来自本地检索/重排，个人 Key 不会改善这部分。")
 
             elif "401" in err or "403" in err:
                 # 自己的 key 出问题就让他自己换，别叫人去找管理员（管理员也帮不上）
                 if _ukeys:
                     msg = ("⚠️ 你自己填的大模型 Key 鉴权失败（401/403）。\n"
                            "它可能已过期或权限不足。点右上角「🔑 我的 Key」换一把，"
-                           "或改回使用公共 Key。")
+                           "或改回使用全局模型。")
                 else:
                     msg = "⚠️ 大模型鉴权失败（401/403），api_key 可能过期了，联系管理员。"
             else:
@@ -4856,7 +4854,7 @@ def my_llm_set(body: MyKeyIn, request: Request):
     model = (body.model or "").strip()
     if not key:
         st = userllm.clear_key(u.get("id", ""))
-        return {"ok": True, "msg": "已清除，改回使用公共 Key", **st}
+        return {"ok": True, "msg": "已清除，改回使用全局模型", **st}
     # 验证通过才存（模型为空则用全局模型）
     ok, why = llm.verify_key(key, timeout=25, model=model)
     if not ok:

@@ -22,8 +22,8 @@ _DEFAULT_NOTICE = {
         "enabled": True,
         "title": "📢 使用提示",
         "body": (
-            "本项目目前处于实验推广阶段，服务器性能有限：多人同时提问时会自动排队，"
-            "回答速度会明显变慢。请耐心等待，不要重复点击发送。\n\n"
+            "本项目目前处于实验推广阶段：多人同时提问时系统会自动排队，"
+            "回答会变慢，主要受本地资料检索/重排资源影响（不是大模型接口并发）。请耐心等待，不要重复点击发送。\n\n"
             "如果大模型回答不好，欢迎点 👎 并填写原因（例如“希望补充审核/分发步骤”），"
             "我们会据此补充资料、修复问题。\n\n"
             "加内容、觉得系统有改进的地方，或者你的需求，可以点下面的「💬 反馈 / 提需求」填写，"
@@ -34,8 +34,8 @@ _DEFAULT_NOTICE = {
         "enabled": True,
         "title": "📣 温馨提示",
         "body": (
-            "本项目目前处于实验推广阶段，服务器性能有限：多人同时提问时会自动排队，"
-            "回答速度会明显变慢，请耐心等待。\n\n"
+            "本项目目前处于实验推广阶段：多人同时提问时系统会自动排队，"
+            "回答会变慢，主要受本地资料检索/重排资源影响（不是大模型接口并发）。请耐心等待。\n\n"
             "有问题、改进建议或新需求，可以点右上角「💬 反馈」提交。"
         ),
     },
@@ -81,16 +81,41 @@ def _norm_kb_ids(v):
     return out
 
 
+_OLD_NOTICE_SENTENCE = {
+    "kb": (
+        "本项目目前处于实验推广阶段，服务器性能有限：多人同时提问时会自动排队，"
+        "回答速度会明显变慢。请耐心等待，不要重复点击发送。",
+        "本项目目前处于实验推广阶段：多人同时提问时系统会自动排队，"
+        "回答会变慢，主要受本地资料检索/重排资源影响（不是大模型接口并发）。"
+        "请耐心等待，不要重复点击发送。",
+    ),
+    "defense": (
+        "本项目目前处于实验推广阶段，服务器性能有限：多人同时提问时会自动排队，"
+        "回答速度会明显变慢，请耐心等待。",
+        "本项目目前处于实验推广阶段：多人同时提问时系统会自动排队，"
+        "回答会变慢，主要受本地资料检索/重排资源影响（不是大模型接口并发）。"
+        "请耐心等待。",
+    ),
+}
+
+
+def _migrate_notice_body(key, body):
+    """旧版默认提示把变慢归因于服务器/大模型并发；只替换旧默认句，保留管理员自定义部分。"""
+    old, new = _OLD_NOTICE_SENTENCE.get(key, ("", ""))
+    return body.replace(old, new, 1) if old and old in body else body
+
+
 def _norm_notice(v):
     v = v if isinstance(v, dict) else {}
     out = {}
     for key in ("kb", "defense"):
         d = _DEFAULT_NOTICE[key]
         x = v.get(key) if isinstance(v.get(key), dict) else {}
+        body = str(x.get("body") or d["body"])[:4000]
         out[key] = {
             "enabled": bool(x.get("enabled", d["enabled"])),
             "title": str(x.get("title") or d["title"]).strip()[:120],
-            "body": str(x.get("body") or d["body"])[:4000],
+            "body": _migrate_notice_body(key, body),
         }
     return out
 

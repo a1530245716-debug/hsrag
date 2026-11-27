@@ -991,7 +991,7 @@
 <div class="modal" id="noticeModal">
   <div class="card" style="width:min(620px,94vw)">
     <h3 id="noticeTitle">📢 使用提示</h3>
-    <div id="noticeBody" style="font-size:13.5px;line-height:1.9;color:#334155;margin:2px 0 14px">本项目目前处于实验推广阶段，服务器性能有限：多人同时提问时会自动排队，回答速度会明显变慢。请耐心等待，不要重复点击发送。<br><br>如果大模型回答不好，欢迎点 👎 并填写原因（例如“希望补充审核/分发步骤”），我们会据此补充资料、修复问题。<br><br>加内容、觉得系统有改进的地方，或者你的需求，可以点下面的「💬 反馈 / 提需求」填写，也可以随时在右上角「⚙ 更多 → 💬 反馈 / 提需求」里提交。</div>
+    <div id="noticeBody" style="font-size:13.5px;line-height:1.9;color:#334155;margin:2px 0 14px">本项目目前处于实验推广阶段：多人同时提问时系统会自动排队，回答会变慢，主要受本地资料检索/重排资源影响（不是大模型接口并发）。请耐心等待，不要重复点击发送。<br><br>如果大模型回答不好，欢迎点 👎 并填写原因（例如“希望补充审核/分发步骤”），我们会据此补充资料、修复问题。<br><br>加内容、觉得系统有改进的地方，或者你的需求，可以点下面的「💬 反馈 / 提需求」填写，也可以随时在右上角「⚙ 更多 → 💬 反馈 / 提需求」里提交。</div>
     <label style="display:flex;align-items:center;gap:7px;font-size:13px;color:#475569;cursor:pointer;margin-bottom:14px">
       <input type="checkbox" id="noticeNoMore"> 不再显示这条提示
     </label>
@@ -1103,22 +1103,22 @@
   <div class="card">
     <h3>🔑 我的大模型 Key</h3>
     <div id="myKeyStatus" style="margin:10px 0;padding:10px 12px;border-radius:8px;font-size:13.5px;line-height:1.7"></div>
-    <label class="f">填入你在 LightCode UIS 大模型平台申请的 Key</label>
-    <input id="myKeyInput" type="password" placeholder="粘贴 LightCode UIS 平台申请到的 Key" autocomplete="off">
+    <label class="f">填入你与当前网关兼容的个人 Key（可选）</label>
+    <input id="myKeyInput" type="password" placeholder="可选；没有特殊需要时留空，使用全局模型" autocomplete="off">
     <label class="f">模型（可选，填这个 Key 支持的模型名）</label>
-    <input id="myKeyModel" type="text" placeholder="例如 deepseek-flash / deepseek-v4-pro；不填用公共模型" autocomplete="off">
+    <input id="myKeyModel" type="text" placeholder="例如 deepseek-flash / deepseek-v4-pro；不填用全局模型" autocomplete="off">
     <div class="hint" style="margin:-2px 0 8px;line-height:1.6">
       不同 Key 支持的模型可能不同；你填的模型优先。管理员修改全局模型<strong>不会覆盖</strong>这里。
     </div>
     <div class="hint" id="myKeyHint" style="line-height:1.8">
-      <b style="color:#b45309">只支持公司 LightCode UIS 大模型网关签发的 Key。</b><br>
+      <b style="color:#b45309">个人 Key 是可选能力。</b>一般只支持管理员确认兼容的网关签发的 Key；<br>
+      没有特殊需要时，直接用管理员配置的全局模型即可；个人 Key 不会改善多人时的本地检索/重排速度。<br>
       申请入口：
       <a href="http://lightcode.hundsun.com/ai_market/API" target="_blank" rel="noopener">LightCode UIS 大模型控制台</a>；
       申请文档：
       <a href="https://alidocs.dingtalk.com/i/nodes/P7QG4Yx2Jp7N1zqziZ722K9PV9dEq3XD?biz_ver=10&amp;corpId=ding832c343f4b1a9ae4&amp;dd_close=false&amp;dd_user_keyboard=false&amp;doc_type=wiki_doc&amp;dt_editor_toolbar=true&amp;rnd=0.4149816376720521&amp;type=m" target="_blank" rel="noopener">公司大模型申请文档</a>。<br>
-      OpenAI、DeepSeek 官网、通义等<b>外部厂商的 Key 填进来无效</b>——本系统只会用它访问
-      <code id="keyGatewayUrl">公司网关</code>，不走外网。<br>
-      填了之后仅你自己使用，不影响其他人。
+      个人 Key 一般只支持管理员确认兼容的网关签发的 Key；外部厂商的 Key 通常无效。
+      填了之后仅你自己使用，不影响其他人；没有特殊需要时保持全局模型即可。
     </div>
     <div class="foot">
       <button class="btn" onclick="closeModal('myKeyModal')">取消</button>
@@ -1126,7 +1126,7 @@
       <button class="btn primary" id="myKeySaveBtn" onclick="saveMyKey()">测试并保存</button>
     </div>
     <div class="foot" style="margin-top:6px">
-      <button class="btn" id="myKeyClearBtn" style="color:#b91c1c" onclick="clearMyKey()">改回使用公共 Key</button>
+      <button class="btn" id="myKeyClearBtn" style="color:#b91c1c" onclick="clearMyKey()">改回使用全局模型</button>
     </div>
   </div>
 </div>
@@ -1277,8 +1277,7 @@
       </ul>
       <h4>六、常见问题</h4>
       <ul>
-        <li><b>排队/变慢</b>：多人同时提问会自动排队，页面会显示等待秒数，请勿重复发送；
-            急用可申请自己的大模型 Key。</li>
+        <li><b>排队/变慢</b>：多人同时提问会自动排队并显示等待时间；当前主要瓶颈是本地资料检索/重排，不是大模型接口并发，个人 Key 不会改善这部分。请勿重复发送，急用可错峰。</li>
         <li><b>知识库没答上</b>：先确认选对库；仍没有就点「反馈」补充资料。</li>
         <li><b>权限</b>：看不到或置灰的库，找管理员在「用户管理」里开通/分配。</li>
       </ul>
@@ -1320,7 +1319,7 @@
         组装提示词 → 大模型流式生成 → 界面展示 + 引用来源 + 图片缩略图
       </div>
       <p style="font-size:12.5px;color:var(--muted)">部署在公司内网；知识库和问答数据按权限隔离；
-         支持个人大模型 Key，避免多人挤公共 Key 排队。</p>
+         支持个人大模型 Key（可选）；多人同时提问的瓶颈在本地检索/重排，个人 Key 不改变这部分速度。</p>
     </div>
         <div class="foot"><button class="btn primary" onclick="closeModal('docModal')">关闭</button></div>
   </div>
@@ -3710,8 +3709,7 @@ async function downloadEvalCandidates(){
   }catch(e){ alert('导出失败：' + (e.message || '网络错误')); }
 }
 // ---- 我的大模型 Key（每个用户自己的）----
-// 公司网关每个 key 只有约 2 路并发，大家都挤公共 key 就会互相排队。
-// 让不配的人明确看到"你在用公共 key、人多会排队"，他才会有动力去申请自己的。
+// 个人 Key 是可选能力；多人变慢主要来自本地检索/重排，不再把个人 Key 当作并发解决方案。
 let MY_KEY = { has_own:false, saved:'', tail:'', model:'', global_model:'' };
 
 function paintMyKeyStatus(){
@@ -3723,16 +3721,16 @@ function paintMyKeyStatus(){
     el.style.color = '#065f46';
     el.innerHTML = '✅ <b>当前使用：我自己的 Key</b>（…' + esc(MY_KEY.tail || '') + '）' +
       (MY_KEY.model ? '<br><span style="font-size:12.5px">模型：<b>' + esc(MY_KEY.model) + '</b></span>' :
-        (MY_KEY.global_model ? '<br><span style="font-size:12.5px">模型：公共（' + esc(MY_KEY.global_model) + '）</span>' : '')) +
+        (MY_KEY.global_model ? '<br><span style="font-size:12.5px">模型：全局（' + esc(MY_KEY.global_model) + '）</span>' : '')) +
       (MY_KEY.saved ? '<br><span style="font-size:12.5px;opacity:.8">保存于 ' + esc(MY_KEY.saved) + '</span>' : '');
   } else {
     el.style.background = '#fffbeb';
     el.style.border = '1px solid #fde68a';
     el.style.color = '#92400e';
-    el.innerHTML = '⚠️ <b>当前使用：公共 Key</b>' +
+    el.innerHTML = 'ℹ️ <b>当前使用：管理员配置的全局模型</b>' +
       (MY_KEY.global_model ? '（模型：' + esc(MY_KEY.global_model) + '）' : '') + '<br>' +
-      '<span style="font-size:12.5px">公共 Key 的并发额度是大家共用的，人多时会排队等待。' +
-      '建议申请一个自己的 Key，填在这里，就不会被别人拖慢。</span>';
+      '<span style="font-size:12.5px">个人 Key 是可选能力，只影响你自己的模型调用；' +
+      '多人同时提问变慢主要来自本地检索/重排，个人 Key 不会改善这部分速度。</span>';
   }
   const cb = $('#myKeyClearBtn');
   if (cb) cb.style.display = MY_KEY.has_own ? 'block' : 'none';
@@ -3760,8 +3758,9 @@ function loadMyKeyPanel(){
 // 验证失败时补一句最常见的误用原因：填了外部厂商（OpenAI/DeepSeek 官网等）的 key
 function keyFailMsg(msg){
   return '❌ ' + msg +
-    '\n\n常见原因：填了外部厂商（OpenAI、DeepSeek 官网、通义等）的 Key。' +
-    '\n本系统只认公司 LightCode UIS 大模型网关签发的 Key（申请入口见「系统参数设置 → 我的大模型 Key」）。';
+    '\n\n个人 Key 是可选项，一般只支持管理员确认兼容的网关签发的 Key；' +
+    '外部厂商（OpenAI、DeepSeek 官网、通义等）的 Key 通常无效。' +
+    '没有特殊需要时，直接用管理员配置的全局模型即可；个人 Key 不会改善本地检索/重排速度。';
 }
 
 async function testMyKey(){
@@ -3809,7 +3808,7 @@ async function saveMyKey(){
 }
 
 async function clearMyKey(){
-  if (!confirm('清除后改回使用公共 Key，人多时可能排队。确定？')) return;
+  if (!confirm('清除后改回使用管理员配置的全局模型。个人 Key 只影响你自己的模型调用，不改变本地检索/重排速度。确定？')) return;
   try{
     const d = await api('/api/my/llm', { method:'POST',
       headers:{'Content-Type':'application/json'}, body: JSON.stringify({ key:'' }) });
@@ -3818,7 +3817,7 @@ async function clearMyKey(){
       $('#myKeyModel').value = '';
       paintMyKeyStatus();
       refreshLlmBadge();
-      alert('已改回使用公共 Key');
+      alert('已改回使用全局模型');
     } else alert('操作失败: ' + (d.msg || ''));
   }catch(e){ alert('操作失败: ' + e.message); }
 }
@@ -3891,8 +3890,7 @@ function refreshLlmBadge(){
   }).catch(()=>{});
 }
 
-// 徽标上标出"公共 Key / 我的 Key"。用公共 Key 时给个提醒色，
-// 让用户一眼看到自己在跟别人抢额度。
+// 徽标上标出"全局模型 / 我的 Key"；个人 Key 是可选能力，不代表能绕过本地检索/重排。
 function paintKeyBadge(){
   const b = $('#keyBadge');
   if (!b) return;
@@ -3900,12 +3898,12 @@ function paintKeyBadge(){
     b.textContent = '🔑 我的 Key';
     b.style.color = '#047857';
     b.style.cursor = 'pointer';
-    b.title = '当前使用你自己申请的 Key，不受别人影响。点击修改';
+    b.title = '当前使用你自己的 Key（可选）；本地检索/重排仍一样排队。点击修改';
   } else {
-    b.textContent = '👥 公共 Key';
+    b.textContent = '👥 全局模型';
     b.style.color = '#b45309';
     b.style.cursor = 'pointer';
-    b.title = '当前使用公共 Key，人多时会排队。点击申请/填写你自己的 Key';
+    b.title = '当前使用管理员配置的全局模型；个人 Key 可选，不影响本地检索/重排速度';
   }
 }
 
