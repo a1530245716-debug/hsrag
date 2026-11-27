@@ -1014,6 +1014,13 @@
     <label class="f" style="display:block;font-size:12px;color:var(--muted);margin:0 0 5px">选择知识库</label>
     <select id="shareKb" onchange="loadShareUsers()" style="width:100%"></select>
 
+    <div style="display:flex;gap:8px;align-items:center;margin:12px 0 2px">
+      <input id="shareSearch" type="search" placeholder="搜索姓名 / 邮箱 / 工号，用户多时用"
+             oninput="filterShareUsers()"
+             style="flex:1;padding:7px 10px;border:1px solid var(--line);border-radius:7px;font-size:13px">
+      <span id="shareCount" style="font-size:12px;color:var(--muted);white-space:nowrap"></span>
+    </div>
+
     <div style="font-size:12px;color:var(--muted);margin:14px 0 5px;line-height:1.9">
       分给哪些人（可多选）
       <span style="float:right;font-weight:400">
@@ -2247,6 +2254,7 @@ async function delUser(uid, name){
 let shareKbId = '';
 let shareCheckedQa = new Set();
 let shareCheckedDefense = new Set();
+let SHARE_USERS = [];
 
 function openShare(kbId){
   $('#shareModal').classList.add('show');
@@ -2474,7 +2482,14 @@ async function loadShareUsers(){
   const kid = $('#shareKb').value || '';
   shareKbId = kid;
   const box = $('#shareUsers');
-  if (!kid){ box.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:13px">请先选择知识库</div>'; return; }
+  const search = $('#shareSearch');
+  if (search) search.value = '';
+  if (!kid){
+    SHARE_USERS = [];
+    box.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:13px">请先选择知识库</div>';
+    const c = $('#shareCount'); if (c) c.textContent = '';
+    return;
+  }
   box.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:13px">加载中…</div>';
   try{
     const [kd, ud] = await Promise.all([
@@ -2486,40 +2501,62 @@ async function loadShareUsers(){
     const owner = kb.owner || '';
     shareCheckedQa = new Set(kd.shared_with || []);
     shareCheckedDefense = new Set(kd.shared_with_defense || kd.shared_with || []);
-    const users = (ud.users || []).filter(u => u.role !== 'admin' && u.id !== owner);
-    if (!users.length){
-      box.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:13px">没有可分配的用户（管理员本身可见全部知识库）</div>';
-      return;
-    }
-    box.innerHTML = users.map(u => `
-      <div style="display:flex;gap:8px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line)">
-        <span style="flex:1">${esc(u.name)}${u.username ? ' <span style="color:var(--muted);font-weight:400">@' + esc(u.username) + '</span>' : ''}
-          <span style="color:var(--muted);font-size:12px;margin-left:8px">${u.kb_count || 0} 个自有库</span></span>
-        <label style="width:70px;text-align:center;cursor:pointer">
-          <input type="checkbox" data-qa="${u.id}" ${shareCheckedQa.has(u.id) ? 'checked' : ''}>
-        </label>
-        <label style="width:70px;text-align:center;cursor:pointer">
-          <input type="checkbox" data-def="${u.id}" ${shareCheckedDefense.has(u.id) ? 'checked' : ''}>
-        </label>
-      </div>`).join('');
-    box.querySelectorAll('input[data-qa]').forEach(cb => {
-      cb.onchange = () => {
-        if (cb.checked) shareCheckedQa.add(cb.dataset.qa);
-        else shareCheckedQa.delete(cb.dataset.qa);
-        syncShareCount();
-      };
-    });
-    box.querySelectorAll('input[data-def]').forEach(cb => {
-      cb.onchange = () => {
-        if (cb.checked) shareCheckedDefense.add(cb.dataset.def);
-        else shareCheckedDefense.delete(cb.dataset.def);
-        syncShareCount();
-      };
-    });
+    SHARE_USERS = (ud.users || []).filter(u => u.role !== 'admin' && u.id !== owner);
+    renderShareUsers();
     syncShareCount(true);
   }catch(e){
+    SHARE_USERS = [];
     box.innerHTML = '<div style="padding:12px;color:#b91c1c;font-size:13px">加载失败: ' + esc(e.message) + '</div>';
   }
+}
+
+function filterShareUsers(){ renderShareUsers(); }
+
+function renderShareUsers(){
+  const box = $('#shareUsers');
+  if (!box) return;
+  const q = (($('#shareSearch') || {}).value || '').trim().toLowerCase();
+  const all = SHARE_USERS || [];
+  const users = !q ? all : all.filter(u => {
+    const hay = [u.name, u.username, u.email, u.mail, u.phone, u.id]
+      .filter(Boolean).join(' ').toLowerCase();
+    return hay.includes(q);
+  });
+  const count = $('#shareCount');
+  if (count) count.textContent = all.length ? `显示 ${users.length} / ${all.length} 人` : '';
+  if (!all.length){
+    box.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:13px">没有可分配的用户（管理员本身可见全部知识库）</div>';
+    return;
+  }
+  if (!users.length){
+    box.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:13px">没有匹配「' + esc(q) + '」的用户</div>';
+    return;
+  }
+  box.innerHTML = users.map(u => `
+    <div style="display:flex;gap:8px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line)">
+      <span style="flex:1">${esc(u.name)}${u.username ? ' <span style="color:var(--muted);font-weight:400">@' + esc(u.username) + '</span>' : ''}
+        <span style="color:var(--muted);font-size:12px;margin-left:8px">${u.kb_count || 0} 个自有库</span></span>
+      <label style="width:70px;text-align:center;cursor:pointer">
+        <input type="checkbox" data-qa="${u.id}" ${shareCheckedQa.has(u.id) ? 'checked' : ''}>
+      </label>
+      <label style="width:70px;text-align:center;cursor:pointer">
+        <input type="checkbox" data-def="${u.id}" ${shareCheckedDefense.has(u.id) ? 'checked' : ''}>
+      </label>
+    </div>`).join('');
+  box.querySelectorAll('input[data-qa]').forEach(cb => {
+    cb.onchange = () => {
+      if (cb.checked) shareCheckedQa.add(cb.dataset.qa);
+      else shareCheckedQa.delete(cb.dataset.qa);
+      syncShareCount();
+    };
+  });
+  box.querySelectorAll('input[data-def]').forEach(cb => {
+    cb.onchange = () => {
+      if (cb.checked) shareCheckedDefense.add(cb.dataset.def);
+      else shareCheckedDefense.delete(cb.dataset.def);
+      syncShareCount();
+    };
+  });
 }
 
 function syncShareCount(saved){
